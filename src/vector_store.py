@@ -101,6 +101,32 @@ class VectorStore:
         """Получить количество документов."""
         return self.collection.count()
 
+    def list_documents(self, limit: int = 20, offset: int = 0) -> tuple[list[tuple[str, str, dict]], int]:
+        """
+        Получить страницу документов с пагинацией.
+
+        Args:
+            limit: количество документов на странице
+            offset: сдвиг от начала
+
+        Returns:
+            Кортеж (список кортежей (doc_id, text, metadata), total_count)
+        """
+        total = self.count()
+        result = self.collection.get(
+            limit=limit,
+            offset=offset,
+            include=["documents", "metadatas"],
+        )
+        ids = result.get("ids") or []
+        docs = result.get("documents") or []
+        metas = result.get("metadatas") or []
+        items = [
+            (ids[i], docs[i], (metas[i] if metas and i < len(metas) and metas[i] is not None else {}))
+            for i in range(len(ids))
+        ]
+        return items, total
+
     def get_all_texts(self) -> list[str]:
         """Получить все тексты документов."""
         result = self.collection.get(include=["documents"])

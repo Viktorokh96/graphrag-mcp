@@ -305,6 +305,84 @@ class TestHandleToolCall:
         assert "relation_types" in result
         assert result["total_edges"] >= 1
 
+    @patch("src.embeddings.httpx.Client")
+    def test_delete_document(self, mock_httpx):
+        """rag_delete_document удаляет документ из всех хранилищ."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        doc_id = rag.add_document("to be deleted")
+        assert handle_tool_call(rag, "rag_stats", {})["total_documents"] == 1
+        result = handle_tool_call(rag, "rag_delete_document", {"doc_id": doc_id})
+        assert result["status"] == "ok"
+        assert result["doc_id"] == doc_id
+        assert result["deleted"] is True
+        assert handle_tool_call(rag, "rag_stats", {})["total_documents"] == 0
+
+    @patch("src.embeddings.httpx.Client")
+    def test_delete_document_idempotent(self, mock_httpx):
+        """Удаление несуществующего doc_id не вызывает ошибку."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        result = handle_tool_call(rag, "rag_delete_document", {"doc_id": "nonexistent-uuid"})
+        assert result["status"] == "ok"
+        assert result["deleted"] is True
+
+    @patch("src.embeddings.httpx.Client")
+    def test_delete_document_removes_from_graph(self, mock_httpx):
+        """Удаление документа удаляет также рёбра графа."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        doc1 = rag.add_document("first")
+        doc2 = rag.add_document("second")
+        rag.add_relation(doc1, doc2, "related_to", 1.0)
+        assert handle_tool_call(rag, "rag_graph_stats", {})["total_nodes"] == 2
+        handle_tool_call(rag, "rag_delete_document", {"doc_id": doc1})
+        stats = handle_tool_call(rag, "rag_graph_stats", {})
+        assert stats["total_nodes"] == 1
+        assert stats["total_edges"] == 0
+
+    @patch("src.embeddings.httpx.Client")
+    def test_list_documents_empty(self, mock_httpx):
+        """rag_list_documents на пустом хранилище возвращает пустой список."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        result = handle_tool_call(rag, "rag_list_documents", {})
+        assert result["documents"] == []
+        assert result["total"] == 0
+        assert result["limit"] == 20
+        assert result["offset"] == 0
+
+    @patch("src.embeddings.httpx.Client")
+    def test_list_documents_with_data(self, mock_httpx):
+        """rag_list_documents возвращает документы с пагинацией."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        for i in range(5):
+            rag.add_document(f"document number {i}")
+        result = handle_tool_call(rag, "rag_list_documents", {"limit": 3, "offset": 0})
+        assert result["total"] == 5
+        assert len(result["documents"]) == 3
+        assert "doc_id" in result["documents"][0]
+        assert "text" in result["documents"][0]
+        assert "metadata" in result["documents"][0]
+
+    @patch("src.embeddings.httpx.Client")
+    def test_list_documents_pagination(self, mock_httpx):
+        """Пагинация: offset сдвигает страницу."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        for i in range(10):
+            rag.add_document(f"doc {i}")
+        page1 = handle_tool_call(rag, "rag_list_documents", {"limit": 3, "offset": 0})
+        page2 = handle_tool_call(rag, "rag_list_documents", {"limit": 3, "offset": 3})
+        assert page1["total"] == 10
+        assert page2["total"] == 10
+        assert len(page1["documents"]) == 3
+        assert len(page2["documents"]) == 3
+        page1_ids = {d["doc_id"] for d in page1["documents"]}
+        page2_ids = {d["doc_id"] for d in page2["documents"]}
+        assert page1_ids.isdisjoint(page2_ids)
+
     def test_unknown_tool_raises(self):
         from src.mcp_server import handle_tool_call
         rag = MagicMock()
@@ -332,7 +410,7 @@ class TestMCPServerModuleImport:
         assert hasattr(mod, "handle_tool_call")
         assert hasattr(mod, "_parse_meta")
         assert hasattr(mod, "main")
-        assert len(mod.TOOL_DEFS) == 10
+        assert len(mod.TOOL_DEFS) == 12
 
     def test_main_callable(self):
         """main() должен быть вызываемым (но не вызываем — он запускает stdio)."""

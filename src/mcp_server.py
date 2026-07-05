@@ -120,6 +120,28 @@ TOOL_DEFS = [
         description="Clear all data (DANGEROUS)",
         inputSchema={"type": "object", "properties": {}},
     ),
+    Tool(
+        name="rag_delete_document",
+        description="Delete a single document by ID from all stores (vector, BM25, graph). Idempotent.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "doc_id": {"type": "string", "description": "Document ID to delete"},
+            },
+            "required": ["doc_id"],
+        },
+    ),
+    Tool(
+        name="rag_list_documents",
+        description="List documents with pagination",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Page size (default 20)", "default": 20},
+                "offset": {"type": "integer", "description": "Offset from start (default 0)", "default": 0},
+            },
+        },
+    ),
 ]
 
 
@@ -192,6 +214,10 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
             {"total_documents": s["total_documents"], "store_path": s["store_path"], "dimension": s["dimension"]},
         )[1],
         "rag_clear": lambda p: (rag.clear(), {"status": "ok"})[1],
+        "rag_delete_document": lambda p: {"status": "ok", "doc_id": p["doc_id"], "deleted": rag.delete_document(p["doc_id"])},
+        "rag_list_documents": lambda p: rag.list_documents(
+            limit=p.get("limit", 20), offset=p.get("offset", 0)
+        ),
     }
     fn = handlers.get(name)
     if not fn:

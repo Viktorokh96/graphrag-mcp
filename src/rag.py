@@ -240,6 +240,49 @@ class RAGSystem:
 
         return result
 
+    def delete_document(self, doc_id: str) -> bool:
+        """
+        Удалить документ из всех хранилищ (vector, BM25, graph).
+
+        Идемпотентная операция: удаление несуществующего doc_id не вызывает ошибку.
+
+        Args:
+            doc_id: идентификатор документа
+
+        Returns:
+            True (всегда)
+        """
+        self.vector_store.remove(doc_id)
+        self.bm25_index.remove(doc_id)
+        self.graph_kb.remove_node(doc_id)
+        return True
+
+    def list_documents(self, limit: int = 20, offset: int = 0) -> dict:
+        """
+        Получить список документов с пагинацией.
+
+        Args:
+            limit: количество документов на странице (по умолчанию 20)
+            offset: сдвиг от начала (по умолчанию 0)
+
+        Returns:
+            dict с ключами:
+                documents: список {doc_id, text (обрезан до 500 символов), metadata}
+                total: общее количество документов
+                limit: текущий limit
+                offset: текущий offset
+        """
+        items, total = self.vector_store.list_documents(limit=limit, offset=offset)
+        return {
+            "documents": [
+                {"doc_id": doc_id, "text": text[:500], "metadata": meta}
+                for doc_id, text, meta in items
+            ],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
     def clear(self) -> None:
         """Очистить все хранилища."""
         self.vector_store.clear()
