@@ -55,14 +55,19 @@ class VectorStore:
             include=["documents", "distances", "metadatas"]
         )
 
-        # ChromaDB возвращает distances как расстояния, преобразуем в scores (чем меньше расстояние, тем лучше)
-        # Используем 1 / (1 + distance) для нормализации
+        # ChromaDB (default L2 metric) возвращает distances как евклидово расстояние.
+        # Эмбеддинги L2-нормализованы, поэтому L2-расстояние связано с косинусной
+        # сходством формулой:  l2^2 = 2 * (1 - cos_sim)  →  cos_sim = 1 - l2^2 / 2.
+        # Преобразуем distance → similarity ∈ [0, 1] и клиппим отрицательные значения
+        # (встречаются для противоположных векторов). Это даёт широкий диапазон скоров
+        # вместо узкого 1/(1+d), улучшая дискриминацию и ранжирование.
         results = []
         if result["ids"] and result["ids"][0]:
             for i, doc_id in enumerate(result["ids"][0]):
                 text = result["documents"][0][i] if result["documents"] and result["documents"][0] else ""
                 distance = result["distances"][0][i] if result["distances"] and result["distances"][0] else 0.0
-                score = 1.0 / (1.0 + distance)
+                similarity = 1.0 - (distance * distance) / 2.0
+                score = max(0.0, min(1.0, similarity))
                 meta = result["metadatas"][0][i] if result["metadatas"] and result["metadatas"][0] else {}
                 results.append((doc_id, text, score, meta))
 

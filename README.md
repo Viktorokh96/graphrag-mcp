@@ -44,8 +44,10 @@ python -m src.cli search --query "язык программирования"
 # BM25 поиск (по ключевым словам)
 python -m src.cli bm25-search --query "Python"
 
-# Гибридный поиск (alpha=0.5 — баланс семантики и ключевых слов)
-python -m src.cli hybrid-search --query "Python" --alpha 0.5
+# Гибридный поиск (alpha=null → RAGConfig.default_alpha=0.5, см. ниже)
+python -m src.cli hybrid-search --query "Python"
+# Явно задать баланс: 0.0=BM25, 1.0=семантика
+python -m src.cli hybrid-search --query "Python" --alpha 0.3
 
 # Граф: добавить связь между документами
 python -m src.cli add-relation --source UUID1 --target UUID2 --relation "related_to"
@@ -114,25 +116,54 @@ python -m src.cli clear
 
 ## 📦 MCP Инструменты (доступны Claude после подключения)
 
-### Основные
+> Полный актуальный реестр инструментов поддерживается в `AGENTS.md` (раздел
+> «MCP инструменты»). При расхождении — источник истины `AGENTS.md`. Ниже —
+> сводка; детали поведения и edge-cases см. в AGENTS.md и `specifications/api.md`.
+
+### Поиск / Query
+
+Все три поиска принимают `query` (обязательный), `k` (число результатов, по умолчанию 5) и `max_chars` (обрезать текст каждого результата до N символов; `null`/опущен = полный текст). Возвращают список `{doc_id, text, score, metadata}`, отсортированных по убыванию score.
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_add_document` | `text` (str), `meta` (object?) | Добавить документ в БЗ |
-| `rag_add_file` | `filepath` (str), `meta` (object?) | Прочитать файл и проиндексировать |
-| `rag_search` | `query` (str), `k` (int=5) | Семантический поиск (эмбеддинги) |
-| `rag_bm25_search` | `query` (str), `k` (int=5) | Поиск по ключевым словам (BM25) |
-| `rag_search_hybrid` | `query` (str), `k` (int=5), `alpha` (float=0.5) | Гибрид: semantic + BM25 |
-| `rag_stats` | — | Статистика хранилища |
-| `rag_clear` | — | Очистить всё |
+| `rag_search` | `query`, `k=5`, `max_chars=null` | Семантический поиск через векторные эмбеддинги. Лучше для концептуальных запросов. Нулевой вектор запроса (неизвестные идентификаторы) → пустой результат. |
+| `rag_bm25_search` | `query`, `k=5`, `max_chars=null` | Ключевой поиск по алгоритму BM25 (Okapi). Лучше для точного совпадения терминов/идентификаторов. Работает офлайн. |
+| `rag_search_hybrid` | `query`, `k=5`, `alpha=null`, `max_chars=null` | Гибрид: `score = alpha*semantic + (1-alpha)*bm25`. `alpha=null` → `RAGConfig.default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — выбран бенчмарком NDCG@k, см. `scripts/benchmark_alpha.py`). **Candidate expansion:** из каждого канала забирается `max(k*3, 20)` кандидатов перед fusion. |
 
-### Графовые
+### Чтение / Retrieve
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_add_relation` | `source_id` (str), `target_id` (str), `relation` (str), `weight` (float=1.0) | Добавить отношение между документами |
-| `rag_get_related` | `node_id` (str), `max_depth` (int=1) | Получить связанные документы (BFS) |
-| `rag_graph_stats` | — | Статистика графа (узлы, рёбра, типы отношений) |
+| `rag_get_document` | `doc_id`, `offset=0`, `limit=null` | Получить один документ по ID с посимвольной пагинацией. |
+
+### Индексация / Store
+
+| Инструмент | Параметры | Описание |
+|-----------|-----------|----------|
+| `rag_add_document` | `text`, `meta=null` | Добавить текстовый документ. `meta`: dict/null/""/JSON-строка/строка. |
+| `rag_add_file` | `filepath`, `meta=null` | Прочитать файл с диска и проиндексировать. |
+| `rag_add_relation` | `source_id`, `target_id`, `relation`, `weight=1.0` | Создать направленное ребро в графе между документами. |
+
+### Управление / Inspect
+
+| Инструмент | Параметры | Описание |
+|-----------|-----------|----------|
+| `rag_list_documents` | `limit=20`, `offset=0`, `max_chars=null` | Постраничный список документов. |
+| `rag_delete_document` | `doc_id` | Удалить документ из всех хранилищ. Идемпотентен. |
+| `rag_clear` | — | ⚠️ Удалить ВСЕ данные (необратимо). |
+
+### Графовый обход / Traversal
+
+| Инструмент | Параметры | Описание |
+|-----------|-----------|----------|
+| `rag_get_related` | `node_id`, `max_depth=1` | BFS-обход от узла. |
+
+### Статистика
+
+| Инструмент | Параметры | Описание |
+|-----------|-----------|----------|
+| `rag_stats` | — | `{total_documents, store_path, dimension}`. |
+| `rag_graph_stats` | — | `{total_nodes, total_edges, relation_types}`. |
 
 ---
 
@@ -206,38 +237,67 @@ results = rag.search("веб-фреймворк", k=1)
 ## 🧪 Тесты
 
 ```bash
-pytest           # 109 тестов, все зелёные
-pytest -v        # подробно
-pytest tests/test_graph_store.py -v   # только тесты графа
+# Полный набор
+python3 -m pytest tests/ -v          # 267 тестов, все зелёные
+
+# Качество поиска (NDCG, релевантность, alpha-калибровка)
+python3 -m pytest tests/test_search_quality.py -v   # 27 тестов
+
+# Только MCP-слой
+python3 -m pytest tests/test_mcp_server.py -v
 ```
+
+### Бенчмарк выбора alpha
+
+```bash
+# Калибровка default_alpha по NDCG@k на детерминированном корпусе
+python3 -m scripts.benchmark_alpha
+```
+
+Скрипт прогоняет `search_hybrid` по сетке alpha ∈ [0.0, 1.0] (шаг 0.05) на
+корпусе с настоящей семантической структурой (`tests/semantic_mock.py`), считает
+NDCG@5 / P@5 / P@1 и печатает таблицу. Среди alpha в пределах 1% от лучшего NDCG
+(«хорошая область») берётся значение, ближайшее к 0.5 — точке естественного
+баланса каналов (робастный и детерминированный выбор). Результат должен совпадать
+с `RAGConfig.default_alpha`; при расхождении — обновить конфиг.
 
 ---
 
 ## 📁 Структура проекта
 
 ```
-testproject_agents/
+graphrag/
 ├── src/
 │   ├── bm25_index.py       # BM25 индекс
 │   ├── cli.py              # CLI интерфейс
-│   ├── embeddings.py       # Генератор эмбеддингов
-│   ├── graph_store.py      # Графовая база знаний 🔥
-│   ├── index.py            # Семантический индекс (устаревший)
+│   ├── config.py           # RAGConfig (из env)
+│   ├── embeddings.py       # Эмбеддинги: Ollama / OpenRouter
+│   ├── graph_store.py      # Графовая база знаний
+│   ├── index.py            # (устаревший)
 │   ├── mcp_server.py       # MCP сервер (JSON-RPC)
-│   ├── rag.py              # Оркестратор RAG
+│   ├── rag.py              # Оркестратор RAG + гибридный поиск
 │   ├── vector_store.py     # ChromaDB обёртка
 │   └── __init__.py
+├── scripts/
+│   ├── __init__.py
+│   └── benchmark_alpha.py # Бенчмарк NDCG@k для выбора default_alpha
 ├── tests/
-│   ├── test_bm25.py        # 10 тестов BM25
-│   ├── test_cli.py         # 12 тестов CLI
-│   ├── test_embeddings.py  # 7 тестов эмбеддингов (TF-IDF)
-│   ├── test_embeddings_v2.py # 5 тестов (OpenRouter)
-│   ├── test_graph_store.py # 13 тестов графа 🔥
-│   ├── test_index.py       # 10 тестов (устаревший)
-│   ├── test_mcp_server.py  # 14 тестов MCP
-│   ├── test_rag.py         # 8 тестов RAG
-│   ├── test_rag_v2.py      # 15 тестов RAG (моки)
-│   ├── test_vector_store.py # 8 тестов VectorStore
+│   ├── semantic_mock.py    # Детерминированный семантический mock-генератор + корпус
+│   ├── test_search_quality.py # 27 тестов качества поиска (NDCG, alpha, релевантность)
+│   ├── test_bm25.py        # BM25 тесты
+│   ├── test_cli.py         # CLI тесты
+│   ├── test_embeddings.py  # TF-IDF эмбеддинги
+│   ├── test_embeddings_v2.py # OpenRouter/Ollama эмбеддинги
+│   ├── test_graph_store.py # Граф тесты
+│   ├── test_graph_persistence.py
+│   ├── test_bm25_persistence.py
+│   ├── test_dimension_mismatch.py
+│   ├── test_mcp_server.py  # MCP тесты
+│   ├── test_rag.py         # RAG-оркестратор тесты
+│   ├── test_rag_v2.py      # RAG с моками
+│   ├── test_vector_store.py # VectorStore тесты
+│   ├── test_config.py      # RAGConfig тесты
+│   ├── test_index.py       # (устаревший)
 │   └── __init__.py
 ├── specifications/
 │   ├── api.md              # API спецификация
@@ -258,9 +318,13 @@ testproject_agents/
 | `EMBEDDING_PROVIDER` | Провайдер эмбеддингов: `ollama` или `openrouter` | `ollama` |
 | `OLLAMA_BASE_URL` | URL сервера Ollama | `http://localhost:11434` |
 | `OLLAMA_MODEL` | Модель эмбеддингов Ollama | `qwen3-embedding:8b` |
-| `OLLAMA_DIMENSION` | Размерность эмбеддингов | `1024` |
+| `OLLAMA_DIMENSION` | Размерность эмбеддингов | `4096` |
 | `OPENROUTER_API_KEY` | API ключ OpenRouter | — |
 | `OPENROUTER_MODEL` | Модель эмбеддингов OpenRouter | `openai/text-embedding-3-small` |
+| `STORE_PATH` | Путь к хранилищу | `./rag_data` |
+| `RAG_DEFAULT_ALPHA` | Баланс гибридного поиска (0=BM25, 1=семантика) — выбран бенчмарком NDCG@k | `0.5` |
+| `RAG_HYBRID_EXPAND` | Candidate expansion: `max(k * EXPAND, MIN)` кандидатов из каждого канала | `3` |
+| `RAG_HYBRID_MIN_CANDIDATES` | Минимум кандидатов из каждого канала при fusion | `20` |
 
 > **Ollama** — работает сразу после установки (ollama pull qwen3-embedding).  
 > **OpenRouter** — требуется API ключ. Переключиться: `EMBEDDING_PROVIDER=openrouter`
@@ -397,5 +461,10 @@ python -m src.mcp_server
 - [x] Ollama эмбеддинги (локально, по умолчанию)
 - [x] OpenRouter эмбеддинги (внешние, опционально)
 - [x] Конфиг через переменные окружения
+- [x] Улучшенная нормализация семантических скоров (L2 → косинусная сходность, [0,1])
+- [x] Candidate expansion в гибридном поиске (max(k*3, 20) кандидатов)
+- [x] Параметризуемый default_alpha через RAGConfig (env RAG_DEFAULT_ALPHA)
+- [x] Бенчмарк NDCG@k для калибровки alpha (`scripts/benchmark_alpha.py`)
+- [x] Тесты качества поиска на детерминированном корпусе (`tests/test_search_quality.py`)
 - [ ] Фильтрация по метаданным в графе
 - [ ] Визуализация графа

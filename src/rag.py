@@ -49,6 +49,9 @@ class RAGSystem:
         self.vector_store = VectorStore(store_path=self.store_path)
         self.bm25_index = BM25Index(store_path=self.store_path)
         self.graph_kb = graph or GraphKnowledgeBase(store_path=self.store_path)
+        self._default_alpha = cfg.default_alpha
+        self._hybrid_expand = cfg.hybrid_expand
+        self._hybrid_min_candidates = cfg.hybrid_min_candidates
         self._ensure_dimension_compatibility()
 
     def _ensure_dimension_compatibility(self) -> None:
@@ -145,6 +148,12 @@ class RAGSystem:
         store_dim = self.vector_store.get_dimension()
         if store_dim and len(query_embedding) != store_dim:
             return []
+        # Нулевой вектор запроса (все слова неизвестны эмбеддинг-модели) не несёт
+        # семантического сигнала: все документы равноудалены. Возвращаем пусто,
+        # чтобы гибридный поиск опирался только на BM25 — это спасает запросы по
+        # идентификаторам (pytest, jwt, bm25), которые семантика не видит.
+        if all(abs(v) < 1e-12 for v in query_embedding):
+            return []
         return self.vector_store.search(query_embedding, k=k)
 
     def bm25_search(self, query: str, k: int = 5) -> list[tuple[str, str, float, dict]]:
@@ -164,34 +173,56 @@ class RAGSystem:
             return []
         return self.bm25_index.search(query, k=k)
 
-    def search_hybrid(self, query: str, k: int = 5, alpha: float = 0.5) -> list[tuple[str, str, float, dict]]:
-        """
-        Гибридный поиск: комбинация семантического и BM25.
+    def search_hybrid(self, query: str, k: int = 5, alpha: Optional[float] = None) -> list[tuple[str, str, float, dict]]:
+        """Гибридный поиск: комбинация семантического и BM25.
 
         score = alpha * semantic_score + (1 - alpha) * bm25_score
 
+        Улучшения:
+          • candidate expansion — из каждого источника забирается `max(k*3, 20)`
+            кандидатов (а не k), что спасает документы, релевантные по одному
+            каналу, но оказавшиеся за пределами top-k по другому.
+          • min-max нормализация скоров по объединённому пулу кандидатов.
+          • alpha по умолчанию берётся из RAGConfig.default_alpha (его значение
+            выбрано по результатам бенчмарка NDCG@k, см. scripts/benchmark_alpha.py).
+
         Args:
             query: поисковый запрос
-            k: количество результатов
-            alpha: баланс (0.0 = чистый BM25, 1.0 = чистый семантический)
+            k: количество результатов в выдаче
+            alpha: баланс (None=config default, 0.0 = чистый BM25, 1.0 = чистый семантический)
 
         Returns:
-            список кортежей (doc_id, text, score, metadata)
+            список кортежей (doc_id, text, score, metadata), отсортированных по убыванию score
         """
+        if alpha is None:
+            alpha = self._default_alpha
+        # Защита от невалидных значений alpha
+        if alpha < 0.0:
+            alpha = 0.0
+        elif alpha > 1.0:
+            alpha = 1.0
+
         # Проверка на пустые хранилища
         if self.vector_store.count() == 0:
             return []
         stats = self.bm25_index.stats()
         if stats["total_documents"] == 0:
             return []
-        # Получаем результаты обоих поисков
-        semantic_results = self.search(query, k=k)
-        bm25_results = self.bm25_search(query, k=k)
+
+        # Candidate expansion: забираем больше кандидатов из каждого канала,
+        # чтобы при fusion не потерять документ, релевантный по одному каналу,
+        # но оказавшийся за пределами top-k по другому.
+        candidate_k = max(k * self._hybrid_expand, self._hybrid_min_candidates)
+
+        semantic_results = self.search(query, k=candidate_k)
+        bm25_results = self.bm25_search(query, k=candidate_k)
 
         if not semantic_results and not bm25_results:
             return []
 
-        # Нормализуем scores
+        # Мин-макс нормализация по каждому каналу отдельно. Когда все скоры в
+        # канале равны (нет дискриминации — например, нулевой вектор запроса),
+        # канал не несёт сигнала и обнуляется, чтобы не доминировать над другим.
         def normalize_scores(results):
             if not results:
                 return {}
@@ -199,14 +230,24 @@ class RAGSystem:
             min_score = min(scores)
             max_score = max(scores)
             if max_score == min_score:
-                return {r[0]: 1.0 for r in results}
+                return {r[0]: 0.0 for r in results}
             return {r[0]: (r[2] - min_score) / (max_score - min_score) for r in results}
 
         semantic_normalized = normalize_scores(semantic_results)
         bm25_normalized = normalize_scores(bm25_results)
 
-        # Объединяем результаты
+        # Объединяем кандидатов
         all_doc_ids = set(semantic_normalized.keys()) | set(bm25_normalized.keys())
+
+        # Словари текст/мета для быстрого доступа
+        text_by_id: dict[str, str] = {}
+        meta_by_id: dict[str, dict] = {}
+        for r in semantic_results:
+            text_by_id[r[0]] = r[1]
+            meta_by_id[r[0]] = r[3]
+        for r in bm25_results:
+            text_by_id.setdefault(r[0], r[1])
+            meta_by_id.setdefault(r[0], r[3])
 
         # Вычисляем гибридные scores
         hybrid_scores = []
@@ -219,24 +260,10 @@ class RAGSystem:
         # Сортируем по убыванию score
         hybrid_scores.sort(key=lambda x: x[1], reverse=True)
 
-        # Формируем результат с текстом и метаданными
+        # Формируем выдачу
         result = []
         for doc_id, score in hybrid_scores[:k]:
-            # Ищем текст и метаданные из semantic или bm25 результатов
-            text = ""
-            meta = {}
-            for r in semantic_results:
-                if r[0] == doc_id:
-                    text = r[1]
-                    meta = r[3]
-                    break
-            if not text:
-                for r in bm25_results:
-                    if r[0] == doc_id:
-                        text = r[1]
-                        meta = r[3]
-                        break
-            result.append((doc_id, text, score, meta))
+            result.append((doc_id, text_by_id.get(doc_id, ""), score, meta_by_id.get(doc_id, {})))
 
         return result
 

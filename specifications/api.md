@@ -72,7 +72,11 @@ class VectorStore:
 **Поведение:**
 - Обёртка над ChromaDB (persistent клиент)
 - Коллекция называется `rag_docs`
-- `search()` использует ChromaDB `query()` с `n_results=k`
+- `search()` использует ChromaDB `query()` с `n_results=k`, берёт `max(k*3, 20)` кандидатов для гибридной fusion
+- Нормализация скора: `score = clip(1 - distance²/2, 0, 1)` — корректное
+  преобразование L2-расстояния в косинусную сходность для L2-нормализованных
+  эмбеддингов. Даёт широкий диапазон скоров [0, 1] вместо узкого кластера
+  (старая формула `1/(1+distance)`).
 - `stats()` возвращает `{"total_documents": int, "store_path": str, "dimension": int}`
 - `get_all_texts()` возвращает все тексты для BM25 индексации
 
@@ -84,29 +88,43 @@ class VectorStore:
 
 ```python
 class RAGSystem:
-    def __init__(self, store_path: str = "./rag_data", api_key: str | None = None)
+    def __init__(self, store_path: str = "./rag_data", api_key: str | None = None,
+                 config: RAGConfig | None = None)
     def add_document(self, text: str, metadata: dict | None = None) -> str
     def add_documents(self, texts: list[str], metadata: list[dict] | None = None) -> list[str]
     def add_file(self, filepath: str, metadata: dict | None = None) -> str
     def search(self, query: str, k: int = 5) -> list[tuple[str, str, float, dict]]
     def bm25_search(self, query: str, k: int = 5) -> list[tuple[str, str, float, dict]]
-    def search_hybrid(self, query: str, k: int = 5, alpha: float = 0.5) -> list[tuple[str, str, float, dict]]
+    def search_hybrid(self, query: str, k: int = 5, alpha: float | None = None) -> list[tuple[str, str, float, dict]]
     def clear(self)
     def stats(self) -> dict
 ```
 
-**Гибридный поиск:**
+**Семантический поиск (`search`):**
+- Возвращает пустой список, если: хранилище пусто, размерность эмбеддинга не
+  совпадает с хранилищем, или вектор запроса нулевой (все слова неизвестны
+  эмбеддинг-модели — например, чистые идентификаторы типа `pytest`/`jwt`).
+  В последнем случае запрос должен обслуживаться BM25-каналом.
+
+**Гибридный поиск (`search_hybrid`):**
 ```
 normalized_score = alpha * semantic_score + (1 - alpha) * bm25_score
 ```
-- alpha = 1.0 — чистый семантический
-- alpha = 0.0 — чистый BM25
-- alpha = 0.5 — равный баланс
+- `alpha=None` → берётся `RAGConfig.default_alpha` (env `RAG_DEFAULT_ALPHA`, default 0.5).
+- `alpha` за пределами [0, 1] клиппится к границам.
+- **Candidate expansion:** из каждого канала забирается
+  `max(k * hybrid_expand, hybrid_min_candidates)` кандидатов (по умолчанию
+  `max(k*3, 20)`) перед fusion. Это спасает документы, релевантные по одному
+  каналу, но оказавшиеся за пределами top-k по другому.
+- Мин-макс нормализация скоров по каждому каналу отдельно. Если все скоры в
+  канале равны (нет дискриминации — нулевой вектор запроса), канал обнуляется,
+  чтобы не доминировать над другим.
 
 **При добавлении документа:**
-1. Текст → OpenRouter → эмбеддинг
+1. Текст → эмбеддинг-генератор → эмбеддинг
 2. Эмбеддинг → VectorStore (ChromaDB)
 3. Текст → BM25Index
+4. Узел → GraphKnowledgeBase
 
 ---
 
@@ -144,16 +162,36 @@ class MCPServer:
 ```
 
 **Инструменты (MCP методы):**
-1. `rag_add_document(text, meta)` → `{"doc_id": str, "status": "ok"}`
-2. `rag_search(query, k=5)` → `{"results": [{"doc_id": str, "text": str, "score": float, "metadata": dict}]}`
-3. `rag_add_file(filepath, meta)` → `{"doc_id": str, "filepath": str, "status": "ok"}`
-4. `rag_stats()` → `{"total_documents": int, "store_path": str, "dimension": int}`
-5. `rag_clear()` → `{"status": "ok"}`
-6. `rag_bm25_search(query, k=5)` → `{"results": [...]}`
-7. `rag_search_hybrid(query, k=5, alpha=0.5)` → `{"results": [...]}`
-8. `rag_add_relation(source_id, target_id, relation, weight=1.0)` → `{"status": "ok", "source": str, "target": str, "relation": str}`
-9. `rag_get_related(node_id, max_depth=1)` → `{"relations": [{"source": str, "target": str, "relation": str, "weight": float}]}`
-10. `rag_graph_stats()` → `{"total_nodes": int, "total_edges": int, "relation_types": list[str]}`
+
+> Канонический реестр поддерживается в `AGENTS.md` (раздел «MCP инструменты»).
+> При расхождении — источник истины `AGENTS.md`. Ниже — сводка.
+
+Поиск (все принимают `query`, `k=5`, `max_chars=null`; возвращают
+`[{doc_id, text, score, metadata}]` отсортированные по убыванию score):
+1. `rag_search(query, k=5, max_chars=null)` — семантический поиск (эмбеддинги).
+2. `rag_bm25_search(query, k=5, max_chars=null)` — BM25 keyword-поиск.
+3. `rag_search_hybrid(query, k=5, alpha=null, max_chars=null)` — гибрид;
+   `alpha=null` → `RAGConfig.default_alpha` (env `RAG_DEFAULT_ALPHA`, default 0.5).
+
+Чтение:
+4. `rag_get_document(doc_id, offset=0, limit=null)` → `{doc_id, text, metadata, total_chars, offset, limit}` или null.
+
+Индексация:
+5. `rag_add_document(text, meta=null)` → `{doc_id}`. `meta`: dict/null/""/JSON-строка/строка.
+6. `rag_add_file(filepath, meta=null)` → `{doc_id}`. `meta` как у add_document.
+7. `rag_add_relation(source_id, target_id, relation, weight=1.0)` → `{status: ok}`.
+
+Управление:
+8. `rag_list_documents(limit=20, offset=0, max_chars=null)` → `{documents, total, limit, offset}`.
+9. `rag_delete_document(doc_id)` → `{status, doc_id, deleted}` (идемпотентен).
+10. `rag_clear()` → `{status: ok}`. ⚠️ необратимо.
+
+Граф:
+11. `rag_get_related(node_id, max_depth=1)` → `{relations: [{source, target, relation, weight}]}`.
+12. `rag_graph_stats()` → `{total_nodes, total_edges, relation_types}`.
+
+Статистика:
+13. `rag_stats()` → `{total_documents, store_path, dimension}`.
 
 ---
 

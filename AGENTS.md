@@ -64,7 +64,7 @@ export OPENROUTER_API_KEY=sk-or-v1-...
 |-----------|-----------|----------|
 | `rag_search` | `query`, `k=5`, `max_chars=null` | Семантический поиск через векторные эмбеддинги. Лучше для концептуальных запросов. |
 | `rag_bm25_search` | `query`, `k=5`, `max_chars=null` | Ключевой поиск по алгоритму BM25 (Okapi). Лучше для точного совпадения терминов. |
-| `rag_search_hybrid` | `query`, `k=5`, `alpha=0.5`, `max_chars=null` | Гибрид: `normalized_score = alpha*semantic + (1-alpha)*bm25`. `alpha=1.0` — чистая семантика, `alpha=0.0` — чистый BM25, `alpha=0.5` — баланс (рекомендуется по умолчанию). |
+| `rag_search_hybrid` | `query`, `k=5`, `alpha=null`, `max_chars=null` | Гибрид: `normalized_score = alpha*semantic + (1-alpha)*bm25`. `alpha=null` → берётся `RAGConfig.default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — выбран бенчмарком NDCG@k, см. `scripts/benchmark_alpha.py`). `alpha=1.0` — чистая семантика, `alpha=0.0` — чистый BM25. **Candidate expansion:** из каждого канала забирается `max(k*3, 20)` кандидатов перед fusion, чтобы не терять документы, релевантные по одному каналу, но оказавшиеся за пределами top-k по другому. |
 
 ### Чтение / Retrieve
 
@@ -116,7 +116,25 @@ python3 -m pytest tests/ -v
 
 # Только MCP-слой
 python3 -m pytest tests/test_mcp_server.py -v
+
+# Только качество поиска (NDCG, релевантность, alpha)
+python3 -m pytest tests/test_search_quality.py -v
 ```
+
+## Бенчмарк выбора alpha
+
+```bash
+# Калибровка default_alpha по NDCG@k на детерминированном корпусе
+python3 -m scripts.benchmark_alpha
+```
+
+Скрипт прогоняет `search_hybrid` по сетке alpha ∈ [0.0, 1.0] (шаг 0.05) на
+корпусе с настоящей семантической структурой (`tests/semantic_mock.py`), считает
+NDCG@5 / P@5 / P@1 и печатает таблицу. Среди alpha в пределах 1% от лучшего NDCG
+(«хорошая область») берётся значение, ближайшее к 0.5 — точке естественного
+баланса каналов. Это робастный и детерминированный выбор (в отличие от медианы
+области, чья ширина колеблется из-за tie-breaking в ChromaDB). Результат должен
+совпадать с `RAGConfig.default_alpha`; при расхождении — обновить конфиг.
 
 ## Линтинг
 

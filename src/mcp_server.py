@@ -107,18 +107,23 @@ TOOL_DEFS = [
             "Hybrid search combining semantic (vector) and BM25 (keyword) signals into a "
             "single ranked list. Recommended default for most queries — it captures both "
             "meaning and exact terms. The blend is controlled by `alpha`: "
-            "alpha=0.0 = pure BM25, alpha=1.0 = pure semantic, alpha=0.5 (default) = "
-            "balanced. Formula: normalized_score = alpha * semantic_score + (1 - alpha) * "
-            "bm25_score. Returns top-k {doc_id, text, score, metadata}. Pass `max_chars` "
-            "to truncate each result's text (recommended for context management); omit "
-            "or pass null for full text. `k` sets the number of results (default 5)."
+            "alpha=0.0 = pure BM25, alpha=1.0 = pure semantic. If omitted, alpha falls "
+            "back to RAGConfig.default_alpha (set via RAG_DEFAULT_ALPHA env, default 0.35 — "
+            "chosen by NDCG@k benchmark, see scripts/benchmark_alpha.py). Formula: "
+            "normalized_score = alpha * semantic_score + (1 - alpha) * bm25_score. "
+            "Candidate expansion: each channel retrieves max(k*3, 20) candidates "
+            "before fusion so docs relevant by one channel but ranked beyond top-k in the "
+            "other are not lost. Returns top-k {doc_id, text, score, metadata}. Pass "
+            "`max_chars` to truncate each result's text (recommended for context "
+            "management); omit or pass null for full text. `k` sets the number of results "
+            "(default 5)."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Search query"},
                 "k": {"type": "integer", "description": "Number of results", "default": 5},
-                "alpha": {"type": "number", "description": "Balance 0=BM25 only, 1=semantic only", "default": 0.5},
+                "alpha": {"type": "number", "description": "Balance 0=BM25 only, 1=semantic only. If omitted, uses RAGConfig.default_alpha (env RAG_DEFAULT_ALPHA, default 0.35).", "default": None},
                 "max_chars": {"type": "integer", "description": "Truncate document text to this many characters. null or omitted = full text", "default": None},
             },
             "required": ["query"],
@@ -302,7 +307,7 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
         "rag_search": lambda p: _fmt(rag.search(p.get("query", ""), k=p.get("k", 5)), max_chars=p.get("max_chars")),
         "rag_bm25_search": lambda p: _fmt(rag.bm25_search(p.get("query", ""), k=p.get("k", 5)), max_chars=p.get("max_chars")),
         "rag_search_hybrid": lambda p: _fmt(
-            rag.search_hybrid(p.get("query", ""), k=p.get("k", 5), alpha=p.get("alpha", 0.5)), max_chars=p.get("max_chars")
+            rag.search_hybrid(p.get("query", ""), k=p.get("k", 5), alpha=p.get("alpha")), max_chars=p.get("max_chars")
         ),
         "rag_add_relation": lambda p: (
             rag.add_relation(p["source_id"], p["target_id"], p["relation"], p.get("weight", 1.0)),
