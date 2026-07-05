@@ -17,19 +17,30 @@ TOOL_DEFS = [
         description=(
             "Add a text document to the knowledge base. The document is indexed in all "
             "three stores: vector (ChromaDB, via embeddings), BM25 (keyword index), and "
-            "graph (as a new node). Returns the generated doc_id. Use this to store any "
-            "textual knowledge — architectural decisions, discovered patterns, bug notes, "
-            "specifications, summaries — that future searches should retrieve. Optional "
-            "`meta` accepts a dict, null, an empty string, a JSON string, or any plain "
-            "string (which is wrapped as {'_raw': value}); it is stored verbatim and "
-            "echoed back in search results."
+            "graph (as a new node). Returns the generated doc_id (UUID4 string). Use this "
+            "to store any textual knowledge — architectural decisions, discovered "
+            "patterns, bug notes, specifications, summaries — that future searches "
+            "should retrieve. `meta` is optional and persists verbatim: it is echoed back "
+            "unchanged in search/get/list results, so callers can later filter or "
+            "annotate results by source, type, project, etc. `meta` accepts a dict, null, "
+            "an empty string, a JSON-encoded string (parsed to dict), or any plain "
+            "string (wrapped as {'_raw': value}). Returns {doc_id: <uuid4 string>}."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "text": {"type": "string", "description": "Text content to add"},
+                "text": {
+                    "type": "string",
+                    "description": "Text content to index. Stored verbatim; not chunked or transformed.",
+                },
                 "meta": {
-                    "description": "Optional metadata",
+                    "description": (
+                        "Optional metadata stored alongside the document and returned verbatim "
+                        "in search/get/list results. Accepts: a dict (passed through), null/empty "
+                        "string (stored as None), a JSON-encoded string (parsed to dict), or any "
+                        "plain string (wrapped as {'_raw': value}). Useful for filtering/annotating "
+                        "results by source, type, project, etc."
+                    ),
                     "default": None,
                 },
             },
@@ -39,18 +50,26 @@ TOOL_DEFS = [
     Tool(
         name="rag_add_file",
         description=(
-            "Read a file from disk and index it as a single document in the knowledge base "
-            "(vector + BM25 + graph stores). Useful for bulk-importing existing Markdown, "
-            "specifications, notes, or source files. Returns the generated doc_id and the "
-            "filepath. Optional `meta` follows the same flexible conventions as "
-            "rag_add_document (dict / null / empty / JSON string / plain string)."
+            "Read a file from disk (UTF-8) and index its full contents as a single document "
+            "in the knowledge base (vector + BM25 + graph stores). Useful for bulk-importing "
+            "existing Markdown, specifications, notes, or source files. The file is read as one "
+            "document — no chunking is performed. Returns the generated doc_id (UUID4 string). "
+            "`meta` follows the same flexible conventions as rag_add_document (dict / null / "
+            "empty / JSON string / plain string). Returns {doc_id: <uuid4 string>}. Raises if "
+            "the file cannot be read (missing path, permissions, non-UTF-8)."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "filepath": {"type": "string", "description": "Path to the file"},
+                "filepath": {
+                    "type": "string",
+                    "description": "Absolute or relative path to the file to read and index.",
+                },
                 "meta": {
-                    "description": "Optional metadata",
+                    "description": (
+                        "Optional metadata, same conventions as rag_add_document.meta "
+                        "(dict / null / empty / JSON string / plain string)."
+                    ),
                     "default": None,
                 },
             },
@@ -62,20 +81,31 @@ TOOL_DEFS = [
         description=(
             "Semantic search over the knowledge base using vector embeddings. Best for "
             "conceptual, meaning-based queries where exact wording may differ (e.g. "
-            "'how does auth work' matches a doc titled 'authentication flow'). Returns "
-            "the top-k documents ranked by embedding similarity to `query`. Each result "
-            "is {doc_id, text, score, metadata}. Pass `max_chars` to truncate each result's "
-            "text (recommended to control context size, e.g. 1500-3000); omit it or pass "
-            "null for full text. Use `k` to set the number of results (default 5). "
-            "Requires an embedding provider (Ollama by default, or OpenRouter); if "
-            "unavailable, falls back to TF-IDF heuristics."
+            "'how does auth work' matches a doc titled 'authentication flow'), including "
+            "cross-lingual cases (Russian query matching English docs) when the embedding "
+            "model aligns both. Returns the top-k documents ranked by embedding similarity "
+            "to `query`. Each result is {doc_id, text, score, metadata}, sorted by descending "
+            "score. Scores are cosine-similarity-derived (range [0, 1]): score = "
+            "clip(1 - L2_distance^2 / 2, 0, 1). Edge cases: returns an empty list if the "
+            "store is empty, the query embedding dimension mismatches the store, or the "
+            "query embedding is a zero vector (i.e. every word in the query is unknown to "
+            "the embedding model — common for bare identifiers like 'pytest' or 'jwt'). "
+            "For such identifier-only queries, use rag_bm25_search instead. Pass `max_chars` "
+            "to truncate each result's text (recommended to control context size, e.g. "
+            "1500-3000); omit it or pass null for full text. Use `k` to set the number of "
+            "results (default 5). Requires an embedding provider (Ollama by default, or "
+            "OpenRouter via OPENROUTER_API_KEY)."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Search query"},
-                "k": {"type": "integer", "description": "Number of results", "default": 5},
-                "max_chars": {"type": "integer", "description": "Truncate document text to this many characters. null or omitted = full text", "default": None},
+                "query": {"type": "string", "description": "Search query text (natural language)."},
+                "k": {"type": "integer", "description": "Maximum number of results to return (1..N). Default 5.", "default": 5},
+                "max_chars": {
+                    "type": "integer",
+                    "description": "Truncate each result's text to at most this many characters. null or omitted = return full text. Recommended for context budget control.",
+                    "default": None,
+                },
             },
             "required": ["query"],
         },
@@ -85,18 +115,25 @@ TOOL_DEFS = [
         description=(
             "Keyword search using the BM25 (Okapi) algorithm over tokenized document text. "
             "Best for queries that rely on exact terminology, identifiers, names, or short "
-            "technical phrases (e.g. 'Journal Service', 'PROGRESS', 'rag_search_hybrid'). "
-            "Returns top-k {doc_id, text, score, metadata} sorted by BM25 relevance. Does "
-            "not require an embedding provider and works fully offline. `max_chars` "
-            "truncates each result's text; omit/null for full text. `k` sets the result "
-            "count (default 5)."
+            "technical phrases (e.g. 'Journal Service', 'PROGRESS', 'rag_search_hybrid', "
+            "'pytest', 'jwt'). Returns top-k {doc_id, text, score, metadata} sorted by "
+            "descending BM25 score; results with score <= 0 are filtered out, falling back "
+            "to token-overlap ranking if no positive scores exist. Does not require an "
+            "embedding provider and works fully offline — making it the reliable channel for "
+            "identifier-only queries that semantic search cannot resolve. `max_chars` "
+            "truncates each result's text; omit/null for full text. `k` sets the result count "
+            "(default 5)."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Search keywords"},
-                "k": {"type": "integer", "description": "Number of results", "default": 5},
-                "max_chars": {"type": "integer", "description": "Truncate document text to this many characters. null or omitted = full text", "default": None},
+                "query": {"type": "string", "description": "Search keywords / identifiers / exact terms."},
+                "k": {"type": "integer", "description": "Maximum number of results to return. Default 5.", "default": 5},
+                "max_chars": {
+                    "type": "integer",
+                    "description": "Truncate each result's text to at most this many characters. null or omitted = full text.",
+                    "default": None,
+                },
             },
             "required": ["query"],
         },
@@ -106,25 +143,41 @@ TOOL_DEFS = [
         description=(
             "Hybrid search combining semantic (vector) and BM25 (keyword) signals into a "
             "single ranked list. Recommended default for most queries — it captures both "
-            "meaning and exact terms. The blend is controlled by `alpha`: "
-            "alpha=0.0 = pure BM25, alpha=1.0 = pure semantic. If omitted, alpha falls "
-            "back to RAGConfig.default_alpha (set via RAG_DEFAULT_ALPHA env, default 0.35 — "
-            "chosen by NDCG@k benchmark, see scripts/benchmark_alpha.py). Formula: "
-            "normalized_score = alpha * semantic_score + (1 - alpha) * bm25_score. "
-            "Candidate expansion: each channel retrieves max(k*3, 20) candidates "
-            "before fusion so docs relevant by one channel but ranked beyond top-k in the "
-            "other are not lost. Returns top-k {doc_id, text, score, metadata}. Pass "
-            "`max_chars` to truncate each result's text (recommended for context "
-            "management); omit or pass null for full text. `k` sets the number of results "
-            "(default 5)."
+            "meaning and exact terms, and degrades gracefully: if one channel returns "
+            "nothing (e.g. semantic search for an unknown identifier), the other channel "
+            "still ranks candidates. The blend is controlled by `alpha`: "
+            "normalized_score = alpha * semantic_score + (1 - alpha) * bm25_score, where "
+            "alpha=0.0 = pure BM25, alpha=1.0 = pure semantic. If `alpha` is omitted/null, "
+            "it falls back to RAGConfig.default_alpha (env RAG_DEFAULT_ALPHA, default 0.5 — "
+            "calibrated by NDCG@k benchmark, see scripts/benchmark_alpha.py). alpha outside "
+            "[0, 1] is clamped to the nearest bound. Candidate expansion: each channel "
+            "retrieves max(k * RAG_HYBRID_EXPAND, RAG_HYBRID_MIN_CANDIDATES) candidates "
+            "(defaults: max(k*3, 20)) before fusion, so documents relevant by one channel "
+            "but ranked beyond top-k in the other are not lost. Per-channel scores are "
+            "min-max normalized; a channel with all-equal scores (no discrimination, e.g. "
+            "zero-vector query) is zeroed so it cannot dominate the other. Returns top-k "
+            "{doc_id, text, score, metadata}. Pass `max_chars` to truncate each result's "
+            "text (recommended for context management); omit or pass null for full text. "
+            "`k` sets the number of results (default 5)."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Search query"},
-                "k": {"type": "integer", "description": "Number of results", "default": 5},
-                "alpha": {"type": "number", "description": "Balance 0=BM25 only, 1=semantic only. If omitted, uses RAGConfig.default_alpha (env RAG_DEFAULT_ALPHA, default 0.35).", "default": None},
-                "max_chars": {"type": "integer", "description": "Truncate document text to this many characters. null or omitted = full text", "default": None},
+                "query": {"type": "string", "description": "Search query (natural language, keywords, or mixed)."},
+                "k": {"type": "integer", "description": "Maximum number of results to return. Default 5.", "default": 5},
+                "alpha": {
+                    "type": "number",
+                    "description": (
+                        "Balance between semantic (1.0) and BM25 (0.0). If omitted/null, uses "
+                        "RAGConfig.default_alpha (env RAG_DEFAULT_ALPHA, default 0.5). Clamped to [0, 1]."
+                    ),
+                    "default": None,
+                },
+                "max_chars": {
+                    "type": "integer",
+                    "description": "Truncate each result's text to at most this many characters. null or omitted = full text.",
+                    "default": None,
+                },
             },
             "required": ["query"],
         },
@@ -134,19 +187,21 @@ TOOL_DEFS = [
         description=(
             "Create a directed, typed, weighted edge between two documents in the "
             "knowledge graph. Both endpoints must already exist as documents (create them "
-            "first via rag_add_document / rag_add_file). `relation` is an arbitrary "
-            "string describing the link, e.g. 'related_to', 'similar_to', "
-            "'prerequisite', 'supersedes', 'competitor'. `weight` (default 1.0) can bias "
-            "graph expansion and is preserved in get_related output. Multiple edges between "
-            "the same pair with different relation types are allowed. Returns {status: ok}."
+            "first via rag_add_document / rag_add_file). `relation` is an arbitrary string "
+            "describing the link, e.g. 'related_to', 'similar_to', 'prerequisite', "
+            "'supersedes', 'competitor'. `weight` (default 1.0) can bias graph expansion and "
+            "is preserved verbatim in rag_get_related output. Multiple edges between the "
+            "same pair with different relation types are allowed; creating the same "
+            "(source, target, relation) edge again overwrites the weight. Returns "
+            "{status: 'ok'}."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "source_id": {"type": "string"},
-                "target_id": {"type": "string"},
-                "relation": {"type": "string", "description": "Relation type (e.g. related_to, similar_to)"},
-                "weight": {"type": "number", "default": 1.0},
+                "source_id": {"type": "string", "description": "doc_id of the source document (must already exist)."},
+                "target_id": {"type": "string", "description": "doc_id of the target document (must already exist)."},
+                "relation": {"type": "string", "description": "Relation type label (arbitrary string, e.g. 'related_to', 'prerequisite', 'supersedes')."},
+                "weight": {"type": "number", "default": 1.0, "description": "Edge weight preserved in rag_get_related output (default 1.0)."},
             },
             "required": ["source_id", "target_id", "relation"],
         },
@@ -158,15 +213,17 @@ TOOL_DEFS = [
             "the knowledge graph. `max_depth` controls how many hops to traverse: 1 "
             "(default) returns direct neighbours, 2 returns neighbours-of-neighbours, etc. "
             "Returns {relations: [{source, target, relation, weight}, ...]} covering all "
-            "edges traversed. Useful for discovering related documents that do not "
-            "textually match a query but are linked semantically through explicit "
-            "relations. Returns empty `relations` if the node is unknown or isolated."
+            "edges traversed (each edge's source/target are doc_ids). Useful for discovering "
+            "related documents that do not textually match a query but are linked "
+            "semantically through explicit relations. Returns an empty `relations` list if "
+            "the node is unknown or isolated. No deduplication is performed — the same "
+            "document may appear as a target via multiple edges."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "node_id": {"type": "string"},
-                "max_depth": {"type": "integer", "default": 1},
+                "node_id": {"type": "string", "description": "doc_id of the node to start BFS from."},
+                "max_depth": {"type": "integer", "default": 1, "description": "Maximum BFS hop count (1 = direct neighbours, 2 = neighbours-of-neighbours, ...)."},
             },
             "required": ["node_id"],
         },
@@ -177,7 +234,8 @@ TOOL_DEFS = [
             "Return statistics about the knowledge graph: total node count, total edge "
             "count, and the list of distinct relation types currently in use. Use this to "
             "inspect graph health, audit which relation labels have been applied, or "
-            "verify that expected relations exist. No parameters."
+            "verify that expected relations exist. No parameters. Returns "
+            "{total_nodes: int, total_edges: int, relation_types: [str, ...]}."
         ),
         inputSchema={"type": "object", "properties": {}},
     ),
@@ -187,7 +245,7 @@ TOOL_DEFS = [
             "Return storage statistics for the knowledge base: total document count, the "
             "on-disk store path, and the embedding dimension in use. Useful for sanity "
             "checks (e.g. 'is the store empty?', 'which provider dimension is active?'). "
-            "No parameters."
+            "No parameters. Returns {total_documents: int, store_path: str, dimension: int}."
         ),
         inputSchema={"type": "object", "properties": {}},
     ),
@@ -197,7 +255,7 @@ TOOL_DEFS = [
             "DANGEROUS — irreversibly delete ALL data from every store (vector, BM25, and "
             "graph). The on-disk files under rag_data/ are wiped. There is no undo and no "
             "confirmation prompt. Use only when you intend to fully reset the knowledge "
-            "base (e.g. fresh reindex). Returns {status: ok}."
+            "base (e.g. fresh reindex). Returns {status: 'ok'}."
         ),
         inputSchema={"type": "object", "properties": {}},
     ),
@@ -207,13 +265,13 @@ TOOL_DEFS = [
             "Delete a single document by its ID from all stores (vector, BM25, graph). "
             "Idempotent — calling with an unknown or already-deleted doc_id is safe and "
             "returns deleted=false. Prefer this over rag_clear when removing individual "
-            "stale or erroneous entries. Returns {status, doc_id, deleted} where `deleted` "
-            "is a boolean indicating whether the document was actually removed."
+            "stale or erroneous entries. Returns {status: 'ok', doc_id: <id>, deleted: bool} "
+            "where `deleted` is true only if the document actually existed and was removed."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "doc_id": {"type": "string", "description": "Document ID to delete"},
+                "doc_id": {"type": "string", "description": "doc_id (UUID4) of the document to delete."},
             },
             "required": ["doc_id"],
         },
@@ -226,15 +284,17 @@ TOOL_DEFS = [
             "position in characters, default 0) and `limit` (maximum characters to return; "
             "null/omitted returns the full text from offset onwards). Use this instead of "
             "re-running a search with a larger max_chars when you need more of a known "
-            "document — it is cheaper and deterministic. Returns the document record or "
-            "an indication if not found."
+            "document — it is cheaper and deterministic. Returns the document record "
+            "{doc_id, text, metadata, total_chars, offset, limit} on success, or null if "
+            "the document is not found. To page through a long doc: call with offset=0, "
+            "limit=N; then offset=N, limit=N; etc., until offset >= total_chars."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "doc_id": {"type": "string", "description": "Document ID"},
-                "offset": {"type": "integer", "description": "Character offset to start reading from (default 0)", "default": 0},
-                "limit": {"type": "integer", "description": "Maximum characters to return. null or omitted = full text from offset", "default": None},
+                "doc_id": {"type": "string", "description": "doc_id (UUID4) of the document to retrieve."},
+                "offset": {"type": "integer", "description": "Character offset to start reading from (default 0).", "default": 0},
+                "limit": {"type": "integer", "description": "Maximum characters to return from offset. null or omitted = full text from offset to end.", "default": None},
             },
             "required": ["doc_id"],
         },
@@ -245,16 +305,21 @@ TOOL_DEFS = [
             "List documents in the knowledge base with pagination. `limit` is the page "
             "size (default 20), `offset` is the starting index (default 0). `max_chars` "
             "optionally truncates each returned document's text to keep responses compact; "
-            "omit or pass null for full text. Use this to browse the corpus, audit what has "
-            "been indexed, or discover doc_ids for subsequent get_document / delete / "
-            "relation calls. Returns a list of document records."
+            "omit or pass null for full text. Use this to browse the corpus, audit what "
+            "has been indexed, or discover doc_ids for subsequent get_document / delete / "
+            "relation calls. Returns {documents: [{doc_id, text, metadata}, ...], total: "
+            "int, limit: int, offset: int}."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "description": "Page size (default 20)", "default": 20},
-                "offset": {"type": "integer", "description": "Offset from start (default 0)", "default": 0},
-                "max_chars": {"type": "integer", "description": "Truncate document text to this many characters. null or omitted = full text", "default": None},
+                "limit": {"type": "integer", "description": "Page size (number of documents per page). Default 20.", "default": 20},
+                "offset": {"type": "integer", "description": "Index of the first document to return (for pagination). Default 0.", "default": 0},
+                "max_chars": {
+                    "type": "integer",
+                    "description": "Truncate each document's text to at most this many characters. null or omitted = full text.",
+                    "default": None,
+                },
             },
         },
     ),
