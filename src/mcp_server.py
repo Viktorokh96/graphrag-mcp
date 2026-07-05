@@ -14,7 +14,16 @@ from mcp.types import TextContent, Tool
 TOOL_DEFS = [
     Tool(
         name="rag_add_document",
-        description="Add a document to the knowledge base",
+        description=(
+            "Add a text document to the knowledge base. The document is indexed in all "
+            "three stores: vector (ChromaDB, via embeddings), BM25 (keyword index), and "
+            "graph (as a new node). Returns the generated doc_id. Use this to store any "
+            "textual knowledge — architectural decisions, discovered patterns, bug notes, "
+            "specifications, summaries — that future searches should retrieve. Optional "
+            "`meta` accepts a dict, null, an empty string, a JSON string, or any plain "
+            "string (which is wrapped as {'_raw': value}); it is stored verbatim and "
+            "echoed back in search results."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -29,7 +38,13 @@ TOOL_DEFS = [
     ),
     Tool(
         name="rag_add_file",
-        description="Read and index a file",
+        description=(
+            "Read a file from disk and index it as a single document in the knowledge base "
+            "(vector + BM25 + graph stores). Useful for bulk-importing existing Markdown, "
+            "specifications, notes, or source files. Returns the generated doc_id and the "
+            "filepath. Optional `meta` follows the same flexible conventions as "
+            "rag_add_document (dict / null / empty / JSON string / plain string)."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -44,7 +59,17 @@ TOOL_DEFS = [
     ),
     Tool(
         name="rag_search",
-        description="Semantic search using vector embeddings",
+        description=(
+            "Semantic search over the knowledge base using vector embeddings. Best for "
+            "conceptual, meaning-based queries where exact wording may differ (e.g. "
+            "'how does auth work' matches a doc titled 'authentication flow'). Returns "
+            "the top-k documents ranked by embedding similarity to `query`. Each result "
+            "is {doc_id, text, score, metadata}. Pass `max_chars` to truncate each result's "
+            "text (recommended to control context size, e.g. 1500-3000); omit it or pass "
+            "null for full text. Use `k` to set the number of results (default 5). "
+            "Requires an embedding provider (Ollama by default, or OpenRouter); if "
+            "unavailable, falls back to TF-IDF heuristics."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -57,7 +82,15 @@ TOOL_DEFS = [
     ),
     Tool(
         name="rag_bm25_search",
-        description="Keyword search using BM25 algorithm",
+        description=(
+            "Keyword search using the BM25 (Okapi) algorithm over tokenized document text. "
+            "Best for queries that rely on exact terminology, identifiers, names, or short "
+            "technical phrases (e.g. 'Journal Service', 'PROGRESS', 'rag_search_hybrid'). "
+            "Returns top-k {doc_id, text, score, metadata} sorted by BM25 relevance. Does "
+            "not require an embedding provider and works fully offline. `max_chars` "
+            "truncates each result's text; omit/null for full text. `k` sets the result "
+            "count (default 5)."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -70,7 +103,16 @@ TOOL_DEFS = [
     ),
     Tool(
         name="rag_search_hybrid",
-        description="Hybrid search combining semantic and BM25",
+        description=(
+            "Hybrid search combining semantic (vector) and BM25 (keyword) signals into a "
+            "single ranked list. Recommended default for most queries — it captures both "
+            "meaning and exact terms. The blend is controlled by `alpha`: "
+            "alpha=0.0 = pure BM25, alpha=1.0 = pure semantic, alpha=0.5 (default) = "
+            "balanced. Formula: normalized_score = alpha * semantic_score + (1 - alpha) * "
+            "bm25_score. Returns top-k {doc_id, text, score, metadata}. Pass `max_chars` "
+            "to truncate each result's text (recommended for context management); omit "
+            "or pass null for full text. `k` sets the number of results (default 5)."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -84,7 +126,15 @@ TOOL_DEFS = [
     ),
     Tool(
         name="rag_add_relation",
-        description="Create a relation between two documents in the graph",
+        description=(
+            "Create a directed, typed, weighted edge between two documents in the "
+            "knowledge graph. Both endpoints must already exist as documents (create them "
+            "first via rag_add_document / rag_add_file). `relation` is an arbitrary "
+            "string describing the link, e.g. 'related_to', 'similar_to', "
+            "'prerequisite', 'supersedes', 'competitor'. `weight` (default 1.0) can bias "
+            "graph expansion and is preserved in get_related output. Multiple edges between "
+            "the same pair with different relation types are allowed. Returns {status: ok}."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -98,7 +148,15 @@ TOOL_DEFS = [
     ),
     Tool(
         name="rag_get_related",
-        description="Find documents related to a given node in the graph (BFS)",
+        description=(
+            "Find documents connected to a given node via breadth-first search (BFS) over "
+            "the knowledge graph. `max_depth` controls how many hops to traverse: 1 "
+            "(default) returns direct neighbours, 2 returns neighbours-of-neighbours, etc. "
+            "Returns {relations: [{source, target, relation, weight}, ...]} covering all "
+            "edges traversed. Useful for discovering related documents that do not "
+            "textually match a query but are linked semantically through explicit "
+            "relations. Returns empty `relations` if the node is unknown or isolated."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -110,22 +168,43 @@ TOOL_DEFS = [
     ),
     Tool(
         name="rag_graph_stats",
-        description="Get graph statistics",
+        description=(
+            "Return statistics about the knowledge graph: total node count, total edge "
+            "count, and the list of distinct relation types currently in use. Use this to "
+            "inspect graph health, audit which relation labels have been applied, or "
+            "verify that expected relations exist. No parameters."
+        ),
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="rag_stats",
-        description="Get storage statistics",
+        description=(
+            "Return storage statistics for the knowledge base: total document count, the "
+            "on-disk store path, and the embedding dimension in use. Useful for sanity "
+            "checks (e.g. 'is the store empty?', 'which provider dimension is active?'). "
+            "No parameters."
+        ),
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="rag_clear",
-        description="Clear all data (DANGEROUS)",
+        description=(
+            "DANGEROUS — irreversibly delete ALL data from every store (vector, BM25, and "
+            "graph). The on-disk files under rag_data/ are wiped. There is no undo and no "
+            "confirmation prompt. Use only when you intend to fully reset the knowledge "
+            "base (e.g. fresh reindex). Returns {status: ok}."
+        ),
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="rag_delete_document",
-        description="Delete a single document by ID from all stores (vector, BM25, graph). Idempotent.",
+        description=(
+            "Delete a single document by its ID from all stores (vector, BM25, graph). "
+            "Idempotent — calling with an unknown or already-deleted doc_id is safe and "
+            "returns deleted=false. Prefer this over rag_clear when removing individual "
+            "stale or erroneous entries. Returns {status, doc_id, deleted} where `deleted` "
+            "is a boolean indicating whether the document was actually removed."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -136,7 +215,15 @@ TOOL_DEFS = [
     ),
     Tool(
         name="rag_get_document",
-        description="Get a single document by ID. Supports text pagination via offset and limit (in characters) for large documents.",
+        description=(
+            "Retrieve a single document by its ID, including the full text and metadata. "
+            "Supports character-level pagination for large documents via `offset` (start "
+            "position in characters, default 0) and `limit` (maximum characters to return; "
+            "null/omitted returns the full text from offset onwards). Use this instead of "
+            "re-running a search with a larger max_chars when you need more of a known "
+            "document — it is cheaper and deterministic. Returns the document record or "
+            "an indication if not found."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -149,7 +236,14 @@ TOOL_DEFS = [
     ),
     Tool(
         name="rag_list_documents",
-        description="List documents with pagination",
+        description=(
+            "List documents in the knowledge base with pagination. `limit` is the page "
+            "size (default 20), `offset` is the starting index (default 0). `max_chars` "
+            "optionally truncates each returned document's text to keep responses compact; "
+            "omit or pass null for full text. Use this to browse the corpus, audit what has "
+            "been indexed, or discover doc_ids for subsequent get_document / delete / "
+            "relation calls. Returns a list of document records."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
