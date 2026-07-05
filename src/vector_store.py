@@ -127,6 +127,25 @@ class VectorStore:
         ]
         return items, total
 
+    def get_by_id(self, doc_id: str) -> Optional[tuple[str, str, dict]]:
+        """Получить один документ по ID.
+
+        Args:
+            doc_id: идентификатор документа
+
+        Returns:
+            Кортеж (doc_id, text, metadata) или None если документ не найден
+        """
+        result = self.collection.get(ids=[doc_id], include=["documents", "metadatas"])
+        ids = result.get("ids") or []
+        if not ids:
+            return None
+        docs = result.get("documents") or []
+        metas = result.get("metadatas") or []
+        text = docs[0] if docs else ""
+        meta = metas[0] if metas and metas[0] is not None else {}
+        return (ids[0], text, meta)
+
     def get_all_texts(self) -> list[str]:
         """Получить все тексты документов."""
         result = self.collection.get(include=["documents"])

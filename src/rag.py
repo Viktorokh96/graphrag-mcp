@@ -257,27 +257,61 @@ class RAGSystem:
         self.graph_kb.remove_node(doc_id)
         return True
 
-    def list_documents(self, limit: int = 20, offset: int = 0) -> dict:
+    def get_document(self, doc_id: str, offset: int = 0, limit: Optional[int] = None) -> Optional[dict]:
+        """Получить один документ по ID с пагинацией текста.
+
+        Args:
+            doc_id: идентификатор документа
+            offset: символьный сдвиг начала текста (по умолчанию 0)
+            limit: максимальное количество символов текста (None = весь остаток)
+
+        Returns:
+            dict с ключами: doc_id, text, metadata, total_chars, offset, limit
+            None если документ не найден
+        """
+        result = self.vector_store.get_by_id(doc_id)
+        if result is None:
+            return None
+        _, full_text, meta = result
+        total_chars = len(full_text)
+        if limit is not None:
+            text = full_text[offset:offset + limit]
+        else:
+            text = full_text[offset:]
+        return {
+            "doc_id": doc_id,
+            "text": text,
+            "metadata": meta,
+            "total_chars": total_chars,
+            "offset": offset,
+            "limit": limit,
+        }
+
+    def list_documents(self, limit: int = 20, offset: int = 0, max_chars: Optional[int] = None) -> dict:
         """
         Получить список документов с пагинацией.
 
         Args:
             limit: количество документов на странице (по умолчанию 20)
             offset: сдвиг от начала (по умолчанию 0)
+            max_chars: ограничение длины текста каждого документа
+                       (None = полный текст, иначе обрезается до max_chars символов)
 
         Returns:
             dict с ключами:
-                documents: список {doc_id, text (обрезан до 500 символов), metadata}
+                documents: список {doc_id, text, metadata}
                 total: общее количество документов
                 limit: текущий limit
                 offset: текущий offset
         """
         items, total = self.vector_store.list_documents(limit=limit, offset=offset)
+        documents = []
+        for doc_id, text, meta in items:
+            if max_chars is not None:
+                text = text[:max_chars]
+            documents.append({"doc_id": doc_id, "text": text, "metadata": meta})
         return {
-            "documents": [
-                {"doc_id": doc_id, "text": text[:500], "metadata": meta}
-                for doc_id, text, meta in items
-            ],
+            "documents": documents,
             "total": total,
             "limit": limit,
             "offset": offset,

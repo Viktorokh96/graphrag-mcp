@@ -383,6 +383,144 @@ class TestHandleToolCall:
         page2_ids = {d["doc_id"] for d in page2["documents"]}
         assert page1_ids.isdisjoint(page2_ids)
 
+    @patch("src.embeddings.httpx.Client")
+    def test_list_documents_full_text_by_default(self, mock_httpx):
+        """По умолчанию list_documents отдаёт полный текст без усечения."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        long_text = "A" * 2000
+        rag.add_document(long_text)
+        result = handle_tool_call(rag, "rag_list_documents", {"limit": 1})
+        assert result["documents"][0]["text"] == long_text
+
+    @patch("src.embeddings.httpx.Client")
+    def test_list_documents_max_chars_truncates(self, mock_httpx):
+        """max_chars обрезает текст в list_documents."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        rag.add_document("A" * 2000)
+        result = handle_tool_call(rag, "rag_list_documents", {"limit": 1, "max_chars": 100})
+        assert len(result["documents"][0]["text"]) == 100
+
+    @patch("src.embeddings.httpx.Client")
+    def test_search_full_text_by_default(self, mock_httpx):
+        """По умолчанию rag_search отдаёт полный текст без усечения."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        long_text = "Python " + "B" * 2000
+        rag.add_document(long_text)
+        result = handle_tool_call(rag, "rag_search", {"query": "Python", "k": 1})
+        assert result[0]["text"] == long_text
+
+    @patch("src.embeddings.httpx.Client")
+    def test_search_max_chars_truncates(self, mock_httpx):
+        """max_chars обрезает текст в результатах rag_search."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        rag.add_document("Python " + "B" * 2000)
+        result = handle_tool_call(rag, "rag_search", {"query": "Python", "k": 1, "max_chars": 50})
+        assert len(result[0]["text"]) == 50
+
+    @patch("src.embeddings.httpx.Client")
+    def test_bm25_search_max_chars_truncates(self, mock_httpx):
+        """max_chars обрезает текст в результатах rag_bm25_search."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        rag.add_document("python " + "C" * 2000)
+        result = handle_tool_call(rag, "rag_bm25_search", {"query": "python", "k": 1, "max_chars": 80})
+        assert len(result[0]["text"]) == 80
+
+    @patch("src.embeddings.httpx.Client")
+    def test_hybrid_search_max_chars_truncates(self, mock_httpx):
+        """max_chars обрезает текст в результатах rag_search_hybrid."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        rag.add_document("python " + "D" * 2000)
+        result = handle_tool_call(rag, "rag_search_hybrid", {
+            "query": "python", "k": 1, "max_chars": 60,
+        })
+        assert len(result[0]["text"]) == 60
+
+    @patch("src.embeddings.httpx.Client")
+    def test_get_document_full_text(self, mock_httpx):
+        """rag_get_document возвращает полный текст по умолчанию."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        full_text = "Hello world " + "E" * 2000
+        doc_id = rag.add_document(full_text)
+        result = handle_tool_call(rag, "rag_get_document", {"doc_id": doc_id})
+        assert result["doc_id"] == doc_id
+        assert result["text"] == full_text
+        assert result["total_chars"] == len(full_text)
+        assert result["offset"] == 0
+        assert result["limit"] is None
+
+    @patch("src.embeddings.httpx.Client")
+    def test_get_document_with_limit(self, mock_httpx):
+        """rag_get_document с limit обрезает текст с начала."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        full_text = "0123456789" * 100  # 1000 символов
+        doc_id = rag.add_document(full_text)
+        result = handle_tool_call(rag, "rag_get_document", {"doc_id": doc_id, "limit": 100})
+        assert result["text"] == full_text[:100]
+        assert result["total_chars"] == 1000
+        assert result["offset"] == 0
+        assert result["limit"] == 100
+
+    @patch("src.embeddings.httpx.Client")
+    def test_get_document_with_offset(self, mock_httpx):
+        """rag_get_document с offset начинает чтение с середины."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        full_text = "0123456789" * 100  # 1000 символов
+        doc_id = rag.add_document(full_text)
+        result = handle_tool_call(rag, "rag_get_document", {"doc_id": doc_id, "offset": 500})
+        assert result["text"] == full_text[500:]
+        assert result["offset"] == 500
+        assert result["limit"] is None
+
+    @patch("src.embeddings.httpx.Client")
+    def test_get_document_with_offset_and_limit(self, mock_httpx):
+        """rag_get_document с offset+limit читает страницу из середины."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        full_text = "0123456789" * 100  # 1000 символов
+        doc_id = rag.add_document(full_text)
+        result = handle_tool_call(rag, "rag_get_document", {
+            "doc_id": doc_id, "offset": 200, "limit": 100,
+        })
+        assert result["text"] == full_text[200:300]
+        assert result["total_chars"] == 1000
+        assert result["offset"] == 200
+        assert result["limit"] == 100
+
+    @patch("src.embeddings.httpx.Client")
+    def test_get_document_pagination_covers_whole_text(self, mock_httpx):
+        """Постраничное чтение: несколько вызовов с offset+limit собирают весь текст."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        full_text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        doc_id = rag.add_document(full_text)
+        collected = ""
+        offset = 0
+        page_size = 10
+        while offset < len(full_text):
+            page = handle_tool_call(rag, "rag_get_document", {
+                "doc_id": doc_id, "offset": offset, "limit": page_size,
+            })
+            collected += page["text"]
+            offset += page_size
+        assert collected == full_text
+
+    @patch("src.embeddings.httpx.Client")
+    def test_get_document_nonexistent_returns_none(self, mock_httpx):
+        """rag_get_document для несуществующего ID возвращает None."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        result = handle_tool_call(rag, "rag_get_document", {"doc_id": "nonexistent-uuid"})
+        assert result is None
+
     def test_unknown_tool_raises(self):
         from src.mcp_server import handle_tool_call
         rag = MagicMock()
@@ -410,7 +548,7 @@ class TestMCPServerModuleImport:
         assert hasattr(mod, "handle_tool_call")
         assert hasattr(mod, "_parse_meta")
         assert hasattr(mod, "main")
-        assert len(mod.TOOL_DEFS) == 12
+        assert len(mod.TOOL_DEFS) == 13
 
     def test_main_callable(self):
         """main() должен быть вызываемым (но не вызываем — он запускает stdio)."""

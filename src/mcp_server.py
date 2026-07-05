@@ -50,6 +50,7 @@ TOOL_DEFS = [
             "properties": {
                 "query": {"type": "string", "description": "Search query"},
                 "k": {"type": "integer", "description": "Number of results", "default": 5},
+                "max_chars": {"type": "integer", "description": "Truncate document text to this many characters. null or omitted = full text", "default": None},
             },
             "required": ["query"],
         },
@@ -62,6 +63,7 @@ TOOL_DEFS = [
             "properties": {
                 "query": {"type": "string", "description": "Search keywords"},
                 "k": {"type": "integer", "description": "Number of results", "default": 5},
+                "max_chars": {"type": "integer", "description": "Truncate document text to this many characters. null or omitted = full text", "default": None},
             },
             "required": ["query"],
         },
@@ -75,6 +77,7 @@ TOOL_DEFS = [
                 "query": {"type": "string", "description": "Search query"},
                 "k": {"type": "integer", "description": "Number of results", "default": 5},
                 "alpha": {"type": "number", "description": "Balance 0=BM25 only, 1=semantic only", "default": 0.5},
+                "max_chars": {"type": "integer", "description": "Truncate document text to this many characters. null or omitted = full text", "default": None},
             },
             "required": ["query"],
         },
@@ -132,6 +135,19 @@ TOOL_DEFS = [
         },
     ),
     Tool(
+        name="rag_get_document",
+        description="Get a single document by ID. Supports text pagination via offset and limit (in characters) for large documents.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "doc_id": {"type": "string", "description": "Document ID"},
+                "offset": {"type": "integer", "description": "Character offset to start reading from (default 0)", "default": 0},
+                "limit": {"type": "integer", "description": "Maximum characters to return. null or omitted = full text from offset", "default": None},
+            },
+            "required": ["doc_id"],
+        },
+    ),
+    Tool(
         name="rag_list_documents",
         description="List documents with pagination",
         inputSchema={
@@ -139,14 +155,17 @@ TOOL_DEFS = [
             "properties": {
                 "limit": {"type": "integer", "description": "Page size (default 20)", "default": 20},
                 "offset": {"type": "integer", "description": "Offset from start (default 0)", "default": 0},
+                "max_chars": {"type": "integer", "description": "Truncate document text to this many characters. null or omitted = full text", "default": None},
             },
         },
     ),
 ]
 
 
-def _fmt(results):
-    return [{"doc_id": r[0], "text": r[1][:500], "score": round(r[2], 4), "metadata": r[3]} for r in results]
+def _fmt(results, max_chars=None):
+    if max_chars is not None:
+        return [{"doc_id": r[0], "text": r[1][:max_chars], "score": round(r[2], 4), "metadata": r[3]} for r in results]
+    return [{"doc_id": r[0], "text": r[1], "score": round(r[2], 4), "metadata": r[3]} for r in results]
 
 
 def _parse_meta(value):
@@ -186,10 +205,10 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
     handlers = {
         "rag_add_document": lambda p: {"doc_id": rag.add_document(p["text"], _parse_meta(p.get("meta")))},
         "rag_add_file": lambda p: {"doc_id": rag.add_file(p["filepath"], _parse_meta(p.get("meta")))},
-        "rag_search": lambda p: _fmt(rag.search(p.get("query", ""), k=p.get("k", 5))),
-        "rag_bm25_search": lambda p: _fmt(rag.bm25_search(p.get("query", ""), k=p.get("k", 5))),
+        "rag_search": lambda p: _fmt(rag.search(p.get("query", ""), k=p.get("k", 5)), max_chars=p.get("max_chars")),
+        "rag_bm25_search": lambda p: _fmt(rag.bm25_search(p.get("query", ""), k=p.get("k", 5)), max_chars=p.get("max_chars")),
         "rag_search_hybrid": lambda p: _fmt(
-            rag.search_hybrid(p.get("query", ""), k=p.get("k", 5), alpha=p.get("alpha", 0.5))
+            rag.search_hybrid(p.get("query", ""), k=p.get("k", 5), alpha=p.get("alpha", 0.5)), max_chars=p.get("max_chars")
         ),
         "rag_add_relation": lambda p: (
             rag.add_relation(p["source_id"], p["target_id"], p["relation"], p.get("weight", 1.0)),
@@ -201,6 +220,9 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
                 for r in rag.get_related(p["node_id"], p.get("max_depth", 1))
             ]
         },
+        "rag_get_document": lambda p: rag.get_document(
+            p["doc_id"], offset=p.get("offset", 0), limit=p.get("limit")
+        ),
         "rag_graph_stats": lambda p: (
             s := rag.stats(),
             {
@@ -216,7 +238,7 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
         "rag_clear": lambda p: (rag.clear(), {"status": "ok"})[1],
         "rag_delete_document": lambda p: {"status": "ok", "doc_id": p["doc_id"], "deleted": rag.delete_document(p["doc_id"])},
         "rag_list_documents": lambda p: rag.list_documents(
-            limit=p.get("limit", 20), offset=p.get("offset", 0)
+            limit=p.get("limit", 20), offset=p.get("offset", 0), max_chars=p.get("max_chars")
         ),
     }
     fn = handlers.get(name)

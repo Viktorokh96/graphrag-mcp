@@ -131,6 +131,77 @@ class TestRAGSystem:
         assert doc_ids[0] in context or doc_ids[1] in context
         assert "password" in context.lower()
 
+    def test_get_document_full_text(self, rag):
+        """get_document возвращает полный текст по умолчанию."""
+        full_text = "0123456789" * 100
+        doc_id = rag.add_document(full_text)
+        result = rag.get_document(doc_id)
+        assert result["doc_id"] == doc_id
+        assert result["text"] == full_text
+        assert result["total_chars"] == len(full_text)
+        assert result["offset"] == 0
+        assert result["limit"] is None
+
+    def test_get_document_with_limit(self, rag):
+        """get_document с limit обрезает текст с начала."""
+        full_text = "0123456789" * 100
+        doc_id = rag.add_document(full_text)
+        result = rag.get_document(doc_id, limit=100)
+        assert result["text"] == full_text[:100]
+        assert result["total_chars"] == 1000
+        assert result["offset"] == 0
+        assert result["limit"] == 100
+
+    def test_get_document_with_offset(self, rag):
+        """get_document с offset начинает чтение с середины."""
+        full_text = "0123456789" * 100
+        doc_id = rag.add_document(full_text)
+        result = rag.get_document(doc_id, offset=500)
+        assert result["text"] == full_text[500:]
+        assert result["offset"] == 500
+        assert result["limit"] is None
+
+    def test_get_document_with_offset_and_limit(self, rag):
+        """get_document с offset+limit читает страницу из середины."""
+        full_text = "0123456789" * 100
+        doc_id = rag.add_document(full_text)
+        result = rag.get_document(doc_id, offset=200, limit=100)
+        assert result["text"] == full_text[200:300]
+        assert result["total_chars"] == 1000
+        assert result["offset"] == 200
+        assert result["limit"] == 100
+
+    def test_get_document_nonexistent_returns_none(self, rag):
+        """get_document для несуществующего ID возвращает None."""
+        assert rag.get_document("nonexistent-uuid") is None
+
+    def test_get_document_pagination_covers_whole_text(self, rag):
+        """Постраничное чтение через offset+limit собирает весь текст."""
+        full_text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        doc_id = rag.add_document(full_text)
+        collected = ""
+        offset = 0
+        while offset < len(full_text):
+            page = rag.get_document(doc_id, offset=offset, limit=10)
+            collected += page["text"]
+            offset += 10
+        assert collected == full_text
+
+    def test_list_documents_max_chars_truncates(self, rag):
+        """list_documents с max_chars обрезает текст каждого документа."""
+        rag.add_document("A" * 2000)
+        rag.add_document("B" * 2000)
+        result = rag.list_documents(limit=2, max_chars=100)
+        for doc in result["documents"]:
+            assert len(doc["text"]) == 100
+
+    def test_list_documents_full_text_by_default(self, rag):
+        """list_documents без max_chars отдаёт полный текст."""
+        long_text = "A" * 2000
+        rag.add_document(long_text)
+        result = rag.list_documents(limit=1)
+        assert result["documents"][0]["text"] == long_text
+
     def test_reindex_updates_embeddings(self, rag):
         rag.add_document("Python programming")
         rag.add_document("Java programming")

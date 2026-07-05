@@ -170,6 +170,26 @@ class TestVectorStore:
         store = VectorStore(store_path=self.store_path)
         assert store.get_all() == []
 
+    def test_get_by_id_returns_document(self):
+        from src.vector_store import VectorStore
+        store = VectorStore(store_path=self.store_path)
+        store.add("doc1", "hello world", [0.1, 0.2], metadata={"k": "v"})
+        result = store.get_by_id("doc1")
+        assert result is not None
+        assert result[0] == "doc1"
+        assert result[1] == "hello world"
+        assert result[2] == {"k": "v"}
+
+    def test_get_by_id_nonexistent_returns_none(self):
+        from src.vector_store import VectorStore
+        store = VectorStore(store_path=self.store_path)
+        assert store.get_by_id("nonexistent") is None
+
+    def test_get_by_id_empty_store_returns_none(self):
+        from src.vector_store import VectorStore
+        store = VectorStore(store_path=self.store_path)
+        assert store.get_by_id("anything") is None
+
     def test_update_embedding(self):
         from src.vector_store import VectorStore
         store = VectorStore(store_path=self.store_path)
