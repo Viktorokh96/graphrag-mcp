@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Optional
 from rank_bm25 import BM25Okapi
 
+from src._meta_filter import matches_metadata_filter
+
 
 STOP_WORDS: set[str] = {
     # English stop words
@@ -109,13 +111,15 @@ class BM25Index:
         if self._store_path:
             self.save()
 
-    def search(self, query: str, k: int = 5) -> list[tuple[str, str, float, dict]]:
+    def search(self, query: str, k: int = 5, metadata_filter: Optional[dict] = None) -> list[tuple[str, str, float, dict]]:
         """
         Поиск документов по запросу.
 
         Args:
             query: поисковый запрос
             k: количество результатов
+            metadata_filter: опциональный фильтр по метаданным
+                ({key: scalar | list[scalar]}, AND-комбинация). None/{} — без фильтра.
 
         Returns:
             Список кортежей (doc_id, text, score, metadata), отсортированных по убыванию score
@@ -136,7 +140,11 @@ class BM25Index:
             doc_id = doc_ids[idx]
             text = self._texts[doc_id]
             meta = self._metadata[doc_id]
-            
+
+            # D-функционал: post-filter по метаданным
+            if metadata_filter and not matches_metadata_filter(meta, metadata_filter):
+                continue
+
             # Вычисляем количество совпадений query tokens в документе
             doc_tokens = set(self._documents[idx])
             query_set = set(query_tokens)

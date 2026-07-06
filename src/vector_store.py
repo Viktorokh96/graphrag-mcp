@@ -1,6 +1,6 @@
 """VectorStore на базе ChromaDB."""
 
-from typing import Optional
+from typing import Any, Optional
 import chromadb
 
 
@@ -35,13 +35,15 @@ class VectorStore:
         )
         return doc_id
 
-    def search(self, query_embedding: list[float], k: int = 5) -> list[tuple[str, str, float, dict]]:
+    def search(self, query_embedding: list[float], k: int = 5, where: Optional[dict] = None) -> list[tuple[str, str, float, dict]]:
         """
         Поиск документов по эмбеддингу.
 
         Args:
             query_embedding: вектор запроса
             k: количество результатов
+            where: опциональный фильтр ChromaDB (преобразованный из metadata_filter
+                   через to_chroma_where). None — без фильтрации.
 
         Returns:
             Список кортежей (doc_id, text, score, metadata), отсортированных по убыванию score
@@ -49,11 +51,14 @@ class VectorStore:
         # Проверка на пустую коллекцию
         if self.count() == 0:
             return []
-        result = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=k,
-            include=["documents", "distances", "metadatas"]
-        )
+        query_kwargs: dict[str, Any] = {
+            "query_embeddings": [query_embedding],
+            "n_results": k,
+            "include": ["documents", "distances", "metadatas"],
+        }
+        if where is not None:
+            query_kwargs["where"] = where
+        result = self.collection.query(**query_kwargs)
 
         # ChromaDB (default L2 metric) возвращает distances как евклидово расстояние.
         # Эмбеддинги L2-нормализованы, поэтому L2-расстояние связано с косинусной
@@ -106,23 +111,35 @@ class VectorStore:
         """Получить количество документов."""
         return self.collection.count()
 
-    def list_documents(self, limit: int = 20, offset: int = 0) -> tuple[list[tuple[str, str, dict]], int]:
+    def list_documents(self, limit: int = 20, offset: int = 0, where: Optional[dict] = None) -> tuple[list[tuple[str, str, dict]], int]:
         """
         Получить страницу документов с пагинацией.
 
         Args:
             limit: количество документов на странице
             offset: сдвиг от начала
+            where: опциональный фильтр ChromaDB (преобразованный из metadata_filter
+                   через to_chroma_where). None — без фильтрации. При активном фильтре
+                   `total` отражает количество документов, удовлетворяющих фильтру.
 
         Returns:
             Кортеж (список кортежей (doc_id, text, metadata), total_count)
         """
-        total = self.count()
-        result = self.collection.get(
-            limit=limit,
-            offset=offset,
-            include=["documents", "metadatas"],
-        )
+        if where is not None:
+            # При активном фильтре считаем соответствующие документы отдельно,
+            # т.к. collection.count() не поддерживает where.
+            counted = self.collection.get(where=where, include=[])
+            total = len(counted.get("ids") or [])
+        else:
+            total = self.count()
+        get_kwargs: dict[str, Any] = {
+            "limit": limit,
+            "offset": offset,
+            "include": ["documents", "metadatas"],
+        }
+        if where is not None:
+            get_kwargs["where"] = where
+        result = self.collection.get(**get_kwargs)
         ids = result.get("ids") or []
         docs = result.get("documents") or []
         metas = result.get("metadatas") or []

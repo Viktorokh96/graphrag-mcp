@@ -122,13 +122,13 @@ python -m src.cli clear
 
 ### Поиск / Query
 
-Все три поиска принимают `query` (обязательный), `k` (число результатов, по умолчанию 5) и `max_chars` (обрезать текст каждого результата до N символов; `null`/опущен = полный текст). Возвращают список `{doc_id, text, score, metadata}`, отсортированных по убыванию score.
+Все три поиска принимают `query` (обязательный), `k` (число результатов, по умолчанию 5), `max_chars` (обрезать текст каждого результата до N символов; `null`/опущен = полный текст) и `metadata_filter` (опциональный фильтр по метаданным: dict `key->value`, value — scalar (точное совпадение) или list ($in); все условия объединяются через AND; `null`/`{}` = без фильтра). Возвращают список `{doc_id, text, score, metadata}`, отсортированных по убыванию score.
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_search` | `query`, `k=5`, `max_chars=null` | Семантический поиск через векторные эмбеддинги. Лучше для концептуальных запросов. Нулевой вектор запроса (неизвестные идентификаторы) → пустой результат. |
-| `rag_bm25_search` | `query`, `k=5`, `max_chars=null` | Ключевой поиск по алгоритму BM25 (Okapi). Лучше для точного совпадения терминов/идентификаторов. Работает офлайн. |
-| `rag_search_hybrid` | `query`, `k=5`, `alpha=null`, `max_chars=null` | Гибрид через **RRF** (Reciprocal Rank Fusion). Формула alpha-dilution: `score = alpha/(RRF_K+rank_sem+1) + (1-alpha)/(RRF_K+rank_bm25+1)`. `alpha=null` → language-aware: кириллица → `cyrillic_alpha` (env `RAG_CYRILLIC_ALPHA`, default **0.85**), иначе `default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — бенчмарк NDCG@k). `alpha=1.0` = чистая семантика, `alpha=0.0` = чистый BM25. `RRF_K=20`. **Candidate expansion:** `max(k*3, 20)` кандидатов на канал. |
+| `rag_search` | `query`, `k=5`, `max_chars=null`, `metadata_filter=null` | Семантический поиск через векторные эмбеддинги. Лучше для концептуальных запросов. Нулевой вектор запроса (неизвестные идентификаторы) → пустой результат. Фильтр использует нативный `where` ChromaDB. |
+| `rag_bm25_search` | `query`, `k=5`, `max_chars=null`, `metadata_filter=null` | Ключевой поиск по алгоритму BM25 (Okapi). Лучше для точного совпадения терминов/идентификаторов. Работает офлайн. Фильтр — post-filter результатов. |
+| `rag_search_hybrid` | `query`, `k=5`, `alpha=null`, `max_chars=null`, `metadata_filter=null` | Гибрид через **RRF** (Reciprocal Rank Fusion). Формула alpha-dilution: `score = alpha/(RRF_K+rank_sem+1) + (1-alpha)/(RRF_K+rank_bm25+1)`. `alpha=null` → language-aware: кириллица → `cyrillic_alpha` (env `RAG_CYRILLIC_ALPHA`, default **0.85**), иначе `default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — бенчмарк NDCG@k). `alpha=1.0` = чистая семантика, `alpha=0.0` = чистый BM25. `RRF_K=20`. **Candidate expansion:** `max(k*3, 20)` кандидатов на канал. Фильтр применяется к обоим каналам до fusion. |
 
 ### Чтение / Retrieve
 
@@ -148,7 +148,7 @@ python -m src.cli clear
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_list_documents` | `limit=20`, `offset=0`, `max_chars=null` | Постраничный список документов. |
+| `rag_list_documents` | `limit=20`, `offset=0`, `max_chars=null`, `metadata_filter=null` | Постраничный список документов. При активном фильтре `total` отражает число подходящих документов. |
 | `rag_delete_document` | `doc_id` | Удалить документ из всех хранилищ. Идемпотентен. |
 | `rag_clear` | — | ⚠️ Удалить ВСЕ данные (необратимо). |
 
@@ -156,7 +156,7 @@ python -m src.cli clear
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_get_related` | `node_id`, `max_depth=1` | BFS-обход от узла. |
+| `rag_get_related` | `node_id`, `max_depth=1`, `metadata_filter=null` | BFS-обход от узла (двунаправленный). Фильтр применяется к соседним узлам — рёбра к узлам, не проходящим фильтр, исключаются. |
 
 ### Статистика
 
@@ -468,5 +468,5 @@ python -m src.mcp_server
 - [x] Параметризуемый default_alpha через RAGConfig (env RAG_DEFAULT_ALPHA)
 - [x] Бенчмарк NDCG@k для калибровки alpha (`scripts/benchmark_alpha.py`)
 - [x] Тесты качества поиска на детерминированном корпусе (`tests/test_search_quality.py`)
-- [ ] Фильтрация по метаданным в графе
+- [x] Фильтрация по метаданным (metadata_filter: точное совпадение / $in, AND-комбинация)
 - [ ] Визуализация графа

@@ -5,6 +5,8 @@ from collections import deque
 from pathlib import Path
 from typing import Optional
 
+from src._meta_filter import matches_metadata_filter
+
 
 class GraphKnowledgeBase:
     """Графовая база знаний для хранения документов и связей между ними с поддержкой персистентности."""
@@ -141,7 +143,8 @@ class GraphKnowledgeBase:
 
         return results
 
-    def get_related(self, node_id: str, max_depth: int = 1, direction: str = "both") -> list[tuple[str, str, str, float, str]]:
+    def get_related(self, node_id: str, max_depth: int = 1, direction: str = "both",
+                    metadata_filter: Optional[dict] = None) -> list[tuple[str, str, str, float, str]]:
         """
         Получить связанные узлы через BFS (двунаправленный).
 
@@ -150,6 +153,9 @@ class GraphKnowledgeBase:
             max_depth: максимальная глубина обхода
             direction: "out" — только исходящие, "in" — только входящие,
                        "both" — оба направления (по умолчанию)
+            metadata_filter: опциональный фильтр по метаданным соседних узлов
+                ({key: scalar | list[scalar]}, AND-комбинация). None/{} — без фильтра.
+                Ребро исключается, если соседний (neighbor) узел не проходит фильтр.
 
         Returns:
             список кортежей (source_id, target_id, relation, weight, direction)
@@ -186,6 +192,11 @@ class GraphKnowledgeBase:
                     neighbor = edge_data["source"]
 
                 if edge_dir is not None and edge_key not in visited_edges:
+                    # D-функционал: post-filter соседнего узла по его метаданным
+                    if metadata_filter and neighbor in self._nodes:
+                        neighbor_meta = self._nodes[neighbor].get("metadata")
+                        if not matches_metadata_filter(neighbor_meta, metadata_filter):
+                            continue
                     visited_edges.add(edge_key)
                     result.append((
                         edge_data["source"],

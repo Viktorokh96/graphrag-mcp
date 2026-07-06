@@ -40,17 +40,20 @@ def main(argv: list[str]) -> int:
     parser_search = subparsers.add_parser("search", help="Semantic search")
     parser_search.add_argument("--query", type=str, required=True, help="Search query")
     parser_search.add_argument("--k", type=int, default=5, help="Number of results")
+    parser_search.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
 
     # bm25-search
     parser_bm25 = subparsers.add_parser("bm25-search", help="BM25 keyword search")
     parser_bm25.add_argument("--query", type=str, required=True, help="Search query")
     parser_bm25.add_argument("--k", type=int, default=5, help="Number of results")
+    parser_bm25.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
 
     # hybrid-search
     parser_hybrid = subparsers.add_parser("hybrid-search", help="Hybrid search")
     parser_hybrid.add_argument("--query", type=str, required=True, help="Search query")
     parser_hybrid.add_argument("--k", type=int, default=5, help="Number of results")
     parser_hybrid.add_argument("--alpha", type=float, default=0.5, help="Hybrid alpha (0=BM25, 1=semantic)")
+    parser_hybrid.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
 
     # stats
     subparsers.add_parser("stats", help="Show statistics")
@@ -69,6 +72,7 @@ def main(argv: list[str]) -> int:
     parser_get_related = subparsers.add_parser("get-related", help="Get related documents")
     parser_get_related.add_argument("--node", type=str, required=True, help="Node UUID")
     parser_get_related.add_argument("--max-depth", type=int, default=1, help="Max depth for traversal")
+    parser_get_related.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
 
     # graph-stats
     subparsers.add_parser("graph-stats", help="Show graph statistics")
@@ -112,17 +116,20 @@ def main(argv: list[str]) -> int:
             return 0
 
         elif args.command == "search":
-            results = rag.search(args.query, args.k)
+            meta_filter = json.loads(args.meta_filter) if args.meta_filter else None
+            results = rag.search(args.query, args.k, **({"metadata_filter": meta_filter} if meta_filter else {}))
             _print_results("Семантический поиск", results)
             return 0
 
         elif args.command == "bm25-search":
-            results = rag.bm25_search(args.query, args.k)
+            meta_filter = json.loads(args.meta_filter) if args.meta_filter else None
+            results = rag.bm25_search(args.query, args.k, **({"metadata_filter": meta_filter} if meta_filter else {}))
             _print_results("BM25 поиск", results)
             return 0
 
         elif args.command == "hybrid-search":
-            results = rag.search_hybrid(args.query, args.k, args.alpha)
+            meta_filter = json.loads(args.meta_filter) if args.meta_filter else None
+            results = rag.search_hybrid(args.query, args.k, args.alpha, **({"metadata_filter": meta_filter} if meta_filter else {}))
             _print_results("Гибридный поиск", results)
             return 0
 
@@ -145,12 +152,13 @@ def main(argv: list[str]) -> int:
             return 0
 
         elif args.command == "get-related":
-            relations = rag.get_related(args.node, args.max_depth)
+            meta_filter = json.loads(args.meta_filter) if args.meta_filter else None
+            relations = rag.get_related(args.node, args.max_depth, **({"metadata_filter": meta_filter} if meta_filter else {}))
             if not relations:
                 print(f"📭 Нет связанных узлов для {args.node}")
             else:
                 print(f"🔗 Связанные узлы для {args.node[:8]}... (depth={args.max_depth}):")
-                for source, target, relation, weight in relations:
+                for source, target, relation, weight, _direction in relations:
                     print(f"   {source[:8]}... --[{relation}] (w={weight:.2f})--> {target[:8]}...")
             return 0
 

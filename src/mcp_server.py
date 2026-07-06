@@ -97,8 +97,10 @@ TOOL_DEFS = [
             "For such identifier-only queries, use rag_bm25_search instead. Pass `max_chars` "
             "to truncate each result's text (recommended to control context size, e.g. "
             "1500-3000); omit it or pass null for full text. Use `k` to set the number of "
-            "results (default 5). Requires an embedding provider (Ollama by default, or "
-            "OpenRouter via OPENROUTER_API_KEY)."
+            "results (default 5). Pass `metadata_filter` to restrict results to documents "
+            "whose metadata matches all given key->value pairs (AND); value may be a scalar "
+            "(exact match) or a list ($in). Requires an embedding provider (Ollama by "
+            "default, or OpenRouter via OPENROUTER_API_KEY)."
         ),
         inputSchema={
             "type": "object",
@@ -108,6 +110,15 @@ TOOL_DEFS = [
                 "max_chars": {
                     "type": "integer",
                     "description": "Truncate each result's text to at most this many characters. null or omitted = return full text. Recommended for context budget control.",
+                    "default": None,
+                },
+                "metadata_filter": {
+                    "description": (
+                        "Optional filter on document metadata. A dict of key->value pairs; "
+                        "ALL must match (AND). Value may be a scalar (exact match) or a list "
+                        "(membership/$in). null/omitted = no filter. Example: "
+                        "{\"source\": \"specification\", \"type\": [\"bug\",\"feature\"]}."
+                    ),
                     "default": None,
                 },
             },
@@ -126,7 +137,9 @@ TOOL_DEFS = [
             "embedding provider and works fully offline — making it the reliable channel for "
             "identifier-only queries that semantic search cannot resolve. `max_chars` "
             "truncates each result's text; omit/null for full text. `k` sets the result count "
-            "(default 5)."
+            "(default 5). Pass `metadata_filter` to restrict results to documents whose "
+            "metadata matches all given key->value pairs (AND); value may be a scalar "
+            "(exact match) or a list ($in)."
         ),
         inputSchema={
             "type": "object",
@@ -136,6 +149,15 @@ TOOL_DEFS = [
                 "max_chars": {
                     "type": "integer",
                     "description": "Truncate each result's text to at most this many characters. null or omitted = full text.",
+                    "default": None,
+                },
+                "metadata_filter": {
+                    "description": (
+                        "Optional filter on document metadata. A dict of key->value pairs; "
+                        "ALL must match (AND). Value may be a scalar (exact match) or a list "
+                        "(membership/$in). null/omitted = no filter. Example: "
+                        "{\"source\": \"specification\", \"type\": [\"bug\",\"feature\"]}."
+                    ),
                     "default": None,
                 },
             },
@@ -168,7 +190,9 @@ TOOL_DEFS = [
             "beyond top-k in the other are not lost. Returns top-k {doc_id, text, score, "
             "metadata}. Pass `max_chars` to truncate each result's text (recommended for "
             "context management); omit or pass null for full text. `k` sets the number of "
-            "results (default 5)."
+            "results (default 5). Pass `metadata_filter` to restrict results to documents "
+            "whose metadata matches all given key->value pairs (AND); value may be a scalar "
+            "(exact match) or a list ($in). The filter applies to BOTH channels before fusion."
         ),
         inputSchema={
             "type": "object",
@@ -187,6 +211,15 @@ TOOL_DEFS = [
                 "max_chars": {
                     "type": "integer",
                     "description": "Truncate each result's text to at most this many characters. null or omitted = full text.",
+                    "default": None,
+                },
+                "metadata_filter": {
+                    "description": (
+                        "Optional filter on document metadata. A dict of key->value pairs; "
+                        "ALL must match (AND). Value may be a scalar (exact match) or a list "
+                        "(membership/$in). null/omitted = no filter. Example: "
+                        "{\"source\": \"specification\", \"type\": [\"bug\",\"feature\"]}."
+                    ),
                     "default": None,
                 },
             },
@@ -228,13 +261,24 @@ TOOL_DEFS = [
             "doc_ids). `direction` is 'out' for source->target or 'in' for target->source. "
             "Useful for discovering related documents that do not textually match a query "
             "but are linked semantically through explicit relations. Returns an empty "
-            "`relations` list if the node is unknown or isolated."
+            "`relations` list if the node is unknown or isolated. Pass `metadata_filter` "
+            "to keep only edges whose neighbour node's metadata matches all given key->value "
+            "pairs (AND); value may be a scalar (exact match) or a list ($in)."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "node_id": {"type": "string", "description": "doc_id of the node to start BFS from."},
                 "max_depth": {"type": "integer", "default": 1, "description": "Maximum BFS hop count (1 = direct neighbours, 2 = neighbours-of-neighbours, ...)."},
+                "metadata_filter": {
+                    "description": (
+                        "Optional filter on neighbour metadata. A dict of key->value pairs; "
+                        "ALL must match (AND). Value may be a scalar (exact match) or a list "
+                        "(membership/$in). null/omitted = no filter. Edges whose neighbour "
+                        "node does not pass the filter are excluded."
+                    ),
+                    "default": None,
+                },
             },
             "required": ["node_id"],
         },
@@ -318,8 +362,11 @@ TOOL_DEFS = [
             "optionally truncates each returned document's text to keep responses compact; "
             "omit or pass null for full text. Use this to browse the corpus, audit what "
             "has been indexed, or discover doc_ids for subsequent get_document / delete / "
-            "relation calls. Returns {documents: [{doc_id, text, metadata}, ...], total: "
-            "int, limit: int, offset: int}."
+            "relation calls. Pass `metadata_filter` to restrict the listing to documents "
+            "whose metadata matches all given key->value pairs (AND); value may be a scalar "
+            "(exact match) or a list ($in). When a filter is active, `total` reflects the "
+            "number of matching documents. Returns {documents: [{doc_id, text, metadata}, "
+            "...], total: int, limit: int, offset: int}."
         ),
         inputSchema={
             "type": "object",
@@ -329,6 +376,15 @@ TOOL_DEFS = [
                 "max_chars": {
                     "type": "integer",
                     "description": "Truncate each document's text to at most this many characters. null or omitted = full text.",
+                    "default": None,
+                },
+                "metadata_filter": {
+                    "description": (
+                        "Optional filter on document metadata. A dict of key->value pairs; "
+                        "ALL must match (AND). Value may be a scalar (exact match) or a list "
+                        "(membership/$in). null/omitted = no filter. Example: "
+                        "{\"source\": \"specification\", \"type\": [\"bug\",\"feature\"]}."
+                    ),
                     "default": None,
                 },
             },
@@ -412,10 +468,20 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
     handlers = {
         "rag_add_document": _add_document_handler,
         "rag_add_file": _add_file_handler,
-        "rag_search": lambda p: _fmt(rag.search(p.get("query", ""), k=p.get("k", 5)), max_chars=p.get("max_chars")),
-        "rag_bm25_search": lambda p: _fmt(rag.bm25_search(p.get("query", ""), k=p.get("k", 5)), max_chars=p.get("max_chars")),
+        "rag_search": lambda p: _fmt(
+            rag.search(p.get("query", ""), k=p.get("k", 5), metadata_filter=p.get("metadata_filter")),
+            max_chars=p.get("max_chars"),
+        ),
+        "rag_bm25_search": lambda p: _fmt(
+            rag.bm25_search(p.get("query", ""), k=p.get("k", 5), metadata_filter=p.get("metadata_filter")),
+            max_chars=p.get("max_chars"),
+        ),
         "rag_search_hybrid": lambda p: _fmt(
-            rag.search_hybrid(p.get("query", ""), k=p.get("k", 5), alpha=p.get("alpha")), max_chars=p.get("max_chars")
+            rag.search_hybrid(
+                p.get("query", ""), k=p.get("k", 5), alpha=p.get("alpha"),
+                metadata_filter=p.get("metadata_filter"),
+            ),
+            max_chars=p.get("max_chars"),
         ),
         "rag_add_relation": lambda p: (
             rag.add_relation(p["source_id"], p["target_id"], p["relation"], p.get("weight", 1.0)),
@@ -424,7 +490,10 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
         "rag_get_related": lambda p: {
             "relations": [
                 {"source": r[0], "target": r[1], "relation": r[2], "weight": r[3], "direction": r[4]}
-                for r in rag.get_related(p["node_id"], p.get("max_depth", 1))
+                for r in rag.get_related(
+                    p["node_id"], p.get("max_depth", 1),
+                    metadata_filter=p.get("metadata_filter"),
+                )
             ]
         },
         "rag_get_document": lambda p: rag.get_document(
@@ -445,7 +514,8 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
         "rag_clear": lambda p: (rag.clear(), {"status": "ok"})[1],
         "rag_delete_document": lambda p: {"status": "ok", "doc_id": p["doc_id"], "deleted": rag.delete_document(p["doc_id"])},
         "rag_list_documents": lambda p: rag.list_documents(
-            limit=p.get("limit", 20), offset=p.get("offset", 0), max_chars=p.get("max_chars")
+            limit=p.get("limit", 20), offset=p.get("offset", 0),
+            max_chars=p.get("max_chars"), metadata_filter=p.get("metadata_filter"),
         ),
     }
     fn = handlers.get(name)

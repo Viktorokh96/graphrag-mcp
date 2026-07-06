@@ -9,6 +9,7 @@ from src.embeddings import OpenRouterEmbeddingGenerator, OllamaEmbeddingGenerato
 from src.vector_store import VectorStore
 from src.bm25_index import BM25Index
 from src.graph_store import GraphKnowledgeBase
+from src._meta_filter import to_chroma_where
 
 
 class RAGSystem:
@@ -177,13 +178,15 @@ class RAGSystem:
             text = f.read()
         return self.add_document(text, metadata)
 
-    def search(self, query: str, k: int = 5) -> list[tuple[str, str, float, dict]]:
+    def search(self, query: str, k: int = 5, metadata_filter: Optional[dict] = None) -> list[tuple[str, str, float, dict]]:
         """
         Семантический поиск по эмбеддингу.
 
         Args:
             query: поисковый запрос
             k: количество результатов
+            metadata_filter: опциональный фильтр по метаданным
+                ({key: scalar | list[scalar]}, AND-комбинация). None/{} — без фильтра.
 
         Returns:
             список кортежей (doc_id, text, score, metadata)
@@ -203,20 +206,23 @@ class RAGSystem:
         # идентификаторам (pytest, jwt, bm25), которые семантика не видит.
         if all(abs(v) < 1e-12 for v in query_embedding):
             return []
-        results = self.vector_store.search(query_embedding, k=k)
+        where = to_chroma_where(metadata_filter)
+        results = self.vector_store.search(query_embedding, k=k, where=where)
         # D10: нормализация metadata — всегда dict
         return [
             (doc_id, text, score, meta if isinstance(meta, dict) else {})
             for doc_id, text, score, meta in results
         ]
 
-    def bm25_search(self, query: str, k: int = 5) -> list[tuple[str, str, float, dict]]:
+    def bm25_search(self, query: str, k: int = 5, metadata_filter: Optional[dict] = None) -> list[tuple[str, str, float, dict]]:
         """
         BM25 поиск по ключевым словам.
 
         Args:
             query: поисковый запрос
             k: количество результатов
+            metadata_filter: опциональный фильтр по метаданным
+                ({key: scalar | list[scalar]}, AND-комбинация). None/{} — без фильтра.
 
         Returns:
             список кортежей (doc_id, text, score, metadata)
@@ -225,7 +231,7 @@ class RAGSystem:
         stats = self.bm25_index.stats()
         if stats["total_documents"] == 0:
             return []
-        results = self.bm25_index.search(query, k=k)
+        results = self.bm25_index.search(query, k=k, metadata_filter=metadata_filter)
         # D10: нормализация metadata — всегда dict
         return [
             (doc_id, text, score, meta if isinstance(meta, dict) else {})
@@ -243,7 +249,8 @@ class RAGSystem:
             return self._cyrillic_alpha
         return self._default_alpha
 
-    def search_hybrid(self, query: str, k: int = 5, alpha: Optional[float] = None) -> list[tuple[str, str, float, dict]]:
+    def search_hybrid(self, query: str, k: int = 5, alpha: Optional[float] = None,
+                      metadata_filter: Optional[dict] = None) -> list[tuple[str, str, float, dict]]:
         """Гибридный поиск: Reciprocal Rank Fusion (RRF) семантического и BM25.
 
         Метод RRF (Reciprocal Rank Fusion) заменяет старую min-max нормализацию
@@ -279,6 +286,9 @@ class RAGSystem:
             query: поисковый запрос
             k: количество результатов в выдаче
             alpha: баланс (None=language-aware default, 0.0 = чистый BM25, 1.0 = чистый семантический)
+            metadata_filter: опциональный фильтр по метаданным
+                ({key: scalar | list[scalar]}, AND-комбинация). None/{} — без фильтра.
+                Применяется к обоим каналам (semantic + BM25) до fusion.
 
         Returns:
             список кортежей (doc_id, text, score, metadata), отсортированных по убыванию score
@@ -303,8 +313,8 @@ class RAGSystem:
         # но оказавшийся за пределами top-k по другому.
         candidate_k = max(k * self._hybrid_expand, self._hybrid_min_candidates)
 
-        semantic_results = self.search(query, k=candidate_k)
-        bm25_results = self.bm25_search(query, k=candidate_k)
+        semantic_results = self.search(query, k=candidate_k, metadata_filter=metadata_filter)
+        bm25_results = self.bm25_search(query, k=candidate_k, metadata_filter=metadata_filter)
 
         if not semantic_results and not bm25_results:
             return []
@@ -422,7 +432,8 @@ class RAGSystem:
             "limit": limit,
         }
 
-    def list_documents(self, limit: int = 20, offset: int = 0, max_chars: Optional[int] = None) -> dict:
+    def list_documents(self, limit: int = 20, offset: int = 0, max_chars: Optional[int] = None,
+                       metadata_filter: Optional[dict] = None) -> dict:
         """
         Получить список документов с пагинацией.
 
@@ -431,15 +442,19 @@ class RAGSystem:
             offset: сдвиг от начала (по умолчанию 0)
             max_chars: ограничение длины текста каждого документа
                        (None = полный текст, иначе обрезается до max_chars символов)
+            metadata_filter: опциональный фильтр по метаданным
+                ({key: scalar | list[scalar]}, AND-комбинация). None/{} — без фильтра.
+                `total` при активном фильтре отражает число подходящих документов.
 
         Returns:
             dict с ключами:
                 documents: список {doc_id, text, metadata}
-                total: общее количество документов
+                total: общее количество документов (с учётом фильтра)
                 limit: текущий limit
                 offset: текущий offset
         """
-        items, total = self.vector_store.list_documents(limit=limit, offset=offset)
+        where = to_chroma_where(metadata_filter)
+        items, total = self.vector_store.list_documents(limit=limit, offset=offset, where=where)
         documents = []
         for doc_id, text, meta in items:
             if max_chars is not None:
@@ -474,7 +489,8 @@ class RAGSystem:
         """
         self.graph_kb.add_edge(source_id, target_id, relation, weight)
 
-    def get_related(self, node_id: str, max_depth: int = 1, direction: str = "both") -> list[tuple[str, str, str, float, str]]:
+    def get_related(self, node_id: str, max_depth: int = 1, direction: str = "both",
+                    metadata_filter: Optional[dict] = None) -> list[tuple[str, str, str, float, str]]:
         """
         Получить связанные документы (двунаправленный BFS).
 
@@ -482,11 +498,14 @@ class RAGSystem:
             node_id: идентификатор документа
             max_depth: максимальная глубина обхода
             direction: "out" | "in" | "both" (по умолчанию "both")
+            metadata_filter: опциональный фильтр по метаданным соседних узлов
+                ({key: scalar | list[scalar]}, AND-комбинация). None/{} — без фильтра.
+                Соседние узлы, не проходящие фильтр, исключаются из выдачи.
 
         Returns:
             список кортежей (source_id, target_id, relation, weight, direction)
         """
-        return self.graph_kb.get_related(node_id, max_depth, direction)
+        return self.graph_kb.get_related(node_id, max_depth, direction, metadata_filter=metadata_filter)
 
     def _sync_stores(self) -> None:
         """Synchronise all stores to have exactly the same set of doc_ids.

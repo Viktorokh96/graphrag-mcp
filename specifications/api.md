@@ -38,7 +38,7 @@ class BM25Index:
     def __init__(self)
     def add_document(self, doc_id: str, text: str, metadata: dict | None = None)
     def add_documents(self, documents: dict[str, str], metadata: dict[str, dict] | None = None)
-    def search(self, query: str, k: int = 5) -> list[tuple[str, str, float, dict]]
+    def search(self, query: str, k: int = 5, metadata_filter: dict | None = None) -> list[tuple[str, str, float, dict]]
     def clear(self)
     def stats(self) -> dict
     def remove(self, doc_id: str)
@@ -48,6 +48,7 @@ class BM25Index:
 - Использует `rank_bm25` библиотеку (`BM25Okapi`)
 - Хранит тексты и метаданные отдельно
 - `search()` возвращает `[(doc_id, text, score, metadata), ...]` отсортированные по убыванию score
+- `metadata_filter` — post-filter: документы, чьи метаданные не проходят `matches_metadata_filter()`, исключаются до сортировки/обрезки по k
 - `stats()` возвращает `{"total_documents": int, "total_tokens": int}`
 
 ---
@@ -61,7 +62,8 @@ class VectorStore:
     def __init__(self, store_path: str = "./rag_data")
     def add_document(self, doc_id: str, text: str, embedding: list[float], metadata: dict | None = None)
     def add_documents(self, documents: dict[str, tuple[str, list[float]]], metadata: dict[str, dict] | None = None)
-    def search(self, query_embedding: list[float], k: int = 5) -> list[tuple[str, str, float, dict]]
+    def search(self, query_embedding: list[float], k: int = 5, where: dict | None = None) -> list[tuple[str, str, float, dict]]
+    def list_documents(self, limit: int = 20, offset: int = 0, where: dict | None = None) -> tuple[list[tuple[str, str, dict]], int]
     def clear(self)
     def stats(self) -> dict
     def remove(self, doc_id: str)
@@ -72,7 +74,8 @@ class VectorStore:
 **Поведение:**
 - Обёртка над ChromaDB (persistent клиент)
 - Коллекция называется `rag_docs`
-- `search()` использует ChromaDB `query()` с `n_results=k`, берёт `max(k*3, 20)` кандидатов для гибридной fusion
+- `search()` использует ChromaDB `query()` с `n_results=k`, берёт `max(k*3, 20)` кандидатов для гибридной fusion. Параметр `where` — нативная `where`-клауза ChromaDB (преобразуется из `metadata_filter` через `to_chroma_where()`); `None` — без фильтрации.
+- `list_documents()` принимает `where` для фильтрации списка; при активном фильтре `total` отражает число подходящих документов (считается отдельным `collection.get(where=...)`).
 - Нормализация скора: `score = clip(1 - distance²/2, 0, 1)` — корректное
   преобразование L2-расстояния в косинусную сходность для L2-нормализованных
   эмбеддингов. Даёт широкий диапазон скоров [0, 1] вместо узкого кластера
@@ -93,12 +96,35 @@ class RAGSystem:
     def add_document(self, text: str, metadata: dict | None = None) -> str
     def add_documents(self, texts: list[str], metadata: list[dict] | None = None) -> list[str]
     def add_file(self, filepath: str, metadata: dict | None = None) -> str
-    def search(self, query: str, k: int = 5) -> list[tuple[str, str, float, dict]]
-    def bm25_search(self, query: str, k: int = 5) -> list[tuple[str, str, float, dict]]
-    def search_hybrid(self, query: str, k: int = 5, alpha: float | None = None) -> list[tuple[str, str, float, dict]]
+    def search(self, query: str, k: int = 5, metadata_filter: dict | None = None) -> list[tuple[str, str, float, dict]]
+    def bm25_search(self, query: str, k: int = 5, metadata_filter: dict | None = None) -> list[tuple[str, str, float, dict]]
+    def search_hybrid(self, query: str, k: int = 5, alpha: float | None = None, metadata_filter: dict | None = None) -> list[tuple[str, str, float, dict]]
+    def list_documents(self, limit: int = 20, offset: int = 0, max_chars: int | None = None, metadata_filter: dict | None = None) -> dict
+    def get_related(self, node_id: str, max_depth: int = 1, direction: str = "both", metadata_filter: dict | None = None) -> list[tuple[str, str, str, float, str]]
     def clear(self)
     def stats(self) -> dict
 ```
+
+**Фильтрация по метаданным (`metadata_filter`):**
+
+Опциональный параметр `metadata_filter` (dict | None, по умолчанию None) есть у
+`search`, `bm25_search`, `search_hybrid`, `list_documents` и `get_related`.
+
+Формат — `dict[str, scalar | list[scalar]]`:
+- Каждая пара `key: value` означает: документ подходит, если `metadata[key] == value`.
+- Если `value` — список, то условие: `metadata[key]` входит в список (семантика `$in`).
+- Все условия объединяются через **AND** (должны выполняться все).
+- `None` или `{}` — фильтр отключён.
+
+Реализация:
+- **VectorStore**: фильтр преобразуется в нативный `where` ChromaDB через
+  `to_chroma_where()` (`src/_meta_filter.py`): scalar → direct equality,
+  list → `{"$in": [...]}`, несколько ключей → `{"$and": [...]}`.
+- **BM25Index**: post-filter результатов через `matches_metadata_filter()`.
+- **GraphKnowledgeBase**: post-filter соседних узлов в `get_related` — рёбра к
+  узлам, не проходящим фильтр, исключаются.
+- **search_hybrid**: фильтр применяется к обоим каналам (semantic + BM25) до fusion.
+- **list_documents**: при активном фильтре `total` отражает число подходящих документов.
 
 **Семантический поиск (`search`):**
 - Возвращает пустой список, если: хранилище пусто, размерность эмбеддинга не
@@ -191,13 +217,14 @@ class MCPServer:
 > Канонический реестр поддерживается в `AGENTS.md` (раздел «MCP инструменты»).
 > При расхождении — источник истины `AGENTS.md`. Ниже — сводка.
 
-Поиск (все принимают `query`, `k=5`, `max_chars=null`; возвращают
-`[{doc_id, text, score, metadata}]` отсортированные по убыванию score):
-1. `rag_search(query, k=5, max_chars=null)` — семантический поиск (эмбеддинги).
-2. `rag_bm25_search(query, k=5, max_chars=null)` — BM25 keyword-поиск.
-3. `rag_search_hybrid(query, k=5, alpha=null, max_chars=null)` — гибрид (RRF);
+Поиск (все принимают `query`, `k=5`, `max_chars=null`, `metadata_filter=null`;
+возвращают `[{doc_id, text, score, metadata}]` отсортированные по убыванию score):
+1. `rag_search(query, k=5, max_chars=null, metadata_filter=null)` — семантический поиск (эмбеддинги).
+2. `rag_bm25_search(query, k=5, max_chars=null, metadata_filter=null)` — BM25 keyword-поиск.
+3. `rag_search_hybrid(query, k=5, alpha=null, max_chars=null, metadata_filter=null)` — гибрид (RRF);
    `alpha=null` → language-aware: кириллица → `cyrillic_alpha` (0.85), иначе
-   `default_alpha` (0.5). RRF_K=20, alpha-dilution.
+   `default_alpha` (0.5). RRF_K=20, alpha-dilution. `metadata_filter` применяется
+   к обоим каналам до fusion.
 
 Чтение:
 4. `rag_get_document(doc_id, offset=0, limit=null)` → `{doc_id, text, metadata, total_chars, offset, limit}` или null.
@@ -208,12 +235,12 @@ class MCPServer:
 7. `rag_add_relation(source_id, target_id, relation, weight=1.0)` → `{status: ok}`.
 
 Управление:
-8. `rag_list_documents(limit=20, offset=0, max_chars=null)` → `{documents, total, limit, offset}`.
+8. `rag_list_documents(limit=20, offset=0, max_chars=null, metadata_filter=null)` → `{documents, total, limit, offset}`. При активном фильтре `total` — число подходящих документов.
 9. `rag_delete_document(doc_id)` → `{status, doc_id, deleted}` (идемпотентен).
 10. `rag_clear()` → `{status: ok}`. ⚠️ необратимо.
 
 Граф:
-11. `rag_get_related(node_id, max_depth=1)` → `{relations: [{source, target, relation, weight}]}`.
+11. `rag_get_related(node_id, max_depth=1, metadata_filter=null)` → `{relations: [{source, target, relation, weight, direction}]}`. Фильтр применяется к соседним узлам; рёбра к узлам, не проходящим фильтр, исключаются.
 12. `rag_graph_stats()` → `{total_nodes, total_edges, relation_types}`.
 
 Статистика:
@@ -230,16 +257,16 @@ class GraphKnowledgeBase:
     def __init__(self, store_path: str = "./rag_data")
     def add_node(self, node_id: str, metadata: dict | None = None)
     def add_relation(self, source_id: str, target_id: str, relation: str, weight: float = 1.0)
-    def get_related(self, node_id: str, max_depth: int = 1) -> list[tuple[str, str, str, float]]
+    def get_related(self, node_id: str, max_depth: int = 1, direction: str = "both", metadata_filter: dict | None = None) -> list[tuple[str, str, str, float, str]]
     def stats(self) -> dict
     def clear(self)
 ```
 
 **Поведение:**
-- Хранит граф знаний в NetworkX
+- Хранит граф знаний in-memory (dict узлов + dict рёбер) с JSON-персистентностью
 - `add_node()` добавляет узел с метаданными
-- `add_relation()` добавляет направленное ребро с типом отношения и весом
-- `get_related()` выполняет BFS до max_depth, возвращает `[(source, target, relation, weight), ...]`
+- `add_relation()` (он же `add_edge()`) добавляет направленное ребро с типом отношения и весом
+- `get_related()` выполняет двунаправленный BFS (out + in) до max_depth, возвращает `[(source, target, relation, weight, direction), ...]`. `direction`: `"out"`/`"in"`/`"both"`. `metadata_filter` — post-filter соседних узлов: рёбра к узлам, чьи метаданные не проходят `matches_metadata_filter()`, исключаются.
 - `stats()` возвращает `{"total_nodes": int, "total_edges": int, "relation_types": list[str]}`
 
 **Пример использования:**

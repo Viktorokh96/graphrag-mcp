@@ -58,13 +58,13 @@ export OPENROUTER_API_KEY=sk-or-v1-...
 
 ### Поиск / Query
 
-Все три поиска принимают `query` (обязательный), `k` (число результатов, по умолчанию 5) и `max_chars` (обрезать текст каждого результата до N символов; `null`/опущен = полный текст). Возвращают список `{doc_id, text, score, metadata}`, отсортированный по убыванию score.
+Все три поиска принимают `query` (обязательный), `k` (число результатов, по умолчанию 5), `max_chars` (обрезать текст каждого результата до N символов; `null`/опущен = полный текст) и `metadata_filter` (опциональный фильтр по метаданным — см. «Замечания по параметрам» ниже). Возвращают список `{doc_id, text, score, metadata}`, отсортированный по убыванию score.
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_search` | `query`, `k=5`, `max_chars=null` | Семантический поиск через векторные эмбеддинги. Лучше для концептуальных запросов. |
-| `rag_bm25_search` | `query`, `k=5`, `max_chars=null` | Ключевой поиск по алгоритму BM25 (Okapi). Лучше для точного совпадения терминов. |
-| `rag_search_hybrid` | `query`, `k=5`, `alpha=null`, `max_chars=null` | Гибрид через **Reciprocal Rank Fusion (RRF)**. Формула (**alpha-dilution**): каждый канал взвешивается своей долей — `score = alpha/(RRF_K+rank_sem+1) + (1-alpha)/(RRF_K+rank_bm25+1)` для документов из ОБОИХ каналов; sem-only → `alpha/(RRF_K+rank_sem+1)`; bm25-only → `(1-alpha)/(RRF_K+rank_bm25+1)`. Документы с score=0 (single-channel при крайнем alpha) исключаются — поэтому `alpha=1.0` = чистая семантика, `alpha=0.0` = чистый BM25. `RRF_K=20` (не классическая 60) — даёт широкий разброс скоров для малых корпусов. **Language-aware alpha:** `alpha=null` для запросов с кириллицей → `cyrillic_alpha` (env `RAG_CYRILLIC_ALPHA`, default **0.85** — BM25 без русского стемминга шумит, поэтому семантика доминирует); для остальных → `default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — выбран бенчмарком NDCG@k, см. `scripts/benchmark_alpha.py`). Явно переданный `alpha` имеет приоритет. **Candidate expansion:** из каждого канала забирается `max(k*3, 20)` кандидатов перед fusion. |
+| `rag_search` | `query`, `k=5`, `max_chars=null`, `metadata_filter=null` | Семантический поиск через векторные эмбеддинги. Лучше для концептуальных запросов. Фильтр использует нативный `where` ChromaDB. |
+| `rag_bm25_search` | `query`, `k=5`, `max_chars=null`, `metadata_filter=null` | Ключевой поиск по алгоритму BM25 (Okapi). Лучше для точного совпадения терминов. Фильтр — post-filter результатов. |
+| `rag_search_hybrid` | `query`, `k=5`, `alpha=null`, `max_chars=null`, `metadata_filter=null` | Гибрид через **Reciprocal Rank Fusion (RRF)**. Формула (**alpha-dilution**): каждый канал взвешивается своей долей — `score = alpha/(RRF_K+rank_sem+1) + (1-alpha)/(RRF_K+rank_bm25+1)` для документов из ОБОИХ каналов; sem-only → `alpha/(RRF_K+rank_sem+1)`; bm25-only → `(1-alpha)/(RRF_K+rank_bm25+1)`. Документы с score=0 (single-channel при крайнем alpha) исключаются — поэтому `alpha=1.0` = чистая семантика, `alpha=0.0` = чистый BM25. `RRF_K=20` (не классическая 60) — даёт широкий разброс скоров для малых корпусов. **Language-aware alpha:** `alpha=null` для запросов с кириллицей → `cyrillic_alpha` (env `RAG_CYRILLIC_ALPHA`, default **0.85** — BM25 без русского стемминга шумит, поэтому семантика доминирует); для остальных → `default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — выбран бенчмарком NDCG@k, см. `scripts/benchmark_alpha.py`). Явно переданный `alpha` имеет приоритет. **Candidate expansion:** из каждого канала забирается `max(k*3, 20)` кандидатов перед fusion. Фильтр применяется к обоим каналам до fusion. |
 
 ### Чтение / Retrieve
 
@@ -84,7 +84,7 @@ export OPENROUTER_API_KEY=sk-or-v1-...
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_list_documents` | `limit=20`, `offset=0`, `max_chars=null` | Постраничный список документов. `max_chars` обрезает текст каждого документа. |
+| `rag_list_documents` | `limit=20`, `offset=0`, `max_chars=null`, `metadata_filter=null` | Постраничный список документов. `max_chars` обрезает текст каждого документа. `metadata_filter` — опциональный фильтр (см. «Замечания по параметрам»); при активном фильтре `total` отражает число подходящих документов. |
 | `rag_delete_document` | `doc_id` (обязательный) | Удалить документ из всех хранилищ (векторное, BM25, граф). **Идемпотентен** — безопасно повторять. Возвращает `{status, doc_id, deleted}`. |
 | `rag_clear` | — | ⚠️ Удалить ВСЕ данные (необратимо). Использовать с крайней осторожностью. |
 
@@ -92,7 +92,7 @@ export OPENROUTER_API_KEY=sk-or-v1-...
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_get_related` | `node_id` (обязательный), `max_depth=1` | BFS-обход от узла в ОБА направления (out + in). `max_depth` — сколько рёбер пройти (1 = прямые соседи). Возвращает `{relations: [{source, target, relation, weight, direction}]}`. `direction: "out"` — исходящее ребро (source→target), `"in"` — входящее (target←source). |
+| `rag_get_related` | `node_id` (обязательный), `max_depth=1`, `metadata_filter=null` | BFS-обход от узла в ОБА направления (out + in). `max_depth` — сколько рёбер пройти (1 = прямые соседи). `metadata_filter` применяется к соседним (neighbor) узлам — рёбра к узлам, не проходящим фильтр, исключаются. Возвращает `{relations: [{source, target, relation, weight, direction}]}`. `direction: "out"` — исходящее ребро (source→target), `"in"` — входящее (target←source). |
 
 ### Статистика
 
@@ -106,6 +106,7 @@ export OPENROUTER_API_KEY=sk-or-v1-...
 - `meta` в `rag_add_document` / `rag_add_file` опционален и устойчив к типам: принимает dict, null, пустую строку, JSON-строку, любую другую строку. См. `_parse_meta()` в `src/mcp_server.py`.
 - `max_chars` есть у всех поисков, `rag_list_documents` и (как `limit`) у `rag_get_document`. Передавайте конечное значение (например 1500–3000) на поисках, чтобы не переполнять контекст; полный текст забирайте через `rag_get_document` по `doc_id`.
 - `k` (число результатов) есть у всех поисков, по умолчанию 5.
+- `metadata_filter` (опциональный, `null` по умолчанию) есть у `rag_search`, `rag_bm25_search`, `rag_search_hybrid`, `rag_list_documents` и `rag_get_related`. Формат — `dict[str, scalar | list[scalar]]`: каждая пара `key:value` — условие, что `metadata[key] == value`; если `value` — список, то условие `metadata[key]` входит в список (семантика `$in`). Все условия объединяются через **AND**. `null` или `{}` — фильтр отключён. Реализация: для VectorStore используется нативный `where` ChromaDB (`to_chroma_where()`); для BM25 и графа — post-filter (`matches_metadata_filter()`). В `rag_list_documents` при активном фильтре `total` отражает число подходящих документов. В `rag_get_related` фильтр применяется к соседним узлам (neighbor), рёбра к узлам, не проходящим фильтр, исключаются.
 - Ошибок валидации нет — неизвестный инструмент бросает `ValueError`, отсутствующие опциональные параметры берут дефолты из схемы.
 
 ### Гибридный поиск: детали RRF
