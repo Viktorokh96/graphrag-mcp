@@ -149,23 +149,26 @@ TOOL_DEFS = [
             "Reciprocal Rank Fusion (RRF). Recommended default for most queries — it "
             "captures both meaning and exact terms, and degrades gracefully: if one "
             "channel returns nothing (e.g. semantic search for an unknown identifier), "
-            "the other channel still ranks candidates. The blend is controlled by `alpha`: "
-            "for documents ranked by BOTH channels, "
-            "RRF score = alpha * 1/(RRF_K+rank_sem+1) + (1-alpha) * 1/(RRF_K+rank_bm25+1), "
-            "where alpha=0.0 = pure BM25, alpha=1.0 = pure semantic. Documents found "
-            "by only ONE channel receive the full reciprocal rank of that channel "
-            "without dilution by alpha — so at alpha=1.0, BM25-only documents may "
-            "still appear in results. RRF is robust to different score scales and "
-            "eliminates ties. If `alpha` is omitted/null, it falls back to "
-            "RAGConfig.default_alpha (env RAG_DEFAULT_ALPHA, default 0.5 — "
-            "calibrated by NDCG@k benchmark, see scripts/benchmark_alpha.py). alpha outside "
-            "[0, 1] is clamped to the nearest bound. Candidate expansion: each channel "
-            "retrieves max(k * RAG_HYBRID_EXPAND, RAG_HYBRID_MIN_CANDIDATES) candidates "
-            "(defaults: max(k*3, 20)) before fusion, so documents relevant by one channel "
-            "but ranked beyond top-k in the other are not lost. Returns top-k "
-            "{doc_id, text, score, metadata}. Pass `max_chars` to truncate each result's "
-            "text (recommended for context management); omit or pass null for full text. "
-            "`k` sets the number of results (default 5)."
+            "the other channel still ranks candidates. The blend is controlled by `alpha` "
+            "(alpha-dilution): each channel is weighted by its share — "
+            "RRF score = alpha/(RRF_K+rank_sem+1) + (1-alpha)/(RRF_K+rank_bm25+1) for docs "
+            "found by BOTH channels; sem-only docs get alpha/(RRF_K+rank_sem+1); bm25-only "
+            "docs get (1-alpha)/(RRF_K+rank_bm25+1). Thus alpha=1.0 = pure semantic "
+            "(BM25-only docs excluded), alpha=0.0 = pure BM25 (sem-only docs excluded). "
+            "RRF_K=20 (not classic 60) gives wider score spread for small corpora. "
+            "RRF is robust to different score scales and eliminates ties. "
+            "If `alpha` is omitted/null, language-aware selection applies: queries "
+            "containing Cyrillic use cyrillic_alpha (env RAG_CYRILLIC_ALPHA, default 0.85) "
+            "because BM25 without Russian stemming is noisy for Russian queries; other "
+            "queries use default_alpha (env RAG_DEFAULT_ALPHA, default 0.5 — calibrated by "
+            "NDCG@k benchmark, see scripts/benchmark_alpha.py). alpha outside [0, 1] is "
+            "clamped to the nearest bound. Candidate expansion: each channel retrieves "
+            "max(k * RAG_HYBRID_EXPAND, RAG_HYBRID_MIN_CANDIDATES) candidates (defaults: "
+            "max(k*3, 20)) before fusion, so documents relevant by one channel but ranked "
+            "beyond top-k in the other are not lost. Returns top-k {doc_id, text, score, "
+            "metadata}. Pass `max_chars` to truncate each result's text (recommended for "
+            "context management); omit or pass null for full text. `k` sets the number of "
+            "results (default 5)."
         ),
         inputSchema={
             "type": "object",
@@ -175,8 +178,9 @@ TOOL_DEFS = [
                 "alpha": {
                     "type": "number",
                     "description": (
-                        "Balance between semantic (1.0) and BM25 (0.0). If omitted/null, uses "
-                        "RAGConfig.default_alpha (env RAG_DEFAULT_ALPHA, default 0.5). Clamped to [0, 1]."
+                        "Balance between semantic (1.0) and BM25 (0.0). If omitted/null, "
+                        "language-aware: Cyrillic queries use cyrillic_alpha (0.85), others "
+                        "use default_alpha (0.5). Clamped to [0, 1]."
                     ),
                     "default": None,
                 },

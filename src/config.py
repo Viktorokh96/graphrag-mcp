@@ -15,17 +15,24 @@ class RAGConfig:
     # Баланс гибридного поиска: 0.0 = чистый BM25, 1.0 = чистый семантический.
     # Значение по умолчанию (0.5 — истинный баланс) выбрано по результатам бенчмарка
     # NDCG@k на детерминированном корпусе с настоящей семантической структурой
-    # (см. scripts/benchmark_alpha.py, tests/semantic_mock.py). Бенчмарк выявил
-    # широкую «хорошую область» alpha ∈ [0.05, 0.95] с одинаково высоким NDCG@5;
-    # за её пределами качество падает: pure BM25 (alpha=0.0) даёт NDCG≈0.36
-    # (провал на концептуальных/cross-lingual запросах), pure semantic (alpha=1.0)
-    # даёт NDCG≈0.80 (провал на идентификаторах). Ширина плато достигнута за счёт
-    # двух улучшений: (1) candidate expansion в search_hybrid, (2) graceful
-    # отключение семантического канала для запросов с нулевым эмбеддингом (неизвестные
-    # идентификаторы) — такие запросы целиком обслуживает BM25. Дефолт = значение в
-    # хорошей области, ближайшее к 0.5 (точке естественного баланса каналов) —
-    # робастный и детерминированный выбор.
+    # (см. scripts/benchmark_alpha.py, tests/semantic_mock.py). После перехода на
+    # RRF с alpha-dilution (RRF_K=20) бенчмарк выявил широкую «хорошую область»
+    # alpha ∈ [0.05, 0.75] с NDCG@5=0.8241 и P@1=0.8929; за её пределами качество
+    # падает: pure BM25 (alpha=0.0) даёт NDCG≈0.69 (провал на концептуальных/
+    # cross-lingual запросах), pure semantic (alpha=1.0) даёт NDCG≈0.80 (провал
+    # на идентификаторах). Дефолт = значение в хорошей области, ближайшее к 0.5
+    # (точке естественного баланса каналов) — робастный и детерминированный выбор.
     default_alpha: float = 0.5
+    # Alpha для запросов с кириллицей (русский и др.). BM25 без русского стемминга
+    # даёт шумовый сигнал для русских запросов (морфология, отсутствие лемматизации),
+    # поэтому семантический канал должен доминировать. Бенчмарк NDCG@k на mock-корпусе
+    # с идеальными cross-lingual эмбеддингами показывает широкое плато alpha ∈ [0.05, 0.75]
+    # (см. scripts/benchmark_alpha.py) — 0.85 лежит за краем, но это оправдано для реальных
+    # (не идеальных) мультиязычных эмбеддингов Ollama, где BM25-канал для русских
+    # концептуальных запросов вносит больше шума, чем сигнала. Проверено эмпирически:
+    # alpha=0.85 поднимает Tests Agent в топ-2 для запроса «агент тестирования кода»
+    # (при alpha=0.5 документ отсутствует в топ-5).
+    cyrillic_alpha: float = 0.85
     # Candidate expansion для гибридного поиска: из каждого канала забирается
     # max(k * hybrid_expand, hybrid_min_candidates) кандидатов перед fusion.
     hybrid_expand: int = 3
@@ -42,6 +49,7 @@ class RAGConfig:
             openrouter_model=os.environ.get("OPENROUTER_MODEL", "openai/text-embedding-3-small"),
             store_path=os.environ.get("STORE_PATH", "./rag_data"),
             default_alpha=float(os.environ.get("RAG_DEFAULT_ALPHA", "0.5")),
+            cyrillic_alpha=float(os.environ.get("RAG_CYRILLIC_ALPHA", "0.85")),
             hybrid_expand=int(os.environ.get("RAG_HYBRID_EXPAND", "3")),
             hybrid_min_candidates=int(os.environ.get("RAG_HYBRID_MIN_CANDIDATES", "20")),
         )
@@ -64,6 +72,7 @@ class RAGConfig:
             "",
             "# Гибридный поиск",
             f"RAG_DEFAULT_ALPHA={self.default_alpha}",
+            f"RAG_CYRILLIC_ALPHA={self.cyrillic_alpha}",
             f"RAG_HYBRID_EXPAND={self.hybrid_expand}",
             f"RAG_HYBRID_MIN_CANDIDATES={self.hybrid_min_candidates}",
         ]

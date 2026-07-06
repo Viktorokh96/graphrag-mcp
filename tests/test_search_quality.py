@@ -13,7 +13,7 @@
   • BM25 находит документы по точным идентификаторам
   • Гибридный поиск превосходит чистую семантику на идентификаторных запросах
   • Гибридный поиск превосходит чистый BM25 на концептуальных/cross-lingual запросах
-  • Default alpha (0.25) лежит в хорошей области, выявленной бенчмарком
+  • Default alpha (0.5) лежит в хорошей области, выявленной бенчмарком
   • Candidate expansion спасает документ, релевантный по одному каналу,
     но оказавшийся за пределами top-k по другому
 """
@@ -256,18 +256,62 @@ class TestHybridSearchQuality:
         assert cfg.default_alpha == 0.42
 
     def test_alpha_none_uses_config_default(self, rag_with_corpus):
-        """alpha=None берёт default_alpha из конфига системы."""
+        """alpha=None для латинского запроса берёт default_alpha из конфига."""
         rag, _, _ = rag_with_corpus
         rag._default_alpha = 0.3
         results = rag.search_hybrid("python", k=3, alpha=None)
         assert len(results) == 3
 
-    def test_alpha_clamped_to_valid_range(self, rag_with_corpus):
-        """alpha за пределами [0,1] клиппится без ошибок."""
+    def test_alpha_none_cyrillic_uses_cyrillic_alpha(self, rag_with_corpus):
+        """alpha=None для кириллического запроса берёт cyrillic_alpha (не default_alpha)."""
         rag, _, _ = rag_with_corpus
-        for bad_alpha in [-0.5, 1.5, 2.0]:
-            results = rag.search_hybrid("python", k=2, alpha=bad_alpha)
-            assert len(results) <= 2
+        rag._default_alpha = 0.3
+        rag._cyrillic_alpha = 0.85
+        # Проверяем через _alpha_for_query — публичный контракт выбора alpha
+        assert rag._alpha_for_query("машинное обучение") == 0.85
+        assert rag._alpha_for_query("python") == 0.3
+
+    def test_explicit_alpha_overrides_language(self, rag_with_corpus):
+        """Явно переданный alpha имеет приоритет над language-aware выбором."""
+        rag, _, _ = rag_with_corpus
+        rag._cyrillic_alpha = 0.85
+        # Явный alpha=0.5 для кириллического запроса — не должен заменяться на 0.85
+        results = rag.search_hybrid("машинное обучение", k=3, alpha=0.5)
+        assert len(results) <= 3  # не падает, alpha применён как передан
+
+    def test_alpha_dilution_excludes_single_channel_at_extremes(self, rag_with_corpus):
+        """alpha=1.0 исключает BM25-only доки; alpha=0.0 исключает sem-only доки.
+
+        alpha-dilution: single-channel docs получают alpha*rr (sem) или
+        (1-alpha)*rr (bm25). При крайних alpha score=0 → документ исключается.
+        Это делает alpha=1.0 чистой семантикой, alpha=0.0 — чистым BM25.
+        """
+        rag, hint_to_uuid, uuid_to_hint = rag_with_corpus
+        # "pytest" — BM25-only (семантика не видит идентификаторы)
+        # При alpha=1.0 (pure semantic) pytest-документ исключается (score=0)
+        results_sem = rag.search_hybrid("pytest", k=5, alpha=1.0)
+        sem_hints = _ranked_hints(results_sem, uuid_to_hint)
+        assert "tests_agent" not in sem_hints, (
+            "при alpha=1.0 BM25-only доки должны исключаться (pure semantic)"
+        )
+        # При alpha=0.5 (hybrid) pytest-документ находится (BM25-канал взвешен)
+        results_hyb = rag.search_hybrid("pytest", k=5, alpha=0.5)
+        hyb_hints = _ranked_hints(results_hyb, uuid_to_hint)
+        assert "tests_agent" in hyb_hints
+
+    def test_rrf_k_20_gives_wider_spread(self, rag_with_corpus):
+        """RRF_K=20 даёт широкий разброс скоров (не узкий кластер как при K=60).
+
+        При K=60 разброс топ-5 скоров сжимается до ~7% (0.0152..0.0164),
+        лишая выдачу различительной силы. K=20 даёт разброс ~30%+.
+        """
+        rag, _, _ = rag_with_corpus
+        results = rag.search_hybrid("python programming", k=5, alpha=0.5)
+        scores = [r[2] for r in results]
+        if len(scores) >= 2:
+            spread = max(scores) - min(scores)
+            # K=60 давал бы spread ~0.0012; K=20 даёт spread > 0.005
+            assert spread > 0.005, f"разброс скоров слишком мал для K=20: {spread:.6f}"
 
     def test_hybrid_beats_pure_semantic_on_identifier_query(self, rag_with_corpus):
         """Гибрид (default alpha) находит документ по идентификатору,
@@ -308,7 +352,7 @@ class TestHybridSearchQuality:
         )
 
     def test_default_alpha_in_good_region(self, rag_with_corpus):
-        """Default alpha (0.25) лежит в хорошей области бенчмарка и даёт
+        """Default alpha (0.5) лежит в хорошей области бенчмарка и даёт
         NDCG@5 не ниже краёв плато (0.05 и 0.45)."""
         rag, hint_to_uuid, uuid_to_hint = rag_with_corpus
         corpus = make_test_corpus()

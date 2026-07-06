@@ -23,10 +23,10 @@
           │                                       │
           └───────────────┬───────────────────────┘
                           ▼
-                ┌──────────────────┐
-                │  Hybrid Search   │
-                │  (alpha blend)   │
-                └──────────────────┘
+                 ┌──────────────────┐
+                 │  Hybrid Search   │
+                 │  (RRF + alpha)   │
+                 └──────────────────┘
 ```
 
 ## Компоненты
@@ -50,7 +50,10 @@
 
 ### 4. RAGSystem (`src/rag.py`)
 - Оркестратор, объединяющий все компоненты
-- Hybrid search: `score = alpha * semantic_score + (1-alpha) * bm25_score`
+- Hybrid search: Reciprocal Rank Fusion (RRF) с alpha-dilution
+  - `score = alpha/(RRF_K+rank_sem+1) + (1-alpha)/(RRF_K+rank_bm25+1)`
+  - RRF_K=20 (не 60 — для малых корпусов широкий разброс скоров)
+  - Language-aware alpha: кириллица → 0.85, иначе 0.5
 - Управляет индексацией и поиском
 
 ### 5. MCPServer (`src/mcp_server.py`)
@@ -65,7 +68,7 @@
 4. `rag_stats([store_path])` — статистика хранилища
 5. `rag_clear([store_path])` — очистить хранилище
 6. `rag_bm25_search(query, [k=5], [store_path])` — BM25 поиск
-7. `rag_search_hybrid(query, [k=5], [alpha=0.5], [store_path])` — гибридный поиск
+7. `rag_search_hybrid(query, [k=5], [alpha=null], [store_path])` — гибридный поиск (RRF)
 
 ## Формат данных
 

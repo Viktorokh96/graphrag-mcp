@@ -54,6 +54,7 @@ class RAGSystem:
         self.bm25_index = BM25Index(store_path=self.store_path)
         self.graph_kb = graph or GraphKnowledgeBase(store_path=self.store_path)
         self._default_alpha = cfg.default_alpha
+        self._cyrillic_alpha = cfg.cyrillic_alpha
         self._hybrid_expand = cfg.hybrid_expand
         self._hybrid_min_candidates = cfg.hybrid_min_candidates
         self._content_hashes: dict[str, str] = {}
@@ -231,6 +232,17 @@ class RAGSystem:
             for doc_id, text, score, meta in results
         ]
 
+    def _alpha_for_query(self, query: str) -> float:
+        """Выбрать alpha в зависимости от языка запроса.
+
+        Для запросов с кириллицей используется cyrillic_alpha (0.85): BM25 без
+        русского стемминга даёт шумовый сигнал, поэтому семантический канал
+        должен доминировать. Для остальных — default_alpha (0.5, баланс каналов).
+        """
+        if any('\u0400' <= ch <= '\u04ff' for ch in query):
+            return self._cyrillic_alpha
+        return self._default_alpha
+
     def search_hybrid(self, query: str, k: int = 5, alpha: Optional[float] = None) -> list[tuple[str, str, float, dict]]:
         """Гибридный поиск: Reciprocal Rank Fusion (RRF) семантического и BM25.
 
@@ -238,26 +250,41 @@ class RAGSystem:
         с линейной комбинацией. RRF устойчив к разным шкалам скоров, не требует
         нормализации и гарантирует отсутствие тай-оффов (ранги всегда различны).
 
-        Формула: score = alpha * 1/(RRF_K + rank_sem + 1) + (1-alpha) * 1/(RRF_K + rank_bm25 + 1)
+        Формула (alpha-dilution): каждый канал взвешивается своей долей alpha.
+          • both-channels:  score = alpha/(RRF_K+rank_sem+1) + (1-alpha)/(RRF_K+rank_bm25+1)
+          • sem-only:       score = alpha/(RRF_K+rank_sem+1)         (вес alpha)
+          • bm25-only:      score = (1-alpha)/(RRF_K+rank_bm25+1)    (вес 1-alpha)
+        Это означает, что alpha=1.0 → чистая семантика (BM25-only доки исключаются),
+        alpha=0.0 → чистый BM25 (sem-only доки исключаются). Документ, найденный
+        обоими каналами, получает сумму взвешенных reciprocal ranks и потому
+        ранжируется выше документа, найденного только одним каналом — это
+        предотвращает засорение выдачи шумом слабого канала.
 
         Улучшения:
           • candidate expansion — из каждого источника забирается `max(k*3, 20)`
             кандидатов (а не k), что спасает документы, релевантные по одному
             каналу, но оказавшиеся за пределами top-k по другому.
-          • Reciprocal Rank Fusion — устойчив к разным шкалам, без тай-оффов.
+          • RRF_K=20 (вместо классической 60) — для малых корпусов даёт широкий
+            разброс скоров (дискриминация рангов 1..5), тогда как k=60 сжимает
+            все скоры в узкую полосу ~7% и лишает выдачу различительной силы.
           • alpha по умолчанию берётся из RAGConfig.default_alpha (его значение
             выбрано по результатам бенчмарка NDCG@k, см. scripts/benchmark_alpha.py).
+          • Language-aware alpha: для запросов с кириллицей используется
+            cyrillic_alpha (0.85 по умолчанию) вместо default_alpha (0.5).
+            BM25 без русского стемминга даёт шумовый сигнал для русских запросов,
+            поэтому семантический канал должен доминировать. Явно переданный alpha
+            имеет приоритет над language-aware выбором.
 
         Args:
             query: поисковый запрос
             k: количество результатов в выдаче
-            alpha: баланс (None=config default, 0.0 = чистый BM25, 1.0 = чистый семантический)
+            alpha: баланс (None=language-aware default, 0.0 = чистый BM25, 1.0 = чистый семантический)
 
         Returns:
             список кортежей (doc_id, text, score, metadata), отсортированных по убыванию score
         """
         if alpha is None:
-            alpha = self._default_alpha
+            alpha = self._alpha_for_query(query)
         # Защита от невалидных значений alpha
         if alpha < 0.0:
             alpha = 0.0
@@ -282,13 +309,13 @@ class RAGSystem:
         if not semantic_results and not bm25_results:
             return []
 
-        # D7: Reciprocal Rank Fusion
-        # Каждый канал даёт полный reciprocal rank для своих документов.
-        # alpha управляет blend-ом ТОЛЬКО для документов, найденных ОБОИМИ
-        # каналами: для таких документов score = alpha * rr_sem + (1-alpha) * rr_bm25.
-        # Для документов, найденных только одним каналом, используется
-        # полный reciprocal rank этого канала (без dilution альфой).
-        RRF_K = 60  # classic constant
+        # Reciprocal Rank Fusion с alpha-dilution.
+        # RRF_K=20: для типичных корпусов (десятки-сотни доков) даёт разброс
+        # скоров ~0.02..0.05 между рангами 1 и 5, обеспечивая различимость
+        # результатов. Классическая k=60 сжимает разброс до <1%, делая скоры
+        # неразличимыми. Alpha-dilution: каждый канал взвешивается своей долей,
+        # поэтому docs из обоих каналов ранжируются выше single-channel docs.
+        RRF_K = 20
 
         # Словари текст/мета для быстрого доступа
         text_by_id: dict[str, str] = {}
@@ -308,22 +335,23 @@ class RAGSystem:
 
         all_doc_ids = set(rank_sem.keys()) | set(rank_bm25.keys())
 
-        # Вычисляем RRF scores
+        # Вычисляем RRF scores с alpha-dilution
         rrf_scores: list[tuple[str, float]] = []
         for doc_id in all_doc_ids:
             in_sem = doc_id in rank_sem
             in_bm25 = doc_id in rank_bm25
-            if in_sem and in_bm25:
-                # Both channels rank this doc — blend per alpha
-                score = alpha * (1.0 / (RRF_K + rank_sem[doc_id] + 1))
+            score = 0.0
+            if in_sem:
+                # семантический канал всегда взвешивается alpha
+                score += alpha * (1.0 / (RRF_K + rank_sem[doc_id] + 1))
+            if in_bm25:
+                # BM25 канал всегда взвешивается (1-alpha)
                 score += (1 - alpha) * (1.0 / (RRF_K + rank_bm25[doc_id] + 1))
-            elif in_sem:
-                # Only semantic — full reciprocal rank, no dilution
-                score = 1.0 / (RRF_K + rank_sem[doc_id] + 1)
-            else:
-                # Only BM25 — full reciprocal rank, no dilution
-                score = 1.0 / (RRF_K + rank_bm25[doc_id] + 1)
-            rrf_scores.append((doc_id, score))
+            # Документы с нулевым score (single-channel при крайнем alpha)
+            # исключаются — это делает alpha=1.0 чистой семантикой, alpha=0.0 —
+            # чистым BM25, без «призрачных» результатов с score=0.
+            if score > 0.0:
+                rrf_scores.append((doc_id, score))
 
         # Сортируем по убыванию score
         rrf_scores.sort(key=lambda x: x[1], reverse=True)

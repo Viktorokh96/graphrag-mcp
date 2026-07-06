@@ -107,18 +107,43 @@ class RAGSystem:
   В последнем случае запрос должен обслуживаться BM25-каналом.
 
 **Гибридный поиск (`search_hybrid`):**
+
+Использует **Reciprocal Rank Fusion (RRF)** — объединение через ранги, а не
+линейную комбинацию скоров. RRF устойчив к разным шкалам (семантика в [0,1],
+BM25 не ограничен), не требует нормализации, исключает тай-оффы.
+
 ```
-normalized_score = alpha * semantic_score + (1 - alpha) * bm25_score
+RRF_K = 20  # не классическая 60 — для малых корпусов даёт широкий разброс скоров
+
+# Документ из обоих каналов:
+score = alpha / (RRF_K + rank_sem + 1) + (1 - alpha) / (RRF_K + rank_bm25 + 1)
+
+# Только семантический канал:
+score = alpha / (RRF_K + rank_sem + 1)
+
+# Только BM25:
+score = (1 - alpha) / (RRF_K + rank_bm25 + 1)
 ```
-- `alpha=None` → берётся `RAGConfig.default_alpha` (env `RAG_DEFAULT_ALPHA`, default 0.5).
+
+**Alpha-dilution:** single-channel документы взвешиваются долей своего канала
+(alpha для sem-only, 1-alpha для bm25-only). Документы с score=0 (single-channel
+при крайнем alpha) исключаются: `alpha=1.0` = чистая семантика (BM25-only
+исключены), `alpha=0.0` = чистый BM25 (sem-only исключены). Документ из обоих
+каналов всегда получает score > 0 при любом alpha > 0.
+
+**Language-aware alpha:** при `alpha=None` (по умолчанию):
+- Кириллические запросы (русский и др.) → `cyrillic_alpha` (env
+  `RAG_CYRILLIC_ALPHA`, default **0.85**). BM25 без русского стемминга даёт
+  шумовый сигнал, поэтому семантический канал доминирует.
+- Остальные запросы → `default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** —
+  точка естественного баланса, подтверждённая бенчмарком NDCG@k).
+- Явно переданный `alpha` имеет приоритет.
+
 - `alpha` за пределами [0, 1] клиппится к границам.
 - **Candidate expansion:** из каждого канала забирается
   `max(k * hybrid_expand, hybrid_min_candidates)` кандидатов (по умолчанию
   `max(k*3, 20)`) перед fusion. Это спасает документы, релевантные по одному
   каналу, но оказавшиеся за пределами top-k по другому.
-- Мин-макс нормализация скоров по каждому каналу отдельно. Если все скоры в
-  канале равны (нет дискриминации — нулевой вектор запроса), канал обнуляется,
-  чтобы не доминировать над другим.
 
 **При добавлении документа:**
 1. Текст → эмбеддинг-генератор → эмбеддинг
@@ -170,8 +195,9 @@ class MCPServer:
 `[{doc_id, text, score, metadata}]` отсортированные по убыванию score):
 1. `rag_search(query, k=5, max_chars=null)` — семантический поиск (эмбеддинги).
 2. `rag_bm25_search(query, k=5, max_chars=null)` — BM25 keyword-поиск.
-3. `rag_search_hybrid(query, k=5, alpha=null, max_chars=null)` — гибрид;
-   `alpha=null` → `RAGConfig.default_alpha` (env `RAG_DEFAULT_ALPHA`, default 0.5).
+3. `rag_search_hybrid(query, k=5, alpha=null, max_chars=null)` — гибрид (RRF);
+   `alpha=null` → language-aware: кириллица → `cyrillic_alpha` (0.85), иначе
+   `default_alpha` (0.5). RRF_K=20, alpha-dilution.
 
 Чтение:
 4. `rag_get_document(doc_id, offset=0, limit=null)` → `{doc_id, text, metadata, total_chars, offset, limit}` или null.

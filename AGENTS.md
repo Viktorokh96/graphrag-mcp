@@ -30,7 +30,7 @@ python3 -m src.cli --help
 | `src/config.py` | RAGConfig (из env) |
 | `src/cli.py` | CLI |
 | `src/index.py` | Индексация |
-| `tests/` | pytest тесты (197 шт) |
+| `tests/` | pytest тесты (287 шт) |
 | `rag_data/` | Хранилище (gitignored) |
 | `.env.example` | Пример конфигурации env |
 | `pytest.ini` | Конфиг pytest |
@@ -64,7 +64,7 @@ export OPENROUTER_API_KEY=sk-or-v1-...
 |-----------|-----------|----------|
 | `rag_search` | `query`, `k=5`, `max_chars=null` | Семантический поиск через векторные эмбеддинги. Лучше для концептуальных запросов. |
 | `rag_bm25_search` | `query`, `k=5`, `max_chars=null` | Ключевой поиск по алгоритму BM25 (Okapi). Лучше для точного совпадения терминов. |
-| `rag_search_hybrid` | `query`, `k=5`, `alpha=null`, `max_chars=null` | Гибрид: `normalized_score = alpha*semantic + (1-alpha)*bm25`. `alpha=null` → берётся `RAGConfig.default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — выбран бенчмарком NDCG@k, см. `scripts/benchmark_alpha.py`). `alpha=1.0` — чистая семантика, `alpha=0.0` — чистый BM25. **Candidate expansion:** из каждого канала забирается `max(k*3, 20)` кандидатов перед fusion, чтобы не терять документы, релевантные по одному каналу, но оказавшиеся за пределами top-k по другому. |
+| `rag_search_hybrid` | `query`, `k=5`, `alpha=null`, `max_chars=null` | Гибрид через **Reciprocal Rank Fusion (RRF)**. Формула (**alpha-dilution**): каждый канал взвешивается своей долей — `score = alpha/(RRF_K+rank_sem+1) + (1-alpha)/(RRF_K+rank_bm25+1)` для документов из ОБОИХ каналов; sem-only → `alpha/(RRF_K+rank_sem+1)`; bm25-only → `(1-alpha)/(RRF_K+rank_bm25+1)`. Документы с score=0 (single-channel при крайнем alpha) исключаются — поэтому `alpha=1.0` = чистая семантика, `alpha=0.0` = чистый BM25. `RRF_K=20` (не классическая 60) — даёт широкий разброс скоров для малых корпусов. **Language-aware alpha:** `alpha=null` для запросов с кириллицей → `cyrillic_alpha` (env `RAG_CYRILLIC_ALPHA`, default **0.85** — BM25 без русского стемминга шумит, поэтому семантика доминирует); для остальных → `default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — выбран бенчмарком NDCG@k, см. `scripts/benchmark_alpha.py`). Явно переданный `alpha` имеет приоритет. **Candidate expansion:** из каждого канала забирается `max(k*3, 20)` кандидатов перед fusion. |
 
 ### Чтение / Retrieve
 
@@ -92,7 +92,7 @@ export OPENROUTER_API_KEY=sk-or-v1-...
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_get_related` | `node_id` (обязательный), `max_depth=1` | BFS-обход от узла. `max_depth` — сколько рёбер пройти (1 = прямые соседи). Возвращает `{relations: [{source, target, relation, weight}]}`. |
+| `rag_get_related` | `node_id` (обязательный), `max_depth=1` | BFS-обход от узла в ОБА направления (out + in). `max_depth` — сколько рёбер пройти (1 = прямые соседи). Возвращает `{relations: [{source, target, relation, weight, direction}]}`. `direction: "out"` — исходящее ребро (source→target), `"in"` — входящее (target←source). |
 
 ### Статистика
 
@@ -107,6 +107,32 @@ export OPENROUTER_API_KEY=sk-or-v1-...
 - `max_chars` есть у всех поисков, `rag_list_documents` и (как `limit`) у `rag_get_document`. Передавайте конечное значение (например 1500–3000) на поисках, чтобы не переполнять контекст; полный текст забирайте через `rag_get_document` по `doc_id`.
 - `k` (число результатов) есть у всех поисков, по умолчанию 5.
 - Ошибок валидации нет — неизвестный инструмент бросает `ValueError`, отсутствующие опциональные параметры берут дефолты из схемы.
+
+### Гибридный поиск: детали RRF
+
+`rag_search_hybrid` использует **Reciprocal Rank Fusion (RRF)** — не линейную комбинацию скоров, а объединение через ранги. RRF устойчив к разным шкалам скоров (семантика в [0,1], BM25 — не ограничен), не требует нормализации и гарантирует отсутствие тай-оффов (ранги всегда различны).
+
+**Формула (alpha-dilution):**
+
+```
+RRF_K = 20  # не классическая 60 — для малых корпусов даёт широкий разброс
+
+# Документ из обоих каналов:
+score = alpha / (RRF_K + rank_sem + 1) + (1 - alpha) / (RRF_K + rank_bm25 + 1)
+
+# Только семантический канал:
+score = alpha / (RRF_K + rank_sem + 1)
+
+# Только BM25:
+score = (1 - alpha) / (RRF_K + rank_bm25 + 1)
+```
+
+Документы с `score = 0` (single-channel при крайнем alpha: sem-only при `alpha=0.0`, bm25-only при `alpha=1.0`) исключаются из выдачи. Поэтому `alpha=1.0` = чистая семантика, `alpha=0.0` = чистый BM25 — без «призрачных» результатов.
+
+**Language-aware alpha:** при `alpha=null` (по умолчанию) система выбирает alpha в зависимости от языка запроса:
+- **Кириллические запросы** (русский и др.) → `cyrillic_alpha` (env `RAG_CYRILLIC_ALPHA`, default **0.85**). BM25 без русского стемминга даёт шумовый сигнал для русских запросов, поэтому семантический канал должен доминировать.
+- **Остальные запросы** → `default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — точка естественного баланса каналов, подтверждённая бенчмарком NDCG@k).
+- Явно переданный `alpha` имеет приоритет над language-aware выбором.
 
 ## Тестирование
 

@@ -113,13 +113,15 @@ class TestRAGSystem:
         rag.add_document("python programming language is widely used for many purposes.")
         rag.add_document("java programming language is widely used for many purposes.")
 
-        # pure semantic
+        # pure semantic (alpha=1.0): both docs have same mock embedding → both found
         results_sem = rag.search_hybrid("python", k=2, alpha=1.0)
         assert len(results_sem) == 2
 
-        # pure bm25
+        # pure bm25 (alpha=0.0): only "python" doc matches BM25 (no "python" in java doc);
+        # sem-only docs are excluded at alpha=0.0 (alpha-dilution)
         results_bm = rag.search_hybrid("python", k=2, alpha=0.0)
-        assert len(results_bm) == 2
+        assert len(results_bm) == 1
+        assert "python" in results_bm[0][1].lower()
 
         # balanced
         results_mix = rag.search_hybrid("python", k=2, alpha=0.5)

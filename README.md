@@ -128,7 +128,7 @@ python -m src.cli clear
 |-----------|-----------|----------|
 | `rag_search` | `query`, `k=5`, `max_chars=null` | Семантический поиск через векторные эмбеддинги. Лучше для концептуальных запросов. Нулевой вектор запроса (неизвестные идентификаторы) → пустой результат. |
 | `rag_bm25_search` | `query`, `k=5`, `max_chars=null` | Ключевой поиск по алгоритму BM25 (Okapi). Лучше для точного совпадения терминов/идентификаторов. Работает офлайн. |
-| `rag_search_hybrid` | `query`, `k=5`, `alpha=null`, `max_chars=null` | Гибрид: `score = alpha*semantic + (1-alpha)*bm25`. `alpha=null` → `RAGConfig.default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — выбран бенчмарком NDCG@k, см. `scripts/benchmark_alpha.py`). **Candidate expansion:** из каждого канала забирается `max(k*3, 20)` кандидатов перед fusion. |
+| `rag_search_hybrid` | `query`, `k=5`, `alpha=null`, `max_chars=null` | Гибрид через **RRF** (Reciprocal Rank Fusion). Формула alpha-dilution: `score = alpha/(RRF_K+rank_sem+1) + (1-alpha)/(RRF_K+rank_bm25+1)`. `alpha=null` → language-aware: кириллица → `cyrillic_alpha` (env `RAG_CYRILLIC_ALPHA`, default **0.85**), иначе `default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — бенчмарк NDCG@k). `alpha=1.0` = чистая семантика, `alpha=0.0` = чистый BM25. `RRF_K=20`. **Candidate expansion:** `max(k*3, 20)` кандидатов на канал. |
 
 ### Чтение / Retrieve
 
@@ -190,10 +190,10 @@ python -m src.cli clear
           │                   │                      │
           └───────────────────┼──────────────────────┘
                               │
-                     ┌────────▼────────┐
-                     │   Hybrid Search  │
-                     │  (alpha blend)   │
-                     └─────────────────┘
+                      ┌────────▼────────┐
+                      │   Hybrid Search  │
+                      │  (RRF + alpha)   │
+                      └─────────────────┘
 ```
 
 ### Компоненты
@@ -241,7 +241,7 @@ results = rag.search("веб-фреймворк", k=1)
 python3 -m pytest tests/ -v          # 267 тестов, все зелёные
 
 # Качество поиска (NDCG, релевантность, alpha-калибровка)
-python3 -m pytest tests/test_search_quality.py -v   # 27 тестов
+python3 -m pytest tests/test_search_quality.py -v   # 30 тестов
 
 # Только MCP-слой
 python3 -m pytest tests/test_mcp_server.py -v
@@ -283,7 +283,7 @@ graphrag/
 │   └── benchmark_alpha.py # Бенчмарк NDCG@k для выбора default_alpha
 ├── tests/
 │   ├── semantic_mock.py    # Детерминированный семантический mock-генератор + корпус
-│   ├── test_search_quality.py # 27 тестов качества поиска (NDCG, alpha, релевантность)
+│   ├── test_search_quality.py # 30 тестов качества поиска (NDCG, alpha, релевантность)
 │   ├── test_bm25.py        # BM25 тесты
 │   ├── test_cli.py         # CLI тесты
 │   ├── test_embeddings.py  # TF-IDF эмбеддинги
@@ -453,9 +453,9 @@ python -m src.mcp_server
 
 - [x] Семантический поиск (OpenRouter embeddings)
 - [x] BM25 поиск
-- [x] Гибридный поиск (alpha blending)
+- [x] Гибридный поиск (RRF — Reciprocal Rank Fusion)
 - [x] Графовая база знаний с реляциями
-- [x] BFS обход графа с глубиной
+- [x] BFS обход графа (двунаправленный: out + in)
 - [x] MCP сервер + CLI
 - [x] Персистентность данных (BM25 + Graph на диск)
 - [x] Ollama эмбеддинги (локально, по умолчанию)
@@ -463,6 +463,8 @@ python -m src.mcp_server
 - [x] Конфиг через переменные окружения
 - [x] Улучшенная нормализация семантических скоров (L2 → косинусная сходность, [0,1])
 - [x] Candidate expansion в гибридном поиске (max(k*3, 20) кандидатов)
+- [x] RRF с alpha-dilution (single-channel docs взвешиваются долей канала)
+- [x] Language-aware alpha (кириллица → 0.85, иначе 0.5)
 - [x] Параметризуемый default_alpha через RAGConfig (env RAG_DEFAULT_ALPHA)
 - [x] Бенчмарк NDCG@k для калибровки alpha (`scripts/benchmark_alpha.py`)
 - [x] Тесты качества поиска на детерминированном корпусе (`tests/test_search_quality.py`)
