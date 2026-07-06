@@ -84,6 +84,49 @@ class TestMatchesMetadataFilter:
         assert matches_metadata_filter({}, {"a": 1}) is False
 
 
+class TestNormalizeMetadataFilter:
+    """Unit-тесты для normalize_metadata_filter()."""
+
+    def test_none_returns_none(self):
+        from src._meta_filter import normalize_metadata_filter
+        assert normalize_metadata_filter(None) is None
+
+    def test_empty_string_returns_none(self):
+        from src._meta_filter import normalize_metadata_filter
+        assert normalize_metadata_filter("") is None
+
+    def test_empty_dict_returns_none(self):
+        from src._meta_filter import normalize_metadata_filter
+        assert normalize_metadata_filter({}) is None
+
+    def test_dict_passthrough(self):
+        from src._meta_filter import normalize_metadata_filter
+        result = normalize_metadata_filter({"source": "spec"})
+        assert result == {"source": "spec"}
+
+    def test_json_string_parsed(self):
+        from src._meta_filter import normalize_metadata_filter
+        result = normalize_metadata_filter('{"source": "spec", "type": ["bug", "feature"]}')
+        assert result == {"source": "spec", "type": ["bug", "feature"]}
+
+    def test_empty_json_string_returns_none(self):
+        from src._meta_filter import normalize_metadata_filter
+        assert normalize_metadata_filter('{}') is None
+
+    def test_invalid_json_string_returns_none(self):
+        from src._meta_filter import normalize_metadata_filter
+        assert normalize_metadata_filter("not a json") is None
+
+    def test_json_array_string_returns_none(self):
+        from src._meta_filter import normalize_metadata_filter
+        assert normalize_metadata_filter('[1, 2, 3]') is None
+
+    def test_non_string_non_dict_returns_none(self):
+        from src._meta_filter import normalize_metadata_filter
+        assert normalize_metadata_filter(42) is None
+        assert normalize_metadata_filter(["a", "b"]) is None
+
+
 class TestToChromaWhere:
     """Unit-тесты для to_chroma_where()."""
 
@@ -531,6 +574,57 @@ class TestMCPMetadataFilter:
         rag = self._make_rag(mock_httpx)
         self._seed(rag)
         result = handle_tool_call(rag, "rag_search", {"query": "programming", "k": 10})
+        assert len(result) == 3
+
+    @patch("src.embeddings.httpx.Client")
+    def test_rag_search_metadata_filter_as_json_string(self, mock_httpx):
+        """Регрессия: metadata_filter передан как JSON-строка (как делает MCP SDK).
+        Не должен падать с AttributeError — должен распарситься в dict."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        self._seed(rag)
+        result = handle_tool_call(rag, "rag_search", {
+            "query": "programming", "k": 10,
+            "metadata_filter": '{"source": "spec"}',
+        })
+        for r in result:
+            assert r["metadata"].get("source") == "spec"
+
+    @patch("src.embeddings.httpx.Client")
+    def test_rag_list_documents_metadata_filter_as_json_string(self, mock_httpx):
+        """Регрессия: metadata_filter как JSON-строка для list_documents."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        self._seed(rag)
+        result = handle_tool_call(rag, "rag_list_documents", {
+            "limit": 20, "metadata_filter": '{"source": "spec"}',
+        })
+        assert result["total"] == 2
+        for d in result["documents"]:
+            assert d["metadata"].get("source") == "spec"
+
+    @patch("src.embeddings.httpx.Client")
+    def test_rag_search_hybrid_metadata_filter_as_json_string(self, mock_httpx):
+        """Регрессия: metadata_filter как JSON-строка для search_hybrid."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        self._seed(rag)
+        result = handle_tool_call(rag, "rag_search_hybrid", {
+            "query": "python", "k": 10, "metadata_filter": '{"source": "spec"}',
+        })
+        for r in result:
+            assert r["metadata"].get("source") == "spec"
+
+    @patch("src.embeddings.httpx.Client")
+    def test_rag_search_invalid_json_metadata_filter_ignored(self, mock_httpx):
+        """Невалидная JSON-строка в metadata_filter → фильтр отключается (не падает)."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        self._seed(rag)
+        result = handle_tool_call(rag, "rag_search", {
+            "query": "programming", "k": 10, "metadata_filter": "not a json",
+        })
+        # Фильтр отключен → все документы возвращаются
         assert len(result) == 3
 
 

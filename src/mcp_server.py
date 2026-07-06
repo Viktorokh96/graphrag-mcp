@@ -10,6 +10,8 @@ from mcp.server import Server, NotificationOptions
 from mcp.server.models import InitializationOptions
 from mcp.types import TextContent, Tool
 
+from src._meta_filter import normalize_metadata_filter
+
 
 TOOL_DEFS = [
     Tool(
@@ -469,17 +471,17 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
         "rag_add_document": _add_document_handler,
         "rag_add_file": _add_file_handler,
         "rag_search": lambda p: _fmt(
-            rag.search(p.get("query", ""), k=p.get("k", 5), metadata_filter=p.get("metadata_filter")),
+            rag.search(p.get("query", ""), k=p.get("k", 5), metadata_filter=normalize_metadata_filter(p.get("metadata_filter"))),
             max_chars=p.get("max_chars"),
         ),
         "rag_bm25_search": lambda p: _fmt(
-            rag.bm25_search(p.get("query", ""), k=p.get("k", 5), metadata_filter=p.get("metadata_filter")),
+            rag.bm25_search(p.get("query", ""), k=p.get("k", 5), metadata_filter=normalize_metadata_filter(p.get("metadata_filter"))),
             max_chars=p.get("max_chars"),
         ),
         "rag_search_hybrid": lambda p: _fmt(
             rag.search_hybrid(
                 p.get("query", ""), k=p.get("k", 5), alpha=p.get("alpha"),
-                metadata_filter=p.get("metadata_filter"),
+                metadata_filter=normalize_metadata_filter(p.get("metadata_filter")),
             ),
             max_chars=p.get("max_chars"),
         ),
@@ -492,7 +494,7 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
                 {"source": r[0], "target": r[1], "relation": r[2], "weight": r[3], "direction": r[4]}
                 for r in rag.get_related(
                     p["node_id"], p.get("max_depth", 1),
-                    metadata_filter=p.get("metadata_filter"),
+                    metadata_filter=normalize_metadata_filter(p.get("metadata_filter")),
                 )
             ]
         },
@@ -515,7 +517,7 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
         "rag_delete_document": lambda p: {"status": "ok", "doc_id": p["doc_id"], "deleted": rag.delete_document(p["doc_id"])},
         "rag_list_documents": lambda p: rag.list_documents(
             limit=p.get("limit", 20), offset=p.get("offset", 0),
-            max_chars=p.get("max_chars"), metadata_filter=p.get("metadata_filter"),
+            max_chars=p.get("max_chars"), metadata_filter=normalize_metadata_filter(p.get("metadata_filter")),
         ),
     }
     fn = handlers.get(name)

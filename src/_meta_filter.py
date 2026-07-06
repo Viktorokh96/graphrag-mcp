@@ -10,7 +10,35 @@
   • None или {} — фильтр отключён (текущее поведение).
 """
 
+import json
 from typing import Any, Optional
+
+
+def normalize_metadata_filter(value: Any) -> Optional[dict]:
+    """Нормализовать значение `metadata_filter` из аргументов MCP-вызова.
+
+    MCP-клиенты могут передавать dict напрямую либо как JSON-строку.
+    Допускает: dict (проходит как есть), None/"" (→ None), JSON-строка
+    (парсится в dict). Строки без JSON или не-dict значения игнорируются
+    (→ None), чтобы не ломать поиск — фильтр просто отключается.
+
+    Args:
+        value: значение поля metadata_filter из аргументов вызова.
+
+    Returns:
+        dict-фильтр или None (фильтр отключён).
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, dict):
+        return value if value else None
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) and parsed else None
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return None
 
 
 def matches_metadata_filter(meta: Optional[dict], filt: Optional[dict]) -> bool:
