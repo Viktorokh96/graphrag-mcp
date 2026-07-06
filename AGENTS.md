@@ -15,6 +15,9 @@ python3 -m pytest tests/ -v
 
 # CLI (если нужен)
 python3 -m src.cli --help
+
+# Визуализация графа
+python3 -m src.cli graph-viz -o rag_data/graph.html
 ```
 
 ## Структура
@@ -28,6 +31,7 @@ python3 -m src.cli --help
 | `src/bm25_index.py` | BM25 индекс ключевых слов |
 | `src/graph_store.py` | Графовая база знаний (реляции) |
 | `src/config.py` | RAGConfig (из env) |
+| `src/graph_viz.py` | Визуализация графа (vis.js) |
 | `src/cli.py` | CLI |
 | `src/index.py` | Индексация |
 | `tests/` | pytest тесты (287 шт) |

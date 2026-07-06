@@ -31,5 +31,6 @@ Thumbs.db
 
 # Data
 rag_data/
+lib/
 data/*.json
 *.log

@@ -25,6 +25,8 @@ httpx>=0.27.0
 numpy>=1.24.0
 pytest>=8.0.0
 scikit-learn>=1.3.0
+networkx>=3.0
+pyvis>=0.3
 ```
 
 ---
@@ -57,6 +59,12 @@ python -m src.cli get-related --node UUID --max-depth 2
 
 # Граф: статистика
 python -m src.cli graph-stats
+
+# Граф: визуализация (интерактивный HTML)
+python -m src.cli graph-viz -o graph.html
+
+# Граф: подграф вокруг узла
+python -m src.cli graph-viz --focus UUID --max-depth 2
 
 # Статистика хранилища
 python -m src.cli stats
@@ -207,6 +215,7 @@ python -m src.cli clear
 | Оркестратор | `src/rag.py` | объединяет всё + гибридный поиск |
 | MCP сервер | `src/mcp_server.py` | JSON-RPC 2.0 через stdio |
 | CLI | `src/cli.py` | argparse |
+| Визуализация графа | `src/graph_viz.py` | vis.js + networkx |
 
 ---
 
@@ -273,6 +282,7 @@ graphrag/
 │   ├── config.py           # RAGConfig (из env)
 │   ├── embeddings.py       # Эмбеддинги: Ollama / OpenRouter
 │   ├── graph_store.py      # Графовая база знаний
+│   ├── graph_viz.py        # Визуализация графа (vis.js)
 │   ├── index.py            # (устаревший)
 │   ├── mcp_server.py       # MCP сервер (JSON-RPC)
 │   ├── rag.py              # Оркестратор RAG + гибридный поиск
@@ -469,4 +479,4 @@ python -m src.mcp_server
 - [x] Бенчмарк NDCG@k для калибровки alpha (`scripts/benchmark_alpha.py`)
 - [x] Тесты качества поиска на детерминированном корпусе (`tests/test_search_quality.py`)
 - [x] Фильтрация по метаданным (metadata_filter: точное совпадение / $in, AND-комбинация)
-- [ ] Визуализация графа
+- [x] Визуализация графа (vis.js, интерактивный HTML)

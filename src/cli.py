@@ -80,6 +80,24 @@ def main(argv: list[str]) -> int:
     # reindex
     subparsers.add_parser("reindex", help="Re-generate embeddings for all documents (when switching embedding provider)")
 
+    # graph-viz
+    parser_graph_viz = subparsers.add_parser("graph-viz", help="Visualize knowledge graph")
+    parser_graph_viz.add_argument("--output", "-o", type=str, default="graph_viz.html", help="Output file path")
+    parser_graph_viz.add_argument("--format", "-f", type=str, default="html",
+                                  choices=["html", "dot", "json", "ascii"],
+                                  help="Output format (default: html)")
+    parser_graph_viz.add_argument("--max-nodes", "-n", type=int, default=None,
+                                  help="Limit to top-N nodes by degree")
+    parser_graph_viz.add_argument("--relation-type", "-r", type=str, action="append", default=None,
+                                  help="Filter by relation type (can be repeated)")
+    parser_graph_viz.add_argument("--focus", type=str, default=None,
+                                  help="Show subgraph around this doc_id")
+    parser_graph_viz.add_argument("--max-depth", type=int, default=2,
+                                  help="BFS depth when using --focus (default: 2)")
+    parser_graph_viz.add_argument("--layout", type=str, default="kamada_kawai",
+                                  choices=["kamada_kawai", "spring", "circular", "hierarchical"],
+                                  help="Layout algorithm (html/dot only)")
+
     try:
         args = parser.parse_args(argv)
     except SystemExit:
@@ -173,6 +191,22 @@ def main(argv: list[str]) -> int:
         elif args.command == "reindex":
             count = rag.reindex()
             print(f"♻️ Переиндексировано документов: {count}")
+            return 0
+
+        elif args.command == "graph-viz":
+            from src.graph_viz import render_graph_viz
+            from src.graph_store import GraphKnowledgeBase
+            g = GraphKnowledgeBase(store_path=args.store)
+            render_graph_viz(
+                g,
+                output_path=args.output,
+                output_format=args.format,
+                max_nodes=args.max_nodes,
+                relation_type=args.relation_type,
+                focus_node=args.focus,
+                max_depth=args.max_depth,
+                layout=args.layout,
+            )
             return 0
 
     except Exception as e:
