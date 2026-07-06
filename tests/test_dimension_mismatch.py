@@ -118,7 +118,7 @@ class TestSearchDimensionMismatch:
         mock_httpx.return_value = self._make_mock_httpx(dim=3)
 
         rag = RAGSystem(store_path=self.store_path, api_key="test-key")
-        rag.add_document("test document about python")
+        rag.add_document("test document about python programming language and scripting")
 
         # Меняем размерность генератора: store=3-dim, новый запрос=5-dim
         rag.embedding_generator._fallback_dimension = 5
@@ -136,8 +136,8 @@ class TestSearchDimensionMismatch:
         mock_httpx.return_value = self._make_mock_httpx(dim=3)
 
         rag = RAGSystem(store_path=self.store_path, api_key="test-key")
-        rag.add_document("python programming language")
-        rag.add_document("java programming language")
+        rag.add_document("python programming language for scripting and automation tasks")
+        rag.add_document("java programming language for enterprise software development")
 
         results = rag.search("programming", k=2)
         assert len(results) == 2
@@ -150,7 +150,7 @@ class TestSearchDimensionMismatch:
         mock_httpx.return_value = self._make_mock_httpx(dim=3)
 
         rag = RAGSystem(store_path=self.store_path, api_key="test-key")
-        rag.add_document("python programming language")
+        rag.add_document("python programming language for general purpose scripting and automation")
 
         # Меняем размерность — BM25 не должен пострадать
         rag.embedding_generator._fallback_dimension = 5
@@ -169,8 +169,8 @@ class TestSearchDimensionMismatch:
         mock_httpx.return_value = self._make_mock_httpx(dim=3)
 
         rag = RAGSystem(store_path=self.store_path, api_key="test-key")
-        rag.add_document("python programming language")
-        rag.add_document("java programming language")
+        rag.add_document("python programming language for scripting and automation tasks")
+        rag.add_document("java programming language for enterprise software development")
 
         # Меняем размерность — семантика упадёт, BM25 должен спасти
         rag.embedding_generator._fallback_dimension = 5
@@ -212,8 +212,8 @@ class TestAutoReindexOnDimensionMismatch:
         # Шаг 1: создаём store с 3-dim эмбеддингами
         mock_httpx.return_value = self._make_mock_httpx(dim=3)
         rag1 = RAGSystem(store_path=self.store_path, api_key="test-key")
-        rag1.add_document("first document")
-        rag1.add_document("second document")
+        rag1.add_document("first document for testing dimension mismatch and reindex")
+        rag1.add_document("second document for testing dimension mismatch and reindex")
         assert rag1.vector_store.get_dimension() == 3
         assert rag1.vector_store.count() == 2
 
@@ -233,7 +233,7 @@ class TestAutoReindexOnDimensionMismatch:
         mock_httpx.return_value = self._make_mock_httpx(dim=3)
         rag1 = RAGSystem(store_path=self.store_path, api_key="test-key")
         for i in range(5):
-            rag1.add_document(f"document number {i}")
+            rag1.add_document(f"document number {i} for testing reindex and dimension changes")
         assert rag1.vector_store.count() == 5
 
         # Меняем размерность
@@ -250,7 +250,7 @@ class TestAutoReindexOnDimensionMismatch:
 
         mock_httpx.return_value = self._make_mock_httpx(dim=3)
         rag1 = RAGSystem(store_path=self.store_path, api_key="test-key")
-        rag1.add_document("test document")
+        rag1.add_document("test document for checking no reindex on matching dimensions")
         assert rag1.vector_store.get_dimension() == 3
 
         # Создаём новый RAGSystem — размерности совпадают, reindex не нужен
@@ -279,8 +279,8 @@ class TestAutoReindexOnDimensionMismatch:
         # Создаём store с 3-dim
         mock_httpx.return_value = self._make_mock_httpx(dim=3)
         rag1 = RAGSystem(store_path=self.store_path, api_key="test-key")
-        rag1.add_document("python programming")
-        rag1.add_document("java programming")
+        rag1.add_document("python programming language for scripting and automation tasks")
+        rag1.add_document("java programming language for enterprise software development")
 
         # Меняем размерность на 5 и пересоздаём RAGSystem
         mock_httpx.return_value = self._make_mock_httpx(dim=5)
@@ -297,8 +297,8 @@ class TestAutoReindexOnDimensionMismatch:
 
         mock_httpx.return_value = self._make_mock_httpx(dim=3)
         rag1 = RAGSystem(store_path=self.store_path, api_key="test-key")
-        rag1.add_document("python programming language")
-        rag1.add_document("java programming language")
+        rag1.add_document("python programming language for scripting and automation tasks")
+        rag1.add_document("java programming language for enterprise software development")
 
         # Меняем размерность
         mock_httpx.return_value = self._make_mock_httpx(dim=5)
@@ -339,8 +339,8 @@ class TestReindexChangesDimension:
 
         mock_httpx.return_value = self._make_mock_httpx(dim=3)
         rag = RAGSystem(store_path=self.store_path, api_key="test-key")
-        rag.add_document("doc one")
-        rag.add_document("doc two")
+        rag.add_document("doc one for testing reindex with dimension change scenario")
+        rag.add_document("doc two for testing reindex with dimension change scenario")
         assert rag.vector_store.get_dimension() == 3
 
         # Меняем мок на 7-dim и переиндексируем
@@ -369,7 +369,7 @@ class TestReindexChangesDimension:
 
         mock_httpx.return_value = self._make_mock_httpx(dim=3)
         rag = RAGSystem(store_path=self.store_path, api_key="test-key")
-        rag.add_document("doc one")
+        rag.add_document("doc one for testing reindex with same dimension scenario")
         doc_ids_before = set(d[0] for d in rag.vector_store.get_all())
 
         count = rag.reindex()

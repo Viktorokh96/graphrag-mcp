@@ -1,7 +1,5 @@
 """Тесты для OpenRouterEmbeddingGenerator и OllamaEmbeddingGenerator."""
 
-import pytest
-import os
 from unittest.mock import patch, MagicMock
 
 
@@ -206,7 +204,7 @@ class TestOllamaEmbeddingGenerator:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "embedding": [0.1, 0.2, 0.3]
+            "embeddings": [[0.1, 0.2, 0.3]]
         }
         mock_client = MagicMock()
         mock_client.__enter__.return_value = mock_client
@@ -228,13 +226,13 @@ class TestOllamaEmbeddingGenerator:
             mock_resp = MagicMock()
             mock_resp.status_code = 200
             data = kwargs.get("json", {})
-            text = data.get("prompt", "")
+            text = data.get("input", "")
             if text == "hello":
-                mock_resp.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
+                mock_resp.json.return_value = {"embeddings": [[0.1, 0.2, 0.3]]}
             elif text == "world":
-                mock_resp.json.return_value = {"embedding": [0.4, 0.5, 0.6]}
+                mock_resp.json.return_value = {"embeddings": [[0.4, 0.5, 0.6]]}
             else:
-                mock_resp.json.return_value = {"embedding": [0.0, 0.0, 0.0]}
+                mock_resp.json.return_value = {"embeddings": [[0.0, 0.0, 0.0]]}
             return mock_resp
 
         mock_client = MagicMock()
@@ -256,7 +254,7 @@ class TestOllamaEmbeddingGenerator:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "embedding": [0.1, 0.2, 0.3]
+            "embeddings": [[0.1, 0.2, 0.3]]
         }
         mock_client = MagicMock()
         mock_client.__enter__.return_value = mock_client

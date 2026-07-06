@@ -130,17 +130,17 @@ def make_test_corpus() -> list[tuple[str, str, list[str]]]:
         ("py_ml", "Python is great for machine learning and neural networks", ["python", "machine_learning", "neural"]),
         ("java_vm", "Java runs on a virtual machine and is statically typed", ["java", "programming"]),
         ("ml_overview", "Machine learning uses algorithms to learn from data", ["machine_learning"]),
-        ("deep_nn", "Deep learning neural networks for computer vision", ["neural", "machine_learning"]),
+        ("deep_nn", "Deep learning neural networks for computer vision tasks", ["neural", "machine_learning"]),
         ("pasta", "Cooking recipe for italian pasta with tomato sauce", ["cooking"]),
         # jwt — идентификатор, виден только BM25; auth — концепция, видна семантике.
         ("jwt_auth", "JWT tokens for authentication and authorization flows", ["auth", "security", "_id:jwt"]),
-        ("orchestrator", "Orchestrator dispatches events and launches agents", ["orchestrator", "agent"]),
-        ("arch_guardian", "Architecture guardian enforces architectural rules", ["architecture"]),
-        ("code_guardian", "Code guardian checks code against requirements", ["code", "architecture"]),
+        ("orchestrator", "Orchestrator dispatches events and launches agents for tasks", ["orchestrator", "agent"]),
+        ("arch_guardian", "Architecture guardian enforces architectural rules and standards", ["architecture"]),
+        ("code_guardian", "Code guardian checks source code against project requirements", ["code", "architecture"]),
         # pytest — идентификатор, виден только BM25; tests — концепция.
         ("tests_agent", "Tests agent generates pytest unit tests automatically", ["tests", "agent", "_id:pytest"]),
         ("wiki_guardian", "Wiki guardian keeps documentation fresh and consistent", ["wiki", "architecture"]),
-        ("journal_service", "Journal service stores decisions and findings", ["journal", "database"]),
+        ("journal_service", "Journal service stores project decisions and research findings", ["journal", "database"]),
         ("meeting_agent", "Meeting agent processes transcripts and extracts decisions", ["meeting", "agent"]),
         # bm25/chromadb — идентификаторы, видны только BM25.
         ("rag_tool", "RAG tool with vector embeddings and bm25 keyword search", ["rag", "graph", "_id:bm25"]),

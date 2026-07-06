@@ -68,7 +68,7 @@ class VectorStore:
                 distance = result["distances"][0][i] if result["distances"] and result["distances"][0] else 0.0
                 similarity = 1.0 - (distance * distance) / 2.0
                 score = max(0.0, min(1.0, similarity))
-                meta = result["metadatas"][0][i] if result["metadatas"] and result["metadatas"][0] else {}
+                meta = result["metadatas"][0][i] if (result["metadatas"] and result["metadatas"][0] and i < len(result["metadatas"][0]) and result["metadatas"][0][i] is not None) else {}
                 results.append((doc_id, text, score, meta))
 
         return results
@@ -168,6 +168,11 @@ class VectorStore:
 
     def update_embedding(self, doc_id: str, embedding: list[float]) -> None:
         self.collection.update(ids=[doc_id], embeddings=[embedding])
+
+    def get_all_ids(self) -> set[str]:
+        """Получить множество всех doc_id в коллекции."""
+        result = self.collection.get(include=[])
+        return set(result.get("ids") or [])
 
     def recreate_collection(self) -> None:
         try:

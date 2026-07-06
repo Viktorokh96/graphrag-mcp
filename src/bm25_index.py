@@ -7,6 +7,32 @@ from typing import Optional
 from rank_bm25 import BM25Okapi
 
 
+STOP_WORDS: set[str] = {
+    # English stop words
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
+    "being", "have", "has", "had", "do", "does", "did", "will", "would",
+    "could", "should", "may", "might", "shall", "can", "need", "dare",
+    "this", "that", "these", "those", "i", "me", "my", "we", "our",
+    "you", "your", "he", "him", "his", "she", "her", "it", "its",
+    "they", "them", "their", "what", "which", "who", "whom", "when",
+    "where", "why", "how", "all", "each", "every", "both", "few", "more",
+    "most", "some", "any", "no", "not", "only", "own", "same", "so",
+    "than", "too", "very", "just", "because", "as", "until", "while",
+    "about", "between", "through", "during", "before", "after", "above",
+    "below", "up", "down", "out", "off", "over", "under", "again",
+    "further", "once", "here", "there", "then", "also",
+    # Russian stop words
+    "и", "в", "во", "не", "что", "он", "на", "я", "с", "со", "как",
+    "а", "то", "все", "она", "так", "его", "но", "да", "ты", "к",
+    "у", "же", "вы", "за", "бы", "по", "ее", "её", "мне", "от",
+    "о", "из", "для", "ты", "это", "эти", "эта", "этот", "быть",
+    "мочь", "когда", "даже", "уже", "если", "нет", "ни", "их", "его",
+    "ее", "её", "том", "чтобы", "при", "об", "себя", "до", "про",
+    "без", "ему", "ней",
+}
+
+
 class BM25Index:
     """BM25 индекс для поиска по ключевым словам с поддержкой персистентности."""
 
@@ -27,18 +53,21 @@ class BM25Index:
         if store_path:
             self.load()
 
-    def _tokenize(self, text: str) -> list[str]:
+    def _tokenize(self, text: str, remove_stopwords: bool = True) -> list[str]:
         """
         Токенизация текста: нижний регистр, только слова.
 
         Args:
             text: текст для токенизации
+            remove_stopwords: фильтровать ли стоп-слова (по умолчанию True)
 
         Returns:
             список токенов
         """
         text = text.lower()
         words = re.findall(r'\b\w+\b', text)
+        if remove_stopwords:
+            words = [w for w in words if w not in STOP_WORDS]
         return words
 
     def add_document(self, doc_id: str, text: str, metadata: Optional[dict] = None) -> None:
@@ -131,8 +160,11 @@ class BM25Index:
             overlap_filtered = [r for r in results if r[4] > 0]
             if overlap_filtered:
                 return [(r[0], r[1], r[2], r[3]) for r in overlap_filtered[:k]]
-            # Если всё ещё нет результатов, возвращаем top-k
-            return [(r[0], r[1], r[2], r[3]) for r in results[:k]]
+            # Если нет ни score > 0, ни token_overlap > 0 ни для одного документа —
+            # значит запрос не содержит слов, совпадающих с корпусом
+            # (например, русский запрос к английским документам).
+            # Возвращаем пустой результат, а не мусор.
+            return []
 
         return []
 
@@ -189,6 +221,10 @@ class BM25Index:
         # Сохраняем индекс на диск если store_path указан
         if self._store_path:
             self.save()
+
+    def get_all_doc_ids(self) -> set[str]:
+        """Получить множество всех doc_id в индексе."""
+        return set(self._texts.keys())
 
     def get_all_metadata(self) -> dict[str, dict]:
         return dict(self._metadata)

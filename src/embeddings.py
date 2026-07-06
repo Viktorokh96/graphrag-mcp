@@ -306,17 +306,17 @@ class OllamaEmbeddingGenerator:
         self._cache.clear()
 
     def _call_api(self, text: str) -> list[float]:
-        url = f"{self.base_url}/api/embeddings"
+        url = f"{self.base_url}/api/embed"
         payload = {
             "model": self.model,
-            "prompt": text,
+            "input": text,
         }
 
         with httpx.Client() as client:
-            response = client.post(url, json=payload, timeout=30.0)
+            response = client.post(url, json=payload, timeout=120.0)
             response.raise_for_status()
             data = response.json()
-            embedding = data["embedding"]
+            embedding = data["embeddings"][0]
             return embedding
 
     def _fallback_embedding(self, text: str) -> list[float]:

@@ -63,7 +63,7 @@ class TestFullLifecycle:
     """Полный lifecycle: add → list → search → delete."""
 
     def test_add_list_search_delete(self, rag):
-        doc_id = _add(rag, "Python programming language")
+        doc_id = _add(rag, "Python programming language for general purpose scripting")
 
         listed = _call(rag, "rag_list_documents", limit=10, offset=0)
         assert listed["total"] == 1
@@ -84,7 +84,7 @@ class TestListDocumentsPagination:
 
     def test_pagination_disjoint_pages(self, rag):
         for i in range(10):
-            _add(rag, f"document number {i}")
+            _add(rag, f"sample document number {i} for testing pagination and analysis purposes")
 
         page1 = _call(rag, "rag_list_documents", limit=3, offset=0)
         page2 = _call(rag, "rag_list_documents", limit=3, offset=3)
@@ -99,13 +99,13 @@ class TestListDocumentsPagination:
         assert ids1.isdisjoint(ids2)
 
     def test_offset_beyond_total_returns_empty(self, rag):
-        _add(rag, "only one doc")
+        _add(rag, "only one document in the entire storage system right now")
         result = _call(rag, "rag_list_documents", limit=10, offset=100)
         assert result["total"] == 1
         assert result["documents"] == []
 
     def test_default_limit_and_offset(self, rag):
-        _add(rag, "doc")
+        _add(rag, "single document in storage for testing default limit and offset")
         result = _call(rag, "rag_list_documents")
         assert result["limit"] == 20
         assert result["offset"] == 0
@@ -122,7 +122,7 @@ class TestDeleteDocument:
     """Удаление документов — все хранилища, идемпотентность, рёбра графа."""
 
     def test_delete_removes_from_all_stores(self, rag):
-        doc_id = _add(rag, "to be deleted")
+        doc_id = _add(rag, "this document is going to be deleted from all stores and cleaned up")
         assert _call(rag, "rag_stats")["total_documents"] == 1
 
         _call(rag, "rag_delete_document", doc_id=doc_id)
@@ -135,11 +135,11 @@ class TestDeleteDocument:
     def test_delete_idempotent(self, rag):
         result = _call(rag, "rag_delete_document", doc_id="nonexistent-uuid")
         assert result["status"] == "ok"
-        assert result["deleted"] is True
+        assert result["deleted"] is False
 
     def test_delete_removes_graph_edges(self, rag):
-        doc1 = _add(rag, "first")
-        doc2 = _add(rag, "second")
+        doc1 = _add(rag, "first document for testing graph edge removal and cascading cleanup")
+        doc2 = _add(rag, "second document related to the first one via graph edge for tests")
         _call(rag, "rag_add_relation",
               source_id=doc1, target_id=doc2, relation="related_to", weight=1.0)
 
@@ -155,8 +155,8 @@ class TestDeleteDocument:
         assert related["relations"] == []
 
     def test_delete_does_not_affect_other_docs(self, rag):
-        doc1 = _add(rag, "keep me")
-        doc2 = _add(rag, "delete me")
+        doc1 = _add(rag, "this document should be kept and remain in the storage system")
+        doc2 = _add(rag, "this document will be deleted from the storage system entirely")
 
         _call(rag, "rag_delete_document", doc_id=doc2)
 
@@ -169,8 +169,8 @@ class TestSearchAfterDelete:
     """Поиск (semantic, BM25, hybrid) после удаления."""
 
     def test_bm25_search_excludes_deleted(self, rag):
-        _add(rag, "python programming")
-        doc2 = _add(rag, "java programming")
+        _add(rag, "python programming language for scripting and automation tasks")
+        doc2 = _add(rag, "java programming language for enterprise software development")
 
         _call(rag, "rag_delete_document", doc_id=doc2)
 
@@ -179,8 +179,8 @@ class TestSearchAfterDelete:
         assert "python" in results[0]["text"].lower()
 
     def test_semantic_search_excludes_deleted(self, rag):
-        keep_id = _add(rag, "python programming")
-        delete_id = _add(rag, "java programming")
+        keep_id = _add(rag, "python programming language for scripting and automation")
+        delete_id = _add(rag, "java programming language for enterprise software systems")
 
         _call(rag, "rag_delete_document", doc_id=delete_id)
 
@@ -189,8 +189,8 @@ class TestSearchAfterDelete:
         assert results[0]["doc_id"] == keep_id
 
     def test_hybrid_search_excludes_deleted(self, rag):
-        _add(rag, "python programming")
-        delete_id = _add(rag, "java programming")
+        _add(rag, "python programming language for scripting and automation")
+        delete_id = _add(rag, "java programming language for enterprise software systems")
 
         _call(rag, "rag_delete_document", doc_id=delete_id)
 
@@ -204,9 +204,9 @@ class TestGraphWorkflow:
     """Полный графовый сценарий: add → relate → get_related → delete."""
 
     def test_full_graph_workflow(self, rag):
-        doc1 = _add(rag, "orchestrator document")
-        doc2 = _add(rag, "agent runtime document")
-        doc3 = _add(rag, "tests agent document")
+        doc1 = _add(rag, "orchestrator document for dispatching events and managing workflows")
+        doc2 = _add(rag, "agent runtime document for executing tasks and processing data")
+        doc3 = _add(rag, "tests agent document for generating and running automated test suites")
 
         _call(rag, "rag_add_relation",
               source_id=doc1, target_id=doc2, relation="dispatches_to", weight=0.9)
@@ -233,7 +233,7 @@ class TestStatsConsistency:
     """Консистентность stats после операций."""
 
     def test_stats_after_add_and_delete(self, rag):
-        ids = [_add(rag, f"doc {i}") for i in range(5)]
+        ids = [_add(rag, f"sample document number {i} for testing stats and consistency") for i in range(5)]
 
         assert _call(rag, "rag_stats")["total_documents"] == 5
         assert _call(rag, "rag_graph_stats")["total_nodes"] == 5

@@ -46,9 +46,9 @@ class TestRAGSystem:
         """После индексации документов запрос должен возвращать результаты."""
         # Используем новый API: add_documents вместо ingest
         texts = [
-            "Python is a programming language",
-            "Java runs on a virtual machine",
-            "Python is great for machine learning",
+            "Python is a programming language for general purpose",
+            "Java runs on a virtual machine and is statically typed",
+            "Python is great for machine learning and data science",
         ]
         doc_ids = rag.add_documents(texts)
         results = rag.search("Python programming", k=2)
@@ -71,9 +71,9 @@ class TestRAGSystem:
     def test_query_returns_sorted_by_relevance(self, rag):
         """Результаты запроса должны быть отсортированы по релевантности."""
         texts = [
-            "machine learning deep learning neural networks",
-            "deep learning concepts overview",
-            "cooking recipes for pasta",
+            "machine learning deep learning neural networks artificial intelligence",
+            "deep learning concepts overview and fundamental principles explained",
+            "cooking recipes for pasta with tomato sauce and fresh vegetables",
         ]
         rag.add_documents(texts)
         results = rag.search("machine learning deep learning", k=3)
@@ -83,7 +83,7 @@ class TestRAGSystem:
 
     def test_query_with_metadata(self, rag):
         """Запрос должен возвращать метаданные if указаны при добавлении."""
-        texts = ["artificial intelligence", "machine learning"]
+        texts = ["artificial intelligence and deep learning concepts overview", "machine learning with neural networks and data analysis"]
         metadata = [{"category": "AI"}, {"category": "ML"}]
         rag.add_documents(texts, metadata)
         results = rag.search("AI", k=2)
@@ -93,12 +93,12 @@ class TestRAGSystem:
 
     def test_reingest_updates_index(self, rag):
         """Повторное добавление должно обновлять существующие документы."""
-        doc_id_1 = rag.add_document("Python programming")
+        doc_id_1 = rag.add_document("Python programming language for scripting and automation")
         # Удаляем старый и добавляем новый с тем же текстом
         rag.vector_store.remove(doc_id_1)
         rag.bm25_index.remove(doc_id_1)
         rag.graph_kb.remove_node(doc_id_1)
-        doc_id_2 = rag.add_document("Java programming")
+        doc_id_2 = rag.add_document("Java programming language for enterprise applications")
         results = rag.search("Java", k=1)
         assert results[0][0] == doc_id_2
         # Python больше не должен быть ассоциирован с doc_id_2
@@ -112,7 +112,7 @@ class TestRAGSystem:
 
     def test_large_top_k(self, rag):
         """top_k больше числа документов не должно вызывать ошибок."""
-        texts = [f"text {i}" for i in range(5)]
+        texts = [f"sample text document number {i} for testing and analysis" for i in range(5)]
         rag.add_documents(texts)
         results = rag.search("text", k=100)
         assert len(results) <= 5  # Не больше, чем есть документов
@@ -120,8 +120,8 @@ class TestRAGSystem:
     def test_full_pipeline_integration(self, rag):
         """Полный pipeline: индексация → поиск → форматирование ответа."""
         texts = [
-            "To reset your password go to settings page",
-            "Password must be at least 8 characters long",
+            "To reset your password go to settings page and follow the instructions",
+            "Password must be at least 8 characters long for security reasons",
         ]
         doc_ids = rag.add_documents(texts)
         results = rag.search("How to reset password?", k=2)
@@ -177,7 +177,7 @@ class TestRAGSystem:
 
     def test_get_document_pagination_covers_whole_text(self, rag):
         """Постраничное чтение через offset+limit собирает весь текст."""
-        full_text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        full_text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuv"
         doc_id = rag.add_document(full_text)
         collected = ""
         offset = 0
@@ -203,8 +203,8 @@ class TestRAGSystem:
         assert result["documents"][0]["text"] == long_text
 
     def test_reindex_updates_embeddings(self, rag):
-        rag.add_document("Python programming")
-        rag.add_document("Java programming")
+        rag.add_document("Python programming for scripting and automation tasks")
+        rag.add_document("Java programming for enterprise software development")
         count = rag.reindex()
         assert count == 2
         results = rag.search("Python", k=1)
@@ -217,8 +217,8 @@ class TestRAGSystem:
     def test_reindex_with_dimension_change(self, rag):
         """Reindex должен пересоздать коллекцию при смене размерности."""
         # Добавляем с текущим моком (128-dim от OpenRouter)
-        rag.add_document("Python programming")
-        rag.add_document("Java programming")
+        rag.add_document("Python programming for scripting and automation tasks")
+        rag.add_document("Java programming for enterprise software development")
         assert rag.stats()["dimension"] == 128
 
         # Меняем мок на 256-dim

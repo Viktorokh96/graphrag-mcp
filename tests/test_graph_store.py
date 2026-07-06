@@ -39,7 +39,7 @@ class TestGraphKnowledgeBase:
         related = gkb.get_related("node1", max_depth=1)
         assert len(related) == 2
 
-        relations = [(s, t, r) for s, t, r, w in related]
+        relations = [(s, t, r) for s, t, r, w, d in related]
         assert ("node1", "node2", "related_to") in relations
         assert ("node1", "node3", "similar_to") in relations
 
@@ -186,3 +186,72 @@ class TestGraphKnowledgeBase:
 
         gkb.add_edge("node1", "node2", "related_to", 0.5)
         assert gkb._edges["node1::related_to::node2"]["weight"] == 0.5
+
+    # ── D3: Bidirectional BFS ──────────────────────────────────────────
+
+    def test_get_related_bidirectional(self):
+        """D3: get_related находит входящие рёбра (direction='both')."""
+        gkb = GraphKnowledgeBase()
+        gkb.add_node("source", "Source node")
+        gkb.add_node("target", "Target node")
+        gkb.add_edge("source", "target", "uses", 1.0)
+
+        # Исходящие рёбра от source
+        related_out = gkb.get_related("source", max_depth=1, direction="out")
+        assert len(related_out) == 1
+        assert related_out[0][1] == "target"
+        assert related_out[0][4] == "out"
+
+        # Входящие рёбра к target (должен найти source → target, но как "in")
+        related_in = gkb.get_related("target", max_depth=1, direction="in")
+        assert len(related_in) == 1, f"Рёбер от target как target: {related_in}"
+        assert related_in[0][0] == "source"
+        assert related_in[0][1] == "target"
+        assert related_in[0][4] == "in"
+
+    def test_get_related_default_is_both(self):
+        """D3: По умолчанию direction='both', обход включает оба направления."""
+        gkb = GraphKnowledgeBase()
+        gkb.add_node("a", "Node A")
+        gkb.add_node("b", "Node B")
+        gkb.add_node("c", "Node C")
+        gkb.add_edge("a", "b", "related_to", 1.0)
+        gkb.add_edge("c", "a", "depends_on", 0.8)
+
+        # От 'a' — два ребра: a→b (out) и c→a (in)
+        related = gkb.get_related("a", max_depth=1, direction="both")
+        assert len(related) == 2
+        directions = {r[4] for r in related}
+        assert "out" in directions
+        assert "in" in directions
+
+    def test_get_related_depth2_bidirectional(self):
+        """D3: BFS глубиной 2 обходит оба направления."""
+        gkb = GraphKnowledgeBase()
+        gkb.add_node("a", "Node A")
+        gkb.add_node("b", "Node B")
+        gkb.add_node("c", "Node C")
+        gkb.add_edge("a", "b", "related_to", 1.0)
+        gkb.add_edge("c", "b", "depends_on", 0.8)
+
+        # От 'a': a→b (depth 1), потом c→b (depth 2, т.к. b→c входящее)
+        related = gkb.get_related("a", max_depth=2, direction="both")
+        assert len(related) == 2
+        # Одно ребро от a к b
+        assert ("a", "b") in [(r[0], r[1]) for r in related]
+        # Одно ребро от c к b
+        assert ("c", "b") in [(r[0], r[1]) for r in related]
+
+    def test_get_related_unknown_node_returns_empty(self):
+        """get_related для несуществующего узла возвращает [].
+
+        regression: не падает с KeyError.
+        """
+        gkb = GraphKnowledgeBase()
+        assert gkb.get_related("nonexistent") == []
+
+    def test_get_related_single_node_no_edges(self):
+        """get_related для узла без рёбер возвращает []."""
+        gkb = GraphKnowledgeBase()
+        gkb.add_node("lonely", "Just me")
+        assert gkb.get_related("lonely") == []

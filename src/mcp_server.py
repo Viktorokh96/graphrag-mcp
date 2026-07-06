@@ -17,14 +17,17 @@ TOOL_DEFS = [
         description=(
             "Add a text document to the knowledge base. The document is indexed in all "
             "three stores: vector (ChromaDB, via embeddings), BM25 (keyword index), and "
-            "graph (as a new node). Returns the generated doc_id (UUID4 string). Use this "
-            "to store any textual knowledge — architectural decisions, discovered "
-            "patterns, bug notes, specifications, summaries — that future searches "
-            "should retrieve. `meta` is optional and persists verbatim: it is echoed back "
-            "unchanged in search/get/list results, so callers can later filter or "
-            "annotate results by source, type, project, etc. `meta` accepts a dict, null, "
-            "an empty string, a JSON-encoded string (parsed to dict), or any plain "
-            "string (wrapped as {'_raw': value}). Returns {doc_id: <uuid4 string>}."
+            "graph (as a new node). Use this to store any textual knowledge — architectural "
+            "decisions, discovered patterns, bug notes, specifications, summaries — that "
+            "future searches should retrieve. `meta` is optional and persists verbatim: it "
+            "is echoed back unchanged in search/get/list results, so callers can later "
+            "filter or annotate results by source, type, project, etc. `meta` accepts a "
+            "dict, null, an empty string, a JSON-encoded string (parsed to dict), or any "
+            "plain string (wrapped as {'_raw': value}). Returns {doc_id: <uuid4 string>, "
+            "duplicate: <bool>}. The `duplicate` flag is true when a document with the same "
+            "normalized content hash already exists; in that case `doc_id` is the existing "
+            "document's id and no new entry is created. Documents shorter than 50 chars "
+            "(after stripping) are rejected with a ValueError."
         ),
         inputSchema={
             "type": "object",
@@ -53,10 +56,11 @@ TOOL_DEFS = [
             "Read a file from disk (UTF-8) and index its full contents as a single document "
             "in the knowledge base (vector + BM25 + graph stores). Useful for bulk-importing "
             "existing Markdown, specifications, notes, or source files. The file is read as one "
-            "document — no chunking is performed. Returns the generated doc_id (UUID4 string). "
-            "`meta` follows the same flexible conventions as rag_add_document (dict / null / "
-            "empty / JSON string / plain string). Returns {doc_id: <uuid4 string>}. Raises if "
-            "the file cannot be read (missing path, permissions, non-UTF-8)."
+            "document — no chunking is performed. `meta` follows the same flexible conventions "
+            "as rag_add_document (dict / null / empty / JSON string / plain string). Returns "
+            "{doc_id: <uuid4 string>, duplicate: <bool>}; see rag_add_document for the "
+            "duplicate semantics. Raises if the file cannot be read (missing path, "
+            "permissions, non-UTF-8) or if the content is shorter than 50 chars."
         ),
         inputSchema={
             "type": "object",
@@ -141,21 +145,24 @@ TOOL_DEFS = [
     Tool(
         name="rag_search_hybrid",
         description=(
-            "Hybrid search combining semantic (vector) and BM25 (keyword) signals into a "
-            "single ranked list. Recommended default for most queries — it captures both "
-            "meaning and exact terms, and degrades gracefully: if one channel returns "
-            "nothing (e.g. semantic search for an unknown identifier), the other channel "
-            "still ranks candidates. The blend is controlled by `alpha`: "
-            "normalized_score = alpha * semantic_score + (1 - alpha) * bm25_score, where "
-            "alpha=0.0 = pure BM25, alpha=1.0 = pure semantic. If `alpha` is omitted/null, "
-            "it falls back to RAGConfig.default_alpha (env RAG_DEFAULT_ALPHA, default 0.5 — "
+            "Hybrid search combining semantic (vector) and BM25 (keyword) signals via "
+            "Reciprocal Rank Fusion (RRF). Recommended default for most queries — it "
+            "captures both meaning and exact terms, and degrades gracefully: if one "
+            "channel returns nothing (e.g. semantic search for an unknown identifier), "
+            "the other channel still ranks candidates. The blend is controlled by `alpha`: "
+            "for documents ranked by BOTH channels, "
+            "RRF score = alpha * 1/(RRF_K+rank_sem+1) + (1-alpha) * 1/(RRF_K+rank_bm25+1), "
+            "where alpha=0.0 = pure BM25, alpha=1.0 = pure semantic. Documents found "
+            "by only ONE channel receive the full reciprocal rank of that channel "
+            "without dilution by alpha — so at alpha=1.0, BM25-only documents may "
+            "still appear in results. RRF is robust to different score scales and "
+            "eliminates ties. If `alpha` is omitted/null, it falls back to "
+            "RAGConfig.default_alpha (env RAG_DEFAULT_ALPHA, default 0.5 — "
             "calibrated by NDCG@k benchmark, see scripts/benchmark_alpha.py). alpha outside "
             "[0, 1] is clamped to the nearest bound. Candidate expansion: each channel "
             "retrieves max(k * RAG_HYBRID_EXPAND, RAG_HYBRID_MIN_CANDIDATES) candidates "
             "(defaults: max(k*3, 20)) before fusion, so documents relevant by one channel "
-            "but ranked beyond top-k in the other are not lost. Per-channel scores are "
-            "min-max normalized; a channel with all-equal scores (no discrimination, e.g. "
-            "zero-vector query) is zeroed so it cannot dominate the other. Returns top-k "
+            "but ranked beyond top-k in the other are not lost. Returns top-k "
             "{doc_id, text, score, metadata}. Pass `max_chars` to truncate each result's "
             "text (recommended for context management); omit or pass null for full text. "
             "`k` sets the number of results (default 5)."
@@ -209,15 +216,15 @@ TOOL_DEFS = [
     Tool(
         name="rag_get_related",
         description=(
-            "Find documents connected to a given node via breadth-first search (BFS) over "
-            "the knowledge graph. `max_depth` controls how many hops to traverse: 1 "
-            "(default) returns direct neighbours, 2 returns neighbours-of-neighbours, etc. "
-            "Returns {relations: [{source, target, relation, weight}, ...]} covering all "
-            "edges traversed (each edge's source/target are doc_ids). Useful for discovering "
-            "related documents that do not textually match a query but are linked "
-            "semantically through explicit relations. Returns an empty `relations` list if "
-            "the node is unknown or isolated. No deduplication is performed — the same "
-            "document may appear as a target via multiple edges."
+            "Find documents connected to a given node via bidirectional breadth-first "
+            "search (BFS) over the knowledge graph. `max_depth` controls how many hops to "
+            "traverse: 1 (default) returns direct neighbours, 2 returns neighbours-of-"
+            "neighbours, etc. Returns {relations: [{source, target, relation, weight, "
+            "direction}, ...]} covering all edges traversed (each edge's source/target are "
+            "doc_ids). `direction` is 'out' for source->target or 'in' for target->source. "
+            "Useful for discovering related documents that do not textually match a query "
+            "but are linked semantically through explicit relations. Returns an empty "
+            "`relations` list if the node is unknown or isolated."
         ),
         inputSchema={
             "type": "object",
@@ -328,8 +335,24 @@ TOOL_DEFS = [
 
 def _fmt(results, max_chars=None):
     if max_chars is not None:
-        return [{"doc_id": r[0], "text": r[1][:max_chars], "score": round(r[2], 4), "metadata": r[3]} for r in results]
-    return [{"doc_id": r[0], "text": r[1], "score": round(r[2], 4), "metadata": r[3]} for r in results]
+        return [
+            {
+                "doc_id": r[0],
+                "text": r[1][:max_chars],
+                "score": round(r[2], 4),
+                "metadata": r[3] if isinstance(r[3], dict) else {},
+            }
+            for r in results
+        ]
+    return [
+        {
+            "doc_id": r[0],
+            "text": r[1],
+            "score": round(r[2], 4),
+            "metadata": r[3] if isinstance(r[3], dict) else {},
+        }
+        for r in results
+    ]
 
 
 def _parse_meta(value):
@@ -366,9 +389,25 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
     if arguments is None:
         arguments = {}
 
+    def _add_document_handler(p):
+        text = p["text"]
+        meta = _parse_meta(p.get("meta"))
+        existing = rag.is_duplicate(text)
+        doc_id = rag.add_document(text, meta)
+        return {"doc_id": doc_id, "duplicate": existing is not None}
+
+    def _add_file_handler(p):
+        filepath = p["filepath"]
+        meta = _parse_meta(p.get("meta"))
+        with open(filepath, "r", encoding="utf-8") as f:
+            text = f.read()
+        existing = rag.is_duplicate(text)
+        doc_id = rag.add_file(filepath, meta)
+        return {"doc_id": doc_id, "duplicate": existing is not None}
+
     handlers = {
-        "rag_add_document": lambda p: {"doc_id": rag.add_document(p["text"], _parse_meta(p.get("meta")))},
-        "rag_add_file": lambda p: {"doc_id": rag.add_file(p["filepath"], _parse_meta(p.get("meta")))},
+        "rag_add_document": _add_document_handler,
+        "rag_add_file": _add_file_handler,
         "rag_search": lambda p: _fmt(rag.search(p.get("query", ""), k=p.get("k", 5)), max_chars=p.get("max_chars")),
         "rag_bm25_search": lambda p: _fmt(rag.bm25_search(p.get("query", ""), k=p.get("k", 5)), max_chars=p.get("max_chars")),
         "rag_search_hybrid": lambda p: _fmt(
@@ -380,7 +419,7 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
         )[1],
         "rag_get_related": lambda p: {
             "relations": [
-                {"source": r[0], "target": r[1], "relation": r[2], "weight": r[3]}
+                {"source": r[0], "target": r[1], "relation": r[2], "weight": r[3], "direction": r[4]}
                 for r in rag.get_related(p["node_id"], p.get("max_depth", 1))
             ]
         },

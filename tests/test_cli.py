@@ -1,7 +1,5 @@
 """Тесты для CLI интерфейса RAG."""
 
-import pytest
-import sys
 from unittest.mock import patch, MagicMock
 
 

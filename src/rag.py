@@ -1,5 +1,7 @@
 """RAG System - оркестратор для семантического и BM25 поиска."""
 
+import hashlib
+import re
 import uuid
 from typing import Optional
 from src.config import RAGConfig
@@ -11,6 +13,8 @@ from src.graph_store import GraphKnowledgeBase
 
 class RAGSystem:
     """RAG система с гибридным поиском (семантический + BM25)."""
+
+    MIN_CONTENT_LENGTH = 50
 
     def __init__(
         self,
@@ -52,7 +56,9 @@ class RAGSystem:
         self._default_alpha = cfg.default_alpha
         self._hybrid_expand = cfg.hybrid_expand
         self._hybrid_min_candidates = cfg.hybrid_min_candidates
+        self._content_hashes: dict[str, str] = {}
         self._ensure_dimension_compatibility()
+        self._sync_stores()
 
     def _ensure_dimension_compatibility(self) -> None:
         """Проверить совместимость размерности эмбеддингов и хранилища.
@@ -68,6 +74,22 @@ class RAGSystem:
         if gen_dim != store_dim:
             self.reindex()
 
+    def _normalize_text(self, text: str) -> str:
+        """Normalize text for dedup: lowercase, strip, collapse whitespace."""
+        return re.sub(r'\s+', ' ', text.lower().strip())
+
+    def _compute_hash(self, text: str) -> str:
+        """Compute SHA-256 hash of normalized text."""
+        return hashlib.sha256(self._normalize_text(text).encode()).hexdigest()
+
+    def _rebuild_content_hashes(self) -> None:
+        """Rebuild _content_hashes from all documents in vector store."""
+        self._content_hashes.clear()
+        all_docs = self.vector_store.get_all()
+        for doc_id, text, _meta in all_docs:
+            h = self._compute_hash(text)
+            self._content_hashes[h] = doc_id
+
     def add_document(self, text: str, metadata: Optional[dict] = None) -> str:
         """
         Добавить документ в систему.
@@ -77,23 +99,49 @@ class RAGSystem:
             metadata: метаданные документа
 
         Returns:
-            doc_id: сгенерированный UUID
+            doc_id: сгенерированный UUID (или существующий при дубликате)
+
+        Raises:
+            ValueError: если текст короче MIN_CONTENT_LENGTH
         """
+        # D5: Проверка минимальной длины
+        if len(text.strip()) < self.MIN_CONTENT_LENGTH:
+            raise ValueError(
+                f"Document too short ({len(text.strip())} chars). "
+                f"Minimum content length is {self.MIN_CONTENT_LENGTH} characters."
+            )
+
+        # D6: Проверка дубликатов по хэшу содержимого
+        content_hash = self._compute_hash(text)
+        if content_hash in self._content_hashes:
+            return self._content_hashes[content_hash]
+
         doc_id = str(uuid.uuid4())
-        
+
         # Получаем эмбеддинг
         embedding = self.embedding_generator.get_embedding(text)
-        
+
         # Добавляем в VectorStore
         self.vector_store.add(doc_id=doc_id, text=text, embedding=embedding, metadata=metadata)
-        
+
         # Добавляем в BM25Index
         self.bm25_index.add_document(doc_id=doc_id, text=text, metadata=metadata)
-        
+
         # Добавляем в GraphKnowledgeBase
         self.graph_kb.add_node(doc_id, text, metadata)
-        
+
+        # D6: Сохраняем хэш
+        self._content_hashes[content_hash] = doc_id
+
         return doc_id
+
+    def is_duplicate(self, text: str) -> Optional[str]:
+        """Check if a document with the same content hash already exists.
+
+        Returns the existing doc_id if duplicate, None otherwise.
+        """
+        content_hash = self._compute_hash(text)
+        return self._content_hashes.get(content_hash)
 
     def add_documents(self, texts: list[str], metadata: Optional[list[dict]] = None) -> list[str]:
         """
@@ -154,7 +202,12 @@ class RAGSystem:
         # идентификаторам (pytest, jwt, bm25), которые семантика не видит.
         if all(abs(v) < 1e-12 for v in query_embedding):
             return []
-        return self.vector_store.search(query_embedding, k=k)
+        results = self.vector_store.search(query_embedding, k=k)
+        # D10: нормализация metadata — всегда dict
+        return [
+            (doc_id, text, score, meta if isinstance(meta, dict) else {})
+            for doc_id, text, score, meta in results
+        ]
 
     def bm25_search(self, query: str, k: int = 5) -> list[tuple[str, str, float, dict]]:
         """
@@ -171,18 +224,27 @@ class RAGSystem:
         stats = self.bm25_index.stats()
         if stats["total_documents"] == 0:
             return []
-        return self.bm25_index.search(query, k=k)
+        results = self.bm25_index.search(query, k=k)
+        # D10: нормализация metadata — всегда dict
+        return [
+            (doc_id, text, score, meta if isinstance(meta, dict) else {})
+            for doc_id, text, score, meta in results
+        ]
 
     def search_hybrid(self, query: str, k: int = 5, alpha: Optional[float] = None) -> list[tuple[str, str, float, dict]]:
-        """Гибридный поиск: комбинация семантического и BM25.
+        """Гибридный поиск: Reciprocal Rank Fusion (RRF) семантического и BM25.
 
-        score = alpha * semantic_score + (1 - alpha) * bm25_score
+        Метод RRF (Reciprocal Rank Fusion) заменяет старую min-max нормализацию
+        с линейной комбинацией. RRF устойчив к разным шкалам скоров, не требует
+        нормализации и гарантирует отсутствие тай-оффов (ранги всегда различны).
+
+        Формула: score = alpha * 1/(RRF_K + rank_sem + 1) + (1-alpha) * 1/(RRF_K + rank_bm25 + 1)
 
         Улучшения:
           • candidate expansion — из каждого источника забирается `max(k*3, 20)`
             кандидатов (а не k), что спасает документы, релевантные по одному
             каналу, но оказавшиеся за пределами top-k по другому.
-          • min-max нормализация скоров по объединённому пулу кандидатов.
+          • Reciprocal Rank Fusion — устойчив к разным шкалам, без тай-оффов.
           • alpha по умолчанию берётся из RAGConfig.default_alpha (его значение
             выбрано по результатам бенчмарка NDCG@k, см. scripts/benchmark_alpha.py).
 
@@ -220,49 +282,55 @@ class RAGSystem:
         if not semantic_results and not bm25_results:
             return []
 
-        # Мин-макс нормализация по каждому каналу отдельно. Когда все скоры в
-        # канале равны (нет дискриминации — например, нулевой вектор запроса),
-        # канал не несёт сигнала и обнуляется, чтобы не доминировать над другим.
-        def normalize_scores(results):
-            if not results:
-                return {}
-            scores = [r[2] for r in results]
-            min_score = min(scores)
-            max_score = max(scores)
-            if max_score == min_score:
-                return {r[0]: 0.0 for r in results}
-            return {r[0]: (r[2] - min_score) / (max_score - min_score) for r in results}
-
-        semantic_normalized = normalize_scores(semantic_results)
-        bm25_normalized = normalize_scores(bm25_results)
-
-        # Объединяем кандидатов
-        all_doc_ids = set(semantic_normalized.keys()) | set(bm25_normalized.keys())
+        # D7: Reciprocal Rank Fusion
+        # Каждый канал даёт полный reciprocal rank для своих документов.
+        # alpha управляет blend-ом ТОЛЬКО для документов, найденных ОБОИМИ
+        # каналами: для таких документов score = alpha * rr_sem + (1-alpha) * rr_bm25.
+        # Для документов, найденных только одним каналом, используется
+        # полный reciprocal rank этого канала (без dilution альфой).
+        RRF_K = 60  # classic constant
 
         # Словари текст/мета для быстрого доступа
         text_by_id: dict[str, str] = {}
         meta_by_id: dict[str, dict] = {}
-        for r in semantic_results:
-            text_by_id[r[0]] = r[1]
-            meta_by_id[r[0]] = r[3]
-        for r in bm25_results:
+        rank_sem: dict[str, int] = {}  # 0-based rank
+        rank_bm25: dict[str, int] = {}
+
+        for i, r in enumerate(semantic_results):
             text_by_id.setdefault(r[0], r[1])
             meta_by_id.setdefault(r[0], r[3])
+            rank_sem[r[0]] = i  # 0 = best
 
-        # Вычисляем гибридные scores
-        hybrid_scores = []
+        for i, r in enumerate(bm25_results):
+            text_by_id.setdefault(r[0], r[1])
+            meta_by_id.setdefault(r[0], r[3])
+            rank_bm25[r[0]] = i
+
+        all_doc_ids = set(rank_sem.keys()) | set(rank_bm25.keys())
+
+        # Вычисляем RRF scores
+        rrf_scores: list[tuple[str, float]] = []
         for doc_id in all_doc_ids:
-            sem_score = semantic_normalized.get(doc_id, 0.0)
-            bm25_score = bm25_normalized.get(doc_id, 0.0)
-            hybrid_score = alpha * sem_score + (1 - alpha) * bm25_score
-            hybrid_scores.append((doc_id, hybrid_score))
+            in_sem = doc_id in rank_sem
+            in_bm25 = doc_id in rank_bm25
+            if in_sem and in_bm25:
+                # Both channels rank this doc — blend per alpha
+                score = alpha * (1.0 / (RRF_K + rank_sem[doc_id] + 1))
+                score += (1 - alpha) * (1.0 / (RRF_K + rank_bm25[doc_id] + 1))
+            elif in_sem:
+                # Only semantic — full reciprocal rank, no dilution
+                score = 1.0 / (RRF_K + rank_sem[doc_id] + 1)
+            else:
+                # Only BM25 — full reciprocal rank, no dilution
+                score = 1.0 / (RRF_K + rank_bm25[doc_id] + 1)
+            rrf_scores.append((doc_id, score))
 
         # Сортируем по убыванию score
-        hybrid_scores.sort(key=lambda x: x[1], reverse=True)
+        rrf_scores.sort(key=lambda x: x[1], reverse=True)
 
         # Формируем выдачу
         result = []
-        for doc_id, score in hybrid_scores[:k]:
+        for doc_id, score in rrf_scores[:k]:
             result.append((doc_id, text_by_id.get(doc_id, ""), score, meta_by_id.get(doc_id, {})))
 
         return result
@@ -277,12 +345,22 @@ class RAGSystem:
             doc_id: идентификатор документа
 
         Returns:
-            True (всегда)
+            True если документ существовал и был удалён, иначе False
         """
+        # Проверяем, существует ли документ
+        vector_doc = self.vector_store.get_by_id(doc_id)
+        existed = vector_doc is not None
+
         self.vector_store.remove(doc_id)
         self.bm25_index.remove(doc_id)
         self.graph_kb.remove_node(doc_id)
-        return True
+
+        # D6: Удаляем хэш содержимого
+        if existed:
+            h = self._compute_hash(vector_doc[1])  # type: ignore[union-attr]
+            self._content_hashes.pop(h, None)
+
+        return existed
 
     def get_document(self, doc_id: str, offset: int = 0, limit: Optional[int] = None) -> Optional[dict]:
         """Получить один документ по ID с пагинацией текста.
@@ -305,6 +383,8 @@ class RAGSystem:
             text = full_text[offset:offset + limit]
         else:
             text = full_text[offset:]
+        # D10: metadata всегда словарь
+        meta = meta if isinstance(meta, dict) else {}
         return {
             "doc_id": doc_id,
             "text": text,
@@ -336,6 +416,8 @@ class RAGSystem:
         for doc_id, text, meta in items:
             if max_chars is not None:
                 text = text[:max_chars]
+            # D10: metadata всегда словарь
+            meta = meta if isinstance(meta, dict) else {}
             documents.append({"doc_id": doc_id, "text": text, "metadata": meta})
         return {
             "documents": documents,
@@ -350,6 +432,7 @@ class RAGSystem:
         self.bm25_index.clear()
         self.graph_kb.clear()
         self.embedding_generator.clear_cache()
+        self._content_hashes.clear()
 
     def add_relation(self, source_id: str, target_id: str, relation: str, weight: float = 1.0) -> None:
         """
@@ -363,18 +446,56 @@ class RAGSystem:
         """
         self.graph_kb.add_edge(source_id, target_id, relation, weight)
 
-    def get_related(self, node_id: str, max_depth: int = 1) -> list[tuple[str, str, str, float]]:
+    def get_related(self, node_id: str, max_depth: int = 1, direction: str = "both") -> list[tuple[str, str, str, float, str]]:
         """
-        Получить связанные документы.
+        Получить связанные документы (двунаправленный BFS).
 
         Args:
             node_id: идентификатор документа
             max_depth: максимальная глубина обхода
+            direction: "out" | "in" | "both" (по умолчанию "both")
 
         Returns:
-            список кортежей (source_id, target_id, relation, weight)
+            список кортежей (source_id, target_id, relation, weight, direction)
         """
-        return self.graph_kb.get_related(node_id, max_depth)
+        return self.graph_kb.get_related(node_id, max_depth, direction)
+
+    def _sync_stores(self) -> None:
+        """Synchronise all stores to have exactly the same set of doc_ids.
+
+        Vector store (ChromaDB) is the source of truth.
+        Removes phantom entries from BM25 and graph stores.
+        """
+        try:
+            # Get all doc_ids from vector store (source of truth)
+            vector_ids = self.vector_store.get_all_ids()
+
+            # Remove phantom BM25 docs (not in vector store)
+            bm25_ids = self.bm25_index.get_all_doc_ids()
+            phantom_bm25 = bm25_ids - vector_ids
+            for doc_id in phantom_bm25:
+                self.bm25_index.remove(doc_id)
+
+            # Remove phantom graph nodes (not in vector store)
+            graph_ids = self.graph_kb.get_all_node_ids()
+            phantom_graph = graph_ids - vector_ids
+            for node_id in phantom_graph:
+                self.graph_kb.remove_node(node_id)
+
+            # Remove phantom edges (edges referencing non-existent nodes)
+            if vector_ids:
+                self.graph_kb.remove_phantom_edges(vector_ids)
+
+            # Rebuild content hashes for dedup
+            self._rebuild_content_hashes()
+
+            if phantom_bm25 or phantom_graph:
+                print(
+                    f"[sync] Removed {len(phantom_bm25)} phantom BM25 docs, "
+                    f"{len(phantom_graph)} phantom graph nodes"
+                )
+        except Exception as e:
+            print(f"[sync] Warning: store sync failed: {e}")
 
     def reindex(self) -> int:
         docs = self.vector_store.get_all()
@@ -407,6 +528,9 @@ class RAGSystem:
                 self.vector_store.add(doc_id=doc_id, text=text, embedding=embedding, metadata=meta)
             else:
                 self.vector_store.update_embedding(doc_id, embedding)
+
+        # D6: rebuild content hashes after reindex
+        self._rebuild_content_hashes()
 
         return len(docs)
 

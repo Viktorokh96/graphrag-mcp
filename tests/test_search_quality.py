@@ -290,15 +290,16 @@ class TestHybridSearchQuality:
             )
 
     def test_hybrid_beats_pure_bm25_on_cross_lingual(self, rag_with_corpus):
-        """Гибрид находит cross-lingual совпадение, чистый BM25 (alpha=0.0) — нет."""
+        """Гибрид находит cross-lingual совпадение, чистый BM25 — нет."""
         rag, hint_to_uuid, uuid_to_hint = rag_with_corpus
         query = "машинное обучение нейронная сеть"
-        # чистый BM25: нет точных русских совпадений в английских документах
-        bm = rag.search_hybrid(query, k=5, alpha=0.0)
+        # Чистый BM25 (через bm25_search, без семантического канала):
+        # русские слова не совпадают с английскими текстами документов.
+        bm = rag.bm25_search(query, k=5)
         bm_hints = _ranked_hints(bm, uuid_to_hint)
         ml_docs = {"py_ml", "ml_overview", "deep_nn"}
         bm_hits = set(bm_hints) & ml_docs
-        # гибрид находит
+        # Гибрид (default alpha) находит ML-документы через семантический канал
         hyb = rag.search_hybrid(query, k=5, alpha=None)
         hyb_hints = _ranked_hints(hyb, uuid_to_hint)
         hyb_hits = set(hyb_hints) & ml_docs
@@ -388,13 +389,13 @@ class TestNDCGMetric:
 
     def test_hybrid_ndcg_beats_pure_semantic_on_full_query_set(self, rag_with_corpus):
         """Интегральная проверка: средний NDCG@5 гибрида (default alpha) не ниже
-        чистой семантики и строго выше чистого BM25 по всему набору запросов.
+        чистой семантики (alpha=1.0) и выше чистого BM25 по всему набору запросов.
 
-        Благодаря candidate expansion + graceful отключению семантики для
-        нулевых эмбеддингов, гибрид образует широкое плато качества
-        (alpha ∈ [0.05, 0.95] по бенчмарку), поэтому сравнение с чистой
-        семантикой — нестрогое (>=), а с чистым BM25 — строгое (>), т.к. BM25
-        проваливается на концептуальных/cross-lingual запросах.
+        Для чистой семантики используем search_hybrid(alpha=1.0).
+        Для чистого BM25 используем rag.bm25_search() — напрямую, без семантического
+        канала. search_hybrid(alpha=0.0) НЕ является чистым BM25 в RRF-реализации:
+        документы, найденные только семантическим каналом, получают полный reciprocal
+        rank без разбавления alpha (см. rag.py search_hybrid, "no dilution").
 
         Это главный guard качества: если улучшения семантики или candidate
         expansion сломаются, этот тест упадёт.
@@ -406,14 +407,25 @@ class TestNDCGMetric:
             "bm25", "chromadb", "машинное обучение", "аутентификация",
             "orchestrator dispatch", "architecture guardian", "cooking recipe",
         ]
+
+        # Гибрид (default alpha) и чистая семантика (alpha=1.0)
         avgs: dict[str, float] = {}
-        for alpha, label in [(None, "hybrid-default"), (1.0, "pure-semantic"), (0.0, "pure-bm25")]:
+        for alpha, label in [(None, "hybrid-default"), (1.0, "pure-semantic")]:
             total = 0.0
             for q in queries:
                 judg = relevance_for_query(q, corpus)
                 res = rag.search_hybrid(q, k=K, alpha=alpha)
                 total += _ndcg_at_k(_ranked_hints(res, uuid_to_hint), judg, K)
             avgs[label] = total / len(queries)
+
+        # Чистый BM25 через bm25_search (без семантического канала)
+        bm25_total = 0.0
+        for q in queries:
+            judg = relevance_for_query(q, corpus)
+            res = rag.bm25_search(q, k=K)
+            bm25_total += _ndcg_at_k(_ranked_hints(res, uuid_to_hint), judg, K)
+        avgs["pure-bm25"] = bm25_total / len(queries)
+
         assert avgs["hybrid-default"] >= avgs["pure-semantic"], (
             f"гибрид ({avgs['hybrid-default']:.3f}) не должен уступать чистой семантике "
             f"({avgs['pure-semantic']:.3f})"

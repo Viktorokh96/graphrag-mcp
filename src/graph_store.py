@@ -115,6 +115,7 @@ class GraphKnowledgeBase:
         top_k = scores[:k]
         results = []
 
+        score = 0.0  # инициализируем для LSP; будет перезаписан в цикле ниже
         for node_id, score in top_k:
             node_data = self._nodes[node_id]
             results.append((node_id, node_data["text"], score, node_data["metadata"]))
@@ -122,13 +123,16 @@ class GraphKnowledgeBase:
         # Расширяем на связанные узлы
         if expand_relations and results:
             seen_ids = {node_id for node_id, _, _, _ in results}
+            # Собираем явные score для каждого node_id
+            node_scores = {node_id: sc for node_id, sc in top_k}
             for node_id, _, _, _ in results:
                 related = self.get_related(node_id, max_depth=1)
-                for source, target, relation, weight in related:
+                for source, target, relation, weight, _dir in related:
                     if target not in seen_ids and target in self._nodes:
                         target_data = self._nodes[target]
                         # Score для связанных узлов - уменьшаем на вес ребра
-                        related_score = score * weight * 0.5
+                        node_score = node_scores.get(node_id, score)
+                        related_score = node_score * weight * 0.5
                         results.append((target, target_data["text"], related_score, target_data["metadata"]))
                         seen_ids.add(target)
 
@@ -137,16 +141,18 @@ class GraphKnowledgeBase:
 
         return results
 
-    def get_related(self, node_id: str, max_depth: int = 1) -> list[tuple[str, str, str, float]]:
+    def get_related(self, node_id: str, max_depth: int = 1, direction: str = "both") -> list[tuple[str, str, str, float, str]]:
         """
-        Получить связанные узлы через BFS.
+        Получить связанные узлы через BFS (двунаправленный).
 
         Args:
             node_id: идентификатор узла
             max_depth: максимальная глубина обхода
+            direction: "out" — только исходящие, "in" — только входящие,
+                       "both" — оба направления (по умолчанию)
 
         Returns:
-            список кортежей (source_id, target_id, relation, weight)
+            список кортежей (source_id, target_id, relation, weight, direction)
         """
         if node_id not in self._nodes:
             return []
@@ -166,23 +172,72 @@ class GraphKnowledgeBase:
 
             # Ищем все рёбра от current
             for edge_key, edge_data in self._edges.items():
-                if edge_data["source"] == current:
-                    target = edge_data["target"]
-                    if edge_key not in visited_edges:
-                        visited_edges.add(edge_key)
-                        result.append((
-                            edge_data["source"],
-                            edge_data["target"],
-                            edge_data["relation"],
-                            edge_data["weight"]
-                        ))
+                edge_dir = None
+                neighbor = None
 
-                        # Добавляем в очередь для дальнейшего обхода
-                        if target not in visited_nodes_at_depth or visited_nodes_at_depth[target] > depth + 1:
-                            visited_nodes_at_depth[target] = depth + 1
-                            queue.append((target, depth + 1))
+                # Исходящее ребро: current -> target
+                if direction in ("out", "both") and edge_data["source"] == current:
+                    edge_dir = "out"
+                    neighbor = edge_data["target"]
+
+                # Входящее ребро: source -> current (т.е. current = target)
+                if direction in ("in", "both") and edge_data["target"] == current:
+                    edge_dir = "in"
+                    neighbor = edge_data["source"]
+
+                if edge_dir is not None and edge_key not in visited_edges:
+                    visited_edges.add(edge_key)
+                    result.append((
+                        edge_data["source"],
+                        edge_data["target"],
+                        edge_data["relation"],
+                        edge_data["weight"],
+                        edge_dir,
+                    ))
+
+                    # Добавляем neighbour в очередь для дальнейшего обхода
+                    if neighbor not in visited_nodes_at_depth or visited_nodes_at_depth[neighbor] > depth + 1:
+                        visited_nodes_at_depth[neighbor] = depth + 1
+                        queue.append((neighbor, depth + 1))
 
         return result
+
+    def get_all_node_ids(self) -> set[str]:
+        """Получить множество всех node_id в графе."""
+        return set(self._nodes.keys())
+
+    def remove_phantom_edges(self, valid_ids: set[str]) -> int:
+        """Удалить рёбра, чьи source или target не входят в valid_ids.
+
+        Args:
+            valid_ids: множество валидных идентификаторов узлов
+
+        Returns:
+            количество удалённых рёбер
+        """
+        keys_to_remove = []
+        for edge_key, edge_data in self._edges.items():
+            if edge_data["source"] not in valid_ids or edge_data["target"] not in valid_ids:
+                keys_to_remove.append(edge_key)
+        for key in keys_to_remove:
+            del self._edges[key]
+        if keys_to_remove and self._store_path:
+            self.save()
+        return len(keys_to_remove)
+
+    def remove_phantom_nodes(self, valid_ids: set[str]) -> int:
+        """Удалить узлы, не входящие в valid_ids.
+
+        Args:
+            valid_ids: множество валидных идентификаторов
+
+        Returns:
+            количество удалённых узлов
+        """
+        keys_to_remove = [nid for nid in self._nodes if nid not in valid_ids]
+        for nid in keys_to_remove:
+            self.remove_node(nid)
+        return len(keys_to_remove)
 
     def get_relation_types(self) -> list[str]:
         """

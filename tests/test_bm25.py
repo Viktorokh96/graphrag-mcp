@@ -1,6 +1,5 @@
 """Тесты для BM25Index."""
 
-import pytest
 
 
 class TestBM25Index:
@@ -142,3 +141,60 @@ class TestBM25Index:
         doc_id, text, score, meta = results[0]
         assert meta["source"] == "test"
         assert meta["page"] == 1
+
+    # ── D9: Stop words filtering ────────────────────────────────────────
+
+    def test_stop_words_filtered_from_query(self):
+        """D9: Стоп-слова отфильтровываются из запроса — поиск по 'the' не даёт
+        результатов, если все токены — стоп-слова."""
+        from src.bm25_index import BM25Index
+
+        index = BM25Index()
+        index.add_document("doc1", "python programming language")
+        index.add_document("doc2", "java programming language")
+
+        # 'the' — стоп-слово, после фильтрации токенов нет → пустой результат
+        results = index.search("the", k=5)
+        assert results == [], "Поиск только по стоп-словам должен возвращать пустой результат"
+
+    def test_stop_words_filtered_from_documents(self):
+        """D9: Стоп-слова не индексируются — частое слово 'the' не влияет на ранжирование."""
+        from src.bm25_index import BM25Index
+
+        index = BM25Index()
+        # doc1 содержит 3 значимых слова + стоп-слова
+        index.add_document("doc1", "the the the python the the")
+        # doc2 содержит только значимые
+        index.add_document("doc2", "python java")
+
+        # Оба документа содержат 'python' — оба должны найтись
+        results = index.search("python java", k=2)
+        assert len(results) >= 2
+
+    def test_stop_words_disabled(self):
+        """D9: Если remove_stopwords=False, стоп-слова НЕ фильтруются."""
+        from src.bm25_index import BM25Index
+
+        index = BM25Index()
+        # 'to' — стоп-слово, но с add_document оно фильтруется (default True)
+        # для поиска используем слова, которых нет в документе как стоп-слова
+        index.add_document("doc1", "python programming language")
+        index.add_document("doc2", "java programming language")
+
+        # Проверяем, что _tokenize принимает параметр remove_stopwords
+        tokens_without = index._tokenize("the python", remove_stopwords=False)
+        assert "the" in tokens_without
+        assert "python" in tokens_without
+
+        tokens_with = index._tokenize("the python", remove_stopwords=True)
+        assert "the" not in tokens_with
+        assert "python" in tokens_with
+
+    def test_stop_words_contains_russian(self):
+        """D9: Стоп-слова включают русские."""
+        from src.bm25_index import STOP_WORDS
+
+        assert "и" in STOP_WORDS
+        assert "в" in STOP_WORDS
+        assert "не" in STOP_WORDS
+        assert "что" in STOP_WORDS

@@ -7,7 +7,6 @@
 - Регрессия на баг: meta="" не должен отбиваться валидацией
 """
 
-import json
 import os
 import shutil
 import tempfile
@@ -124,16 +123,29 @@ class TestHandleToolCall:
     def test_add_document_without_meta(self, mock_httpx):
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
-        result = handle_tool_call(rag, "rag_add_document", {"text": "hello world"})
+        result = handle_tool_call(rag, "rag_add_document", {"text": "hello world this is a test document for RAG storage system"})
         assert "doc_id" in result
         assert isinstance(result["doc_id"], str)
+        assert result["duplicate"] is False, "first add should not be a duplicate"
+
+    @patch("src.embeddings.httpx.Client")
+    def test_add_document_duplicate_flag(self, mock_httpx):
+        """D6: MCP возвращает duplicate=true при повторном добавлении того же контента."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        text = "hello world this is a test document for RAG storage system"
+        r1 = handle_tool_call(rag, "rag_add_document", {"text": text})
+        assert r1["duplicate"] is False, "first add should not be a duplicate"
+        r2 = handle_tool_call(rag, "rag_add_document", {"text": text})
+        assert r2["duplicate"] is True, "second add should be flagged as duplicate"
+        assert r2["doc_id"] == r1["doc_id"], "duplicate should return the same doc_id"
 
     @patch("src.embeddings.httpx.Client")
     def test_add_document_with_dict_meta(self, mock_httpx):
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
         result = handle_tool_call(rag, "rag_add_document", {
-            "text": "hello",
+            "text": "hello world this is a test document for the RAG storage system",
             "meta": {"source": "test", "idx": 1},
         })
         doc_id = result["doc_id"]
@@ -148,7 +160,7 @@ class TestHandleToolCall:
         """Регрессия: meta='' не должна ломать добавление документа."""
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
-        result = handle_tool_call(rag, "rag_add_document", {"text": "hello", "meta": ""})
+        result = handle_tool_call(rag, "rag_add_document", {"text": "hello world this is a test document for RAG storage", "meta": ""})
         assert "doc_id" in result
 
     @patch("src.embeddings.httpx.Client")
@@ -156,7 +168,7 @@ class TestHandleToolCall:
         """Регрессия: meta=null не должна ломать добавление документа."""
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
-        result = handle_tool_call(rag, "rag_add_document", {"text": "hello", "meta": None})
+        result = handle_tool_call(rag, "rag_add_document", {"text": "hello world this is a test document for RAG storage", "meta": None})
         assert "doc_id" in result
 
     @patch("src.embeddings.httpx.Client")
@@ -165,7 +177,7 @@ class TestHandleToolCall:
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
         result = handle_tool_call(rag, "rag_add_document", {
-            "text": "hello",
+            "text": "hello world this is a test for JSON string metadata parsing",
             "meta": '{"source": "json-string"}',
         })
         doc_id = result["doc_id"]
@@ -180,7 +192,7 @@ class TestHandleToolCall:
         rag = self._make_rag(mock_httpx)
         test_file = os.path.join(self.temp_dir, "test.txt")
         with open(test_file, "w") as f:
-            f.write("File content for RAG")
+            f.write("File content for RAG system indexing and storage testing purposes")
         result = handle_tool_call(rag, "rag_add_file", {"filepath": test_file})
         assert "doc_id" in result
 
@@ -190,7 +202,7 @@ class TestHandleToolCall:
         rag = self._make_rag(mock_httpx)
         test_file = os.path.join(self.temp_dir, "test.txt")
         with open(test_file, "w") as f:
-            f.write("File content")
+            f.write("File content for RAG system with metadata dict test purposes")
         result = handle_tool_call(rag, "rag_add_file", {
             "filepath": test_file,
             "meta": {"source": "file", "path": test_file},
@@ -208,7 +220,7 @@ class TestHandleToolCall:
         rag = self._make_rag(mock_httpx)
         test_file = os.path.join(self.temp_dir, "test.txt")
         with open(test_file, "w") as f:
-            f.write("content")
+            f.write("file content for RAG indexing with empty string meta")
         result = handle_tool_call(rag, "rag_add_file", {"filepath": test_file, "meta": ""})
         assert "doc_id" in result
 
@@ -216,7 +228,7 @@ class TestHandleToolCall:
     def test_search(self, mock_httpx):
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
-        rag.add_document("Python programming language")
+        rag.add_document("Python programming language for general purpose scripting and automation")
         result = handle_tool_call(rag, "rag_search", {"query": "Python", "k": 5})
         assert isinstance(result, list)
         assert len(result) >= 1
@@ -228,8 +240,8 @@ class TestHandleToolCall:
     def test_bm25_search(self, mock_httpx):
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
-        rag.add_document("python programming")
-        rag.add_document("java programming")
+        rag.add_document("python programming language for general purpose scripting and automation")
+        rag.add_document("java programming language for enterprise software development and scaling")
         result = handle_tool_call(rag, "rag_bm25_search", {"query": "python", "k": 1})
         assert isinstance(result, list)
         assert len(result) == 1
@@ -239,7 +251,7 @@ class TestHandleToolCall:
     def test_search_hybrid(self, mock_httpx):
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
-        rag.add_document("python programming")
+        rag.add_document("python programming language for general purpose scripting and automation")
         result = handle_tool_call(rag, "rag_search_hybrid", {
             "query": "python", "k": 1, "alpha": 0.5,
         })
@@ -259,7 +271,7 @@ class TestHandleToolCall:
     def test_clear(self, mock_httpx):
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
-        rag.add_document("some text")
+        rag.add_document("some text for the RAG system to index and store permanently")
         assert handle_tool_call(rag, "rag_stats", {})["total_documents"] > 0
         result = handle_tool_call(rag, "rag_clear", {})
         assert result == {"status": "ok"}
@@ -269,8 +281,8 @@ class TestHandleToolCall:
     def test_add_relation(self, mock_httpx):
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
-        doc1 = rag.add_document("First document")
-        doc2 = rag.add_document("Second document")
+        doc1 = rag.add_document("First document for graph and relation testing in RAG system")
+        doc2 = rag.add_document("Second document for graph and relation testing in RAG system")
         result = handle_tool_call(rag, "rag_add_relation", {
             "source_id": doc1, "target_id": doc2,
             "relation": "related_to", "weight": 1.0,
@@ -281,8 +293,8 @@ class TestHandleToolCall:
     def test_get_related(self, mock_httpx):
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
-        doc1 = rag.add_document("First document")
-        doc2 = rag.add_document("Second document")
+        doc1 = rag.add_document("First document for graph and relation testing in RAG system")
+        doc2 = rag.add_document("Second document for graph and relation testing in RAG system")
         rag.add_relation(doc1, doc2, "related_to", 1.0)
         result = handle_tool_call(rag, "rag_get_related", {"node_id": doc1, "max_depth": 1})
         assert "relations" in result
@@ -296,8 +308,8 @@ class TestHandleToolCall:
     def test_graph_stats(self, mock_httpx):
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
-        doc1 = rag.add_document("First document")
-        doc2 = rag.add_document("Second document")
+        doc1 = rag.add_document("First document for graph and relation testing in RAG system")
+        doc2 = rag.add_document("Second document for graph and relation testing in RAG system")
         rag.add_relation(doc1, doc2, "related_to", 1.0)
         result = handle_tool_call(rag, "rag_graph_stats", {})
         assert "total_nodes" in result
@@ -310,7 +322,7 @@ class TestHandleToolCall:
         """rag_delete_document удаляет документ из всех хранилищ."""
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
-        doc_id = rag.add_document("to be deleted")
+        doc_id = rag.add_document("this document is going to be deleted and removed from storage")
         assert handle_tool_call(rag, "rag_stats", {})["total_documents"] == 1
         result = handle_tool_call(rag, "rag_delete_document", {"doc_id": doc_id})
         assert result["status"] == "ok"
@@ -325,15 +337,15 @@ class TestHandleToolCall:
         rag = self._make_rag(mock_httpx)
         result = handle_tool_call(rag, "rag_delete_document", {"doc_id": "nonexistent-uuid"})
         assert result["status"] == "ok"
-        assert result["deleted"] is True
+        assert result["deleted"] is False
 
     @patch("src.embeddings.httpx.Client")
     def test_delete_document_removes_from_graph(self, mock_httpx):
         """Удаление документа удаляет также рёбра графа."""
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
-        doc1 = rag.add_document("first")
-        doc2 = rag.add_document("second")
+        doc1 = rag.add_document("first document for testing graph deletion and cascading cleanup")
+        doc2 = rag.add_document("second document related to first via graph edges for testing")
         rag.add_relation(doc1, doc2, "related_to", 1.0)
         assert handle_tool_call(rag, "rag_graph_stats", {})["total_nodes"] == 2
         handle_tool_call(rag, "rag_delete_document", {"doc_id": doc1})
@@ -358,7 +370,7 @@ class TestHandleToolCall:
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
         for i in range(5):
-            rag.add_document(f"document number {i}")
+            rag.add_document(f"sample document number {i} for testing and analysis purposes")
         result = handle_tool_call(rag, "rag_list_documents", {"limit": 3, "offset": 0})
         assert result["total"] == 5
         assert len(result["documents"]) == 3
@@ -372,7 +384,7 @@ class TestHandleToolCall:
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
         for i in range(10):
-            rag.add_document(f"doc {i}")
+            rag.add_document(f"sample document number {i} for testing pagination and listing")
         page1 = handle_tool_call(rag, "rag_list_documents", {"limit": 3, "offset": 0})
         page2 = handle_tool_call(rag, "rag_list_documents", {"limit": 3, "offset": 3})
         assert page1["total"] == 10
@@ -500,7 +512,7 @@ class TestHandleToolCall:
         """Постраничное чтение: несколько вызовов с offset+limit собирают весь текст."""
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
-        full_text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        full_text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuv"
         doc_id = rag.add_document(full_text)
         collected = ""
         offset = 0
