@@ -255,3 +255,84 @@ class TestGraphKnowledgeBase:
         gkb = GraphKnowledgeBase()
         gkb.add_node("lonely", "Just me")
         assert gkb.get_related("lonely") == []
+
+    # ── get_edges_batch ─────────────────────────────────────────────────
+
+    def test_get_edges_batch_empty(self):
+        """get_edges_batch с пустым набором или без связей."""
+        gkb = GraphKnowledgeBase()
+        gkb.add_node("a", "Node A")
+        result = gkb.get_edges_batch(set())
+        assert result == {}
+
+        result = gkb.get_edges_batch({"a"})
+        assert result == {"a": {}}
+
+    def test_get_edges_batch_basic(self):
+        """get_edges_batch возвращает связи для нескольких узлов."""
+        gkb = GraphKnowledgeBase()
+        gkb.add_node("a", "Node A")
+        gkb.add_node("b", "Node B")
+        gkb.add_node("c", "Node C")
+        gkb.add_edge("a", "b", "related_to", 1.0)
+        gkb.add_edge("a", "c", "similar_to", 0.8)
+
+        result = gkb.get_edges_batch({"a"})
+        assert "a" in result
+        assert "b" in result["a"]
+        assert "c" in result["a"]
+        assert len(result["a"]["b"]) == 1
+        assert result["a"]["b"][0]["relation"] == "related_to"
+        assert result["a"]["b"][0]["weight"] == 1.0
+        assert result["a"]["b"][0]["direction"] == "out"
+
+    def test_get_edges_batch_multiple_nodes(self):
+        """get_edges_batch для нескольких source node."""
+        gkb = GraphKnowledgeBase()
+        gkb.add_node("a", "Node A")
+        gkb.add_node("b", "Node B")
+        gkb.add_node("c", "Node C")
+        gkb.add_edge("a", "b", "related_to", 1.0)
+        gkb.add_edge("b", "c", "depends_on", 0.5)
+
+        result = gkb.get_edges_batch({"a", "b"})
+        assert "a" in result
+        assert "b" in result["a"]
+        assert "b" in result
+        assert "c" in result["b"]
+
+    def test_get_edges_batch_with_depth(self):
+        """get_edges_batch с BFS глубиной > 1."""
+        gkb = GraphKnowledgeBase()
+        gkb.add_node("a", "Node A")
+        gkb.add_node("b", "Node B")
+        gkb.add_node("c", "Node C")
+        gkb.add_edge("a", "b", "related_to", 1.0)
+        gkb.add_edge("b", "c", "related_to", 1.0)
+
+        result = gkb.get_edges_batch({"a"}, max_depth=1)
+        assert "b" in result["a"]
+        assert "c" not in result["a"]
+
+        result = gkb.get_edges_batch({"a"}, max_depth=2)
+        assert "b" in result["a"]
+        assert "c" in result["a"]
+
+    def test_get_edges_batch_type_filter(self):
+        """get_edges_batch фильтрует по типу связи."""
+        gkb = GraphKnowledgeBase()
+        gkb.add_node("a", "Node A")
+        gkb.add_node("b", "Node B")
+        gkb.add_node("c", "Node C")
+        gkb.add_edge("a", "b", "related_to", 1.0)
+        gkb.add_edge("a", "c", "similar_to", 0.8)
+
+        result = gkb.get_edges_batch({"a"}, relation_type_filter=["related_to"])
+        assert "b" in result["a"]
+        assert "c" not in result["a"]
+
+    def test_get_edges_batch_unknown_node(self):
+        """get_edges_batch для несуществующего узла."""
+        gkb = GraphKnowledgeBase()
+        result = gkb.get_edges_batch({"nonexistent"})
+        assert result == {}

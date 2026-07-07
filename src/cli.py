@@ -41,12 +41,18 @@ def main(argv: list[str]) -> int:
     parser_search.add_argument("--query", type=str, required=True, help="Search query")
     parser_search.add_argument("--k", type=int, default=5, help="Number of results")
     parser_search.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
+    parser_search.add_argument("--relations-load-depth", type=int, default=0, help="BFS depth for graph relations (0=off)")
+    parser_search.add_argument("--relations-load-type-filter", type=str, default=None, help='Comma-separated relation types, e.g. "related_to,similar_to"')
+    parser_search.add_argument("--relations-load-meta-filter", type=str, default=None, help='Neighbour metadata filter JSON')
 
     # bm25-search
     parser_bm25 = subparsers.add_parser("bm25-search", help="BM25 keyword search")
     parser_bm25.add_argument("--query", type=str, required=True, help="Search query")
     parser_bm25.add_argument("--k", type=int, default=5, help="Number of results")
     parser_bm25.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
+    parser_bm25.add_argument("--relations-load-depth", type=int, default=0, help="BFS depth for graph relations (0=off)")
+    parser_bm25.add_argument("--relations-load-type-filter", type=str, default=None, help='Comma-separated relation types')
+    parser_bm25.add_argument("--relations-load-meta-filter", type=str, default=None, help='Neighbour metadata filter JSON')
 
     # hybrid-search
     parser_hybrid = subparsers.add_parser("hybrid-search", help="Hybrid search")
@@ -54,6 +60,9 @@ def main(argv: list[str]) -> int:
     parser_hybrid.add_argument("--k", type=int, default=5, help="Number of results")
     parser_hybrid.add_argument("--alpha", type=float, default=0.5, help="Hybrid alpha (0=BM25, 1=semantic)")
     parser_hybrid.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
+    parser_hybrid.add_argument("--relations-load-depth", type=int, default=0, help="BFS depth for graph relations (0=off)")
+    parser_hybrid.add_argument("--relations-load-type-filter", type=str, default=None, help='Comma-separated relation types')
+    parser_hybrid.add_argument("--relations-load-meta-filter", type=str, default=None, help='Neighbour metadata filter JSON')
 
     # stats
     subparsers.add_parser("stats", help="Show statistics")
@@ -135,20 +144,32 @@ def main(argv: list[str]) -> int:
 
         elif args.command == "search":
             meta_filter = json.loads(args.meta_filter) if args.meta_filter else None
-            results = rag.search(args.query, args.k, **({"metadata_filter": meta_filter} if meta_filter else {}))
-            _print_results("Семантический поиск", results)
+            rtype = args.relations_load_type_filter.split(",") if args.relations_load_type_filter else None
+            rmeta = json.loads(args.relations_load_meta_filter) if args.relations_load_meta_filter else None
+            results = rag.search(args.query, args.k, metadata_filter=meta_filter)
+            docs = [{"doc_id": r[0], "text": r[1], "score": r[2], "metadata": r[3]} for r in results]
+            rag._enrich_with_links(docs, relations_load_depth=args.relations_load_depth, relations_load_type_filter=rtype, relations_load_meta_filter=rmeta)
+            _print_dict_results("Семантический поиск", docs)
             return 0
 
         elif args.command == "bm25-search":
             meta_filter = json.loads(args.meta_filter) if args.meta_filter else None
-            results = rag.bm25_search(args.query, args.k, **({"metadata_filter": meta_filter} if meta_filter else {}))
-            _print_results("BM25 поиск", results)
+            rtype = args.relations_load_type_filter.split(",") if args.relations_load_type_filter else None
+            rmeta = json.loads(args.relations_load_meta_filter) if args.relations_load_meta_filter else None
+            results = rag.bm25_search(args.query, args.k, metadata_filter=meta_filter)
+            docs = [{"doc_id": r[0], "text": r[1], "score": r[2], "metadata": r[3]} for r in results]
+            rag._enrich_with_links(docs, relations_load_depth=args.relations_load_depth, relations_load_type_filter=rtype, relations_load_meta_filter=rmeta)
+            _print_dict_results("BM25 поиск", docs)
             return 0
 
         elif args.command == "hybrid-search":
             meta_filter = json.loads(args.meta_filter) if args.meta_filter else None
-            results = rag.search_hybrid(args.query, args.k, args.alpha, **({"metadata_filter": meta_filter} if meta_filter else {}))
-            _print_results("Гибридный поиск", results)
+            rtype = args.relations_load_type_filter.split(",") if args.relations_load_type_filter else None
+            rmeta = json.loads(args.relations_load_meta_filter) if args.relations_load_meta_filter else None
+            results = rag.search_hybrid(args.query, args.k, args.alpha, metadata_filter=meta_filter)
+            docs = [{"doc_id": r[0], "text": r[1], "score": r[2], "metadata": r[3]} for r in results]
+            rag._enrich_with_links(docs, relations_load_depth=args.relations_load_depth, relations_load_type_filter=rtype, relations_load_meta_filter=rmeta)
+            _print_dict_results("Гибридный поиск", docs)
             return 0
 
         elif args.command == "stats":
@@ -217,7 +238,7 @@ def main(argv: list[str]) -> int:
 
 
 def _print_results(title: str, results: list) -> None:
-    """Вывести результаты поиска в читаемом виде."""
+    """Вывести результаты поиска в читаемом виде (формат кортежей)."""
     if not results:
         print(f"📭 {title}: результатов нет")
         return
@@ -230,6 +251,31 @@ def _print_results(title: str, results: list) -> None:
         print(f"     Score: {score:.4f}")
         if metadata:
             print(f"     Meta: {metadata}")
+        print()
+
+
+def _print_dict_results(title: str, docs: list[dict]) -> None:
+    """Вывести результаты поиска в читаемом виде (формат dict с links)."""
+    if not docs:
+        print(f"📭 {title}: результатов нет")
+        return
+
+    print(f"🔍 {title} (k={len(docs)}):")
+    print("─" * 60)
+    for i, d in enumerate(docs, 1):
+        doc_id = d.get("doc_id", "?")
+        text = d.get("text", "")
+        score = d.get("score", 0.0)
+        metadata = d.get("metadata", {})
+        links = d.get("links", {})
+        text_preview = text[:80] + "..." if len(text) > 80 else text
+        print(f"  {i}. [{doc_id[:8]}...] {text_preview}")
+        print(f"     Score: {score:.4f}")
+        if metadata:
+            print(f"     Meta: {metadata}")
+        if links:
+            linked_ids = list(links.keys())
+            print(f"     Links: {', '.join(did[:8] + '...' for did in linked_ids[:3])}{'...' if len(linked_ids) > 3 else ''}")
         print()
 
 

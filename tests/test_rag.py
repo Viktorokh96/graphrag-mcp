@@ -288,3 +288,101 @@ class TestRAGSystem:
         cfg = RAGConfig(store_path="/from/config")
         rag = RAGSystem(store_path=self.store_path, config=cfg)
         assert rag.store_path == self.store_path
+
+    # ── _enrich_with_links ──────────────────────────────────────────────
+
+    def test_enrich_with_links_depth_zero(self, rag):
+        """_enrich_with_links при depth=0 добавляет пустой links."""
+        doc_id_a = rag.add_document("AAA test document for enrichment link testing purposes example text")
+        doc_id_b = rag.add_document("BBB test document for enrichment link testing purposes example text")
+        rag.add_relation(doc_id_a, doc_id_b, "related_to", 1.0)
+
+        docs = [{"doc_id": doc_id_a, "text": "aaa"}]
+        rag._enrich_with_links(docs, relations_load_depth=0)
+        assert docs[0].get("links") == {}
+
+    def test_enrich_with_links_depth_one(self, rag):
+        """_enrich_with_links при depth=1 добавляет соседние узлы."""
+        doc_id_a = rag.add_document("AAA test document for enrichment link testing purposes example text")
+        doc_id_b = rag.add_document("BBB test document for enrichment link testing purposes example text")
+        rag.add_relation(doc_id_a, doc_id_b, "related_to", 1.0)
+
+        docs = [{"doc_id": doc_id_a, "text": "aaa"}]
+        rag._enrich_with_links(docs, relations_load_depth=1)
+        links = docs[0].get("links", {})
+        assert doc_id_b in links
+        assert len(links[doc_id_b]) == 1
+        assert links[doc_id_b][0]["relation"] == "related_to"
+        assert links[doc_id_b][0]["weight"] == 1.0
+        assert links[doc_id_b][0]["direction"] == "out"
+
+    def test_enrich_with_links_type_filter(self, rag):
+        """_enrich_with_links фильтрует по типу связи."""
+        doc_id_a = rag.add_document("AAA test document for enrichment link testing purposes example text")
+        doc_id_b = rag.add_document("BBB test document for enrichment link testing purposes example text")
+        doc_id_c = rag.add_document("CCC test document for enrichment link testing purposes example text")
+        rag.add_relation(doc_id_a, doc_id_b, "related_to", 1.0)
+        rag.add_relation(doc_id_a, doc_id_c, "similar_to", 0.8)
+
+        docs = [{"doc_id": doc_id_a, "text": "aaa"}]
+        rag._enrich_with_links(docs, relations_load_depth=1,
+                               relations_load_type_filter=["related_to"])
+        links = docs[0].get("links", {})
+        assert doc_id_b in links
+        assert doc_id_c not in links
+
+    def test_enrich_with_links_no_relations(self, rag):
+        """_enrich_with_links для узла без связей."""
+        doc_id = rag.add_document("AAA test document for enrichment link testing purposes example text")
+        docs = [{"doc_id": doc_id, "text": "aaa"}]
+        rag._enrich_with_links(docs, relations_load_depth=1)
+        assert docs[0].get("links") == {}
+
+    def test_enrich_with_links_multiple_docs(self, rag):
+        """_enrich_with_links обогащает несколько документов."""
+        doc_a = rag.add_document("AAA test document for enrichment link testing purposes example text")
+        doc_b = rag.add_document("BBB test document for enrichment link testing purposes example text")
+        doc_c = rag.add_document("CCC test document for enrichment link testing purposes example text")
+        rag.add_relation(doc_a, doc_b, "related_to", 1.0)
+        rag.add_relation(doc_a, doc_c, "similar_to", 0.8)
+
+        docs = [{"doc_id": doc_a}, {"doc_id": doc_b}]
+        rag._enrich_with_links(docs, relations_load_depth=1)
+        # doc_a has links to b and c
+        assert len(docs[0]["links"]) == 2
+        assert doc_b in docs[0]["links"]
+        assert doc_c in docs[0]["links"]
+        # doc_b has an incoming edge from doc_a (direction="in")
+        assert doc_a in docs[1]["links"]
+        assert docs[1]["links"][doc_a][0]["direction"] == "in"
+
+    def test_get_document_with_relations(self, rag):
+        """get_document с relations_load_depth возвращает links."""
+        doc_a = rag.add_document("AAA test document for enrichment link testing purposes example text")
+        doc_b = rag.add_document("BBB test document for enrichment link testing purposes example text")
+        rag.add_relation(doc_a, doc_b, "related_to", 1.0)
+
+        result = rag.get_document(doc_a, relations_load_depth=1)
+        assert result is not None
+        assert "links" in result
+        assert doc_b in result["links"]
+
+    def test_get_document_with_relations_depth_zero(self, rag):
+        """get_document с relations_load_depth=0 не загружает связи."""
+        doc_a = rag.add_document("AAA test document for enrichment link testing purposes example text")
+        doc_b = rag.add_document("BBB test document for enrichment link testing purposes example text")
+        rag.add_relation(doc_a, doc_b, "related_to", 1.0)
+
+        result = rag.get_document(doc_a, relations_load_depth=0)
+        assert result is not None
+        assert result["links"] == {}
+
+    def test_list_documents_with_relations(self, rag):
+        """list_documents с relations_load_depth возвращает links."""
+        doc_a = rag.add_document("AAA test document for enrichment link testing purposes example text")
+        doc_b = rag.add_document("BBB test document for enrichment link testing purposes example text")
+        rag.add_relation(doc_a, doc_b, "related_to", 1.0)
+
+        result = rag.list_documents(limit=10, relations_load_depth=1)
+        for doc in result["documents"]:
+            assert "links" in doc

@@ -90,7 +90,7 @@ TOOL_DEFS = [
             "'how does auth work' matches a doc titled 'authentication flow'), including "
             "cross-lingual cases (Russian query matching English docs) when the embedding "
             "model aligns both. Returns the top-k documents ranked by embedding similarity "
-            "to `query`. Each result is {doc_id, text, score, metadata}, sorted by descending "
+            "to `query`. Each result is {doc_id, text, score, metadata, links}, sorted by descending "
             "score. Scores are cosine-similarity-derived (range [0, 1]): score = "
             "clip(1 - L2_distance^2 / 2, 0, 1). Edge cases: returns an empty list if the "
             "store is empty, the query embedding dimension mismatches the store, or the "
@@ -101,8 +101,12 @@ TOOL_DEFS = [
             "1500-3000); omit it or pass null for full text. Use `k` to set the number of "
             "results (default 5). Pass `metadata_filter` to restrict results to documents "
             "whose metadata matches all given key->value pairs (AND); value may be a scalar "
-            "(exact match) or a list ($in). Requires an embedding provider (Ollama by "
-            "default, or OpenRouter via OPENROUTER_API_KEY)."
+            "(exact match) or a list ($in). Pass `relations_load_depth` (default 0) to "
+            "load graph relations into each result's `links` field (depth 1 = direct "
+            "neighbours); `relations_load_type_filter` filters by relation type; "
+            "`relations_load_meta_filter` filters neighbour metadata. "
+            "Requires an embedding provider (Ollama by default, or OpenRouter via "
+            "OPENROUTER_API_KEY)."
         ),
         inputSchema={
             "type": "object",
@@ -123,6 +127,24 @@ TOOL_DEFS = [
                     ),
                     "default": None,
                 },
+                "relations_load_depth": {
+                    "type": "integer",
+                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 (default) = no relations loaded. 1 = direct neighbours.",
+                    "default": 0,
+                },
+                "relations_load_type_filter": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Only load relations of these types. null/omitted = all types.",
+                    "default": None,
+                },
+                "relations_load_meta_filter": {
+                    "description": (
+                        "Optional filter on neighbour node metadata, applied when loading relations. "
+                        "Same format as metadata_filter. null/omitted = no filter."
+                    ),
+                    "default": None,
+                },
             },
             "required": ["query"],
         },
@@ -133,7 +155,7 @@ TOOL_DEFS = [
             "Keyword search using the BM25 (Okapi) algorithm over tokenized document text. "
             "Best for queries that rely on exact terminology, identifiers, names, or short "
             "technical phrases (e.g. 'Journal Service', 'PROGRESS', 'rag_search_hybrid', "
-            "'pytest', 'jwt'). Returns top-k {doc_id, text, score, metadata} sorted by "
+            "'pytest', 'jwt'). Returns top-k {doc_id, text, score, metadata, links} sorted by "
             "descending BM25 score; results with score <= 0 are filtered out, falling back "
             "to token-overlap ranking if no positive scores exist. Does not require an "
             "embedding provider and works fully offline — making it the reliable channel for "
@@ -141,7 +163,10 @@ TOOL_DEFS = [
             "truncates each result's text; omit/null for full text. `k` sets the result count "
             "(default 5). Pass `metadata_filter` to restrict results to documents whose "
             "metadata matches all given key->value pairs (AND); value may be a scalar "
-            "(exact match) or a list ($in)."
+            "(exact match) or a list ($in). Pass `relations_load_depth` (default 0) to "
+            "load graph relations into each result's `links` field; "
+            "`relations_load_type_filter` and `relations_load_meta_filter` further "
+            "control which relations are loaded."
         ),
         inputSchema={
             "type": "object",
@@ -160,6 +185,21 @@ TOOL_DEFS = [
                         "(membership/$in). null/omitted = no filter. Example: "
                         "{\"source\": \"specification\", \"type\": [\"bug\",\"feature\"]}."
                     ),
+                    "default": None,
+                },
+                "relations_load_depth": {
+                    "type": "integer",
+                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 (default) = no relations loaded.",
+                    "default": 0,
+                },
+                "relations_load_type_filter": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Only load relations of these types. null/omitted = all types.",
+                    "default": None,
+                },
+                "relations_load_meta_filter": {
+                    "description": "Optional filter on neighbour node metadata for relations. null/omitted = no filter.",
                     "default": None,
                 },
             },
@@ -190,11 +230,14 @@ TOOL_DEFS = [
             "max(k * RAG_HYBRID_EXPAND, RAG_HYBRID_MIN_CANDIDATES) candidates (defaults: "
             "max(k*3, 20)) before fusion, so documents relevant by one channel but ranked "
             "beyond top-k in the other are not lost. Returns top-k {doc_id, text, score, "
-            "metadata}. Pass `max_chars` to truncate each result's text (recommended for "
+            "metadata, links}. Pass `max_chars` to truncate each result's text (recommended for "
             "context management); omit or pass null for full text. `k` sets the number of "
             "results (default 5). Pass `metadata_filter` to restrict results to documents "
             "whose metadata matches all given key->value pairs (AND); value may be a scalar "
-            "(exact match) or a list ($in). The filter applies to BOTH channels before fusion."
+            "(exact match) or a list ($in). The filter applies to BOTH channels before fusion. "
+            "Pass `relations_load_depth` (default 0) to load graph relations into each "
+            "result's `links` field; `relations_load_type_filter` and "
+            "`relations_load_meta_filter` further control relation loading."
         ),
         inputSchema={
             "type": "object",
@@ -222,6 +265,21 @@ TOOL_DEFS = [
                         "(membership/$in). null/omitted = no filter. Example: "
                         "{\"source\": \"specification\", \"type\": [\"bug\",\"feature\"]}."
                     ),
+                    "default": None,
+                },
+                "relations_load_depth": {
+                    "type": "integer",
+                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 (default) = no relations loaded.",
+                    "default": 0,
+                },
+                "relations_load_type_filter": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Only load relations of these types. null/omitted = all types.",
+                    "default": None,
+                },
+                "relations_load_meta_filter": {
+                    "description": "Optional filter on neighbour node metadata for relations. null/omitted = no filter.",
                     "default": None,
                 },
             },
@@ -342,9 +400,12 @@ TOOL_DEFS = [
             "null/omitted returns the full text from offset onwards). Use this instead of "
             "re-running a search with a larger max_chars when you need more of a known "
             "document — it is cheaper and deterministic. Returns the document record "
-            "{doc_id, text, metadata, total_chars, offset, limit} on success, or null if "
+            "{doc_id, text, metadata, total_chars, offset, limit, links} on success, or null if "
             "the document is not found. To page through a long doc: call with offset=0, "
-            "limit=N; then offset=N, limit=N; etc., until offset >= total_chars."
+            "limit=N; then offset=N, limit=N; etc., until offset >= total_chars. "
+            "Pass `relations_load_depth` (default 0) to load graph relations into the "
+            "result's `links` field; `relations_load_type_filter` and "
+            "`relations_load_meta_filter` further control relation loading."
         ),
         inputSchema={
             "type": "object",
@@ -352,6 +413,21 @@ TOOL_DEFS = [
                 "doc_id": {"type": "string", "description": "doc_id (UUID4) of the document to retrieve."},
                 "offset": {"type": "integer", "description": "Character offset to start reading from (default 0).", "default": 0},
                 "limit": {"type": "integer", "description": "Maximum characters to return from offset. null or omitted = full text from offset to end.", "default": None},
+                "relations_load_depth": {
+                    "type": "integer",
+                    "description": "BFS depth for loading graph relations into the result's `links` field. 0 (default) = no relations loaded.",
+                    "default": 0,
+                },
+                "relations_load_type_filter": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Only load relations of these types. null/omitted = all types.",
+                    "default": None,
+                },
+                "relations_load_meta_filter": {
+                    "description": "Optional filter on neighbour node metadata for relations. null/omitted = no filter.",
+                    "default": None,
+                },
             },
             "required": ["doc_id"],
         },
@@ -367,8 +443,11 @@ TOOL_DEFS = [
             "relation calls. Pass `metadata_filter` to restrict the listing to documents "
             "whose metadata matches all given key->value pairs (AND); value may be a scalar "
             "(exact match) or a list ($in). When a filter is active, `total` reflects the "
-            "number of matching documents. Returns {documents: [{doc_id, text, metadata}, "
-            "...], total: int, limit: int, offset: int}."
+            "number of matching documents. Returns {documents: [{doc_id, text, metadata, links}, "
+            "...], total: int, limit: int, offset: int}. Pass `relations_load_depth` "
+            "(default 0) to load graph relations into each document's `links` field; "
+            "`relations_load_type_filter` and `relations_load_meta_filter` further "
+            "control relation loading."
         ),
         inputSchema={
             "type": "object",
@@ -387,6 +466,21 @@ TOOL_DEFS = [
                         "(membership/$in). null/omitted = no filter. Example: "
                         "{\"source\": \"specification\", \"type\": [\"bug\",\"feature\"]}."
                     ),
+                    "default": None,
+                },
+                "relations_load_depth": {
+                    "type": "integer",
+                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 (default) = no relations loaded.",
+                    "default": 0,
+                },
+                "relations_load_type_filter": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Only load relations of these types. null/omitted = all types.",
+                    "default": None,
+                },
+                "relations_load_meta_filter": {
+                    "description": "Optional filter on neighbour node metadata for relations. null/omitted = no filter.",
                     "default": None,
                 },
             },
@@ -467,24 +561,32 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
         doc_id = rag.add_file(filepath, meta)
         return {"doc_id": doc_id, "duplicate": existing is not None}
 
+    def _enrich(p, docs):
+        return rag._enrich_with_links(
+            docs,
+            relations_load_depth=p.get("relations_load_depth", 0),
+            relations_load_type_filter=p.get("relations_load_type_filter"),
+            relations_load_meta_filter=normalize_metadata_filter(p.get("relations_load_meta_filter")),
+        )
+
     handlers = {
         "rag_add_document": _add_document_handler,
         "rag_add_file": _add_file_handler,
-        "rag_search": lambda p: _fmt(
+        "rag_search": lambda p: _enrich(p, _fmt(
             rag.search(p.get("query", ""), k=p.get("k", 5), metadata_filter=normalize_metadata_filter(p.get("metadata_filter"))),
             max_chars=p.get("max_chars"),
-        ),
-        "rag_bm25_search": lambda p: _fmt(
+        )),
+        "rag_bm25_search": lambda p: _enrich(p, _fmt(
             rag.bm25_search(p.get("query", ""), k=p.get("k", 5), metadata_filter=normalize_metadata_filter(p.get("metadata_filter"))),
             max_chars=p.get("max_chars"),
-        ),
-        "rag_search_hybrid": lambda p: _fmt(
+        )),
+        "rag_search_hybrid": lambda p: _enrich(p, _fmt(
             rag.search_hybrid(
                 p.get("query", ""), k=p.get("k", 5), alpha=p.get("alpha"),
                 metadata_filter=normalize_metadata_filter(p.get("metadata_filter")),
             ),
             max_chars=p.get("max_chars"),
-        ),
+        )),
         "rag_add_relation": lambda p: (
             rag.add_relation(p["source_id"], p["target_id"], p["relation"], p.get("weight", 1.0)),
             {"status": "ok"},
@@ -499,7 +601,11 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
             ]
         },
         "rag_get_document": lambda p: rag.get_document(
-            p["doc_id"], offset=p.get("offset", 0), limit=p.get("limit")
+            p["doc_id"],
+            offset=p.get("offset", 0), limit=p.get("limit"),
+            relations_load_depth=p.get("relations_load_depth", 0),
+            relations_load_type_filter=p.get("relations_load_type_filter"),
+            relations_load_meta_filter=normalize_metadata_filter(p.get("relations_load_meta_filter")),
         ),
         "rag_graph_stats": lambda p: (
             s := rag.stats(),
@@ -517,7 +623,11 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
         "rag_delete_document": lambda p: {"status": "ok", "doc_id": p["doc_id"], "deleted": rag.delete_document(p["doc_id"])},
         "rag_list_documents": lambda p: rag.list_documents(
             limit=p.get("limit", 20), offset=p.get("offset", 0),
-            max_chars=p.get("max_chars"), metadata_filter=normalize_metadata_filter(p.get("metadata_filter")),
+            max_chars=p.get("max_chars"),
+            metadata_filter=normalize_metadata_filter(p.get("metadata_filter")),
+            relations_load_depth=p.get("relations_load_depth", 0),
+            relations_load_type_filter=p.get("relations_load_type_filter"),
+            relations_load_meta_filter=normalize_metadata_filter(p.get("relations_load_meta_filter")),
         ),
     }
     fn = handlers.get(name)

@@ -364,9 +364,117 @@ class TestHandleToolCall:
         assert result["limit"] == 20
         assert result["offset"] == 0
 
+    # ── Relations inline (links field) ───────────────────────────────────
+
     @patch("src.embeddings.httpx.Client")
-    def test_list_documents_with_data(self, mock_httpx):
-        """rag_list_documents возвращает документы с пагинацией."""
+    def test_search_relations_depth_zero_has_empty_links(self, mock_httpx):
+        """rag_search при relations_load_depth=0 возвращает links={}."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        rag.add_document("python programming language for testing purposes example text content here")
+        result = handle_tool_call(rag, "rag_search", {
+            "query": "python", "k": 1, "relations_load_depth": 0,
+        })
+        assert "links" in result[0]
+        assert result[0]["links"] == {}
+
+    @patch("src.embeddings.httpx.Client")
+    def test_search_relations_depth_one(self, mock_httpx):
+        """rag_search с relations_load_depth=1 загружает соседей."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        doc_a = rag.add_document("AAA test document for python relations link testing example")
+        doc_b = rag.add_document("BBB test document for java relations link testing example content")
+        rag.add_relation(doc_a, doc_b, "related_to", 1.0)
+
+        result = handle_tool_call(rag, "rag_search", {
+            "query": "AAA", "k": 5, "relations_load_depth": 1,
+        })
+        found = [r for r in result if r["doc_id"] == doc_a]
+        assert found
+        assert doc_b in found[0]["links"]
+
+    @patch("src.embeddings.httpx.Client")
+    def test_bm25_search_relations_depth_one(self, mock_httpx):
+        """rag_bm25_search с relations_load_depth загружает соседей."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        doc_a = rag.add_document("AAA test document for python relations link testing example")
+        doc_b = rag.add_document("BBB test document for java relations link testing example content")
+        rag.add_relation(doc_a, doc_b, "related_to", 1.0)
+
+        result = handle_tool_call(rag, "rag_bm25_search", {
+            "query": "AAA", "k": 5, "relations_load_depth": 1,
+        })
+        found = [r for r in result if r["doc_id"] == doc_a]
+        assert found
+        assert doc_b in found[0]["links"]
+
+    @patch("src.embeddings.httpx.Client")
+    def test_hybrid_search_relations_depth_one(self, mock_httpx):
+        """rag_search_hybrid с relations_load_depth загружает соседей."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        doc_a = rag.add_document("AAA test document for python relations link testing example")
+        doc_b = rag.add_document("BBB test document for java relations link testing example content")
+        rag.add_relation(doc_a, doc_b, "related_to", 1.0)
+
+        result = handle_tool_call(rag, "rag_search_hybrid", {
+            "query": "AAA", "k": 5, "relations_load_depth": 1, "alpha": 0.5,
+        })
+        found = [r for r in result if r["doc_id"] == doc_a]
+        assert found
+        assert doc_b in found[0]["links"]
+
+    @patch("src.embeddings.httpx.Client")
+    def test_get_document_with_relations_via_mcp(self, mock_httpx):
+        """rag_get_document с relations_load_depth возвращает links."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        doc_a = rag.add_document("AAA test document for python relations link testing example")
+        doc_b = rag.add_document("BBB test document for java relations link testing example content")
+        rag.add_relation(doc_a, doc_b, "related_to", 1.0)
+
+        result = handle_tool_call(rag, "rag_get_document", {
+            "doc_id": doc_a, "relations_load_depth": 1,
+        })
+        assert result is not None
+        assert "links" in result
+        assert doc_b in result["links"]
+
+    @patch("src.embeddings.httpx.Client")
+    def test_get_document_with_relations_depth_zero_via_mcp(self, mock_httpx):
+        """rag_get_document при depth=0 возвращает links={}."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        doc_a = rag.add_document("AAA test document for python relations link testing example")
+        doc_b = rag.add_document("BBB test document for java relations link testing example content")
+        rag.add_relation(doc_a, doc_b, "related_to", 1.0)
+
+        result = handle_tool_call(rag, "rag_get_document", {
+            "doc_id": doc_a, "relations_load_depth": 0,
+        })
+        assert result is not None
+        assert result["links"] == {}
+
+    @patch("src.embeddings.httpx.Client")
+    def test_list_documents_with_relations_via_mcp(self, mock_httpx):
+        """rag_list_documents с relations_load_depth возвращает links."""
+        from src.mcp_server import handle_tool_call
+        rag = self._make_rag(mock_httpx)
+        doc_a = rag.add_document("AAA test document for enrichment link testing purposes example text")
+        doc_b = rag.add_document("BBB test document for enrichment link testing purposes example text")
+        rag.add_relation(doc_a, doc_b, "related_to", 1.0)
+
+        result = handle_tool_call(rag, "rag_list_documents", {
+            "limit": 10, "relations_load_depth": 1,
+        })
+        for doc in result["documents"]:
+            assert "links" in doc
+
+    @patch("src.embeddings.httpx.Client")
+    def test_list_documents_metadata_filter(self, mock_httpx):
+        """metadata_filter в rag_list_documents фильтрует документы."""
         from src.mcp_server import handle_tool_call
         rag = self._make_rag(mock_httpx)
         for i in range(5):

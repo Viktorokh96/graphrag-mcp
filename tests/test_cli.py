@@ -67,7 +67,7 @@ class TestCLI:
 
         exit_code = main(["search", "--query", "python", "--k", "2"])
         assert exit_code == 0
-        mock_rag_instance.search.assert_called_once_with("python", 2)
+        mock_rag_instance.search.assert_called_once_with("python", 2, metadata_filter=None)
 
     @patch("src.cli.RAGSystem")
     def test_bm25_search_command(self, mock_rag):
@@ -82,7 +82,7 @@ class TestCLI:
 
         exit_code = main(["bm25-search", "--query", "python"])
         assert exit_code == 0
-        mock_rag_instance.bm25_search.assert_called_once_with("python", 5)
+        mock_rag_instance.bm25_search.assert_called_once_with("python", 5, metadata_filter=None)
 
     @patch("src.cli.RAGSystem")
     def test_hybrid_search_command(self, mock_rag):
@@ -97,7 +97,7 @@ class TestCLI:
 
         exit_code = main(["hybrid-search", "--query", "python", "--k", "3", "--alpha", "0.7"])
         assert exit_code == 0
-        mock_rag_instance.search_hybrid.assert_called_once_with("python", 3, 0.7)
+        mock_rag_instance.search_hybrid.assert_called_once_with("python", 3, 0.7, metadata_filter=None)
 
     @patch("src.cli.RAGSystem")
     def test_stats_command(self, mock_rag):

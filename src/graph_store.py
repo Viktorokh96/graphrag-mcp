@@ -371,6 +371,55 @@ class GraphKnowledgeBase:
         
         return True
 
+    def get_edges_batch(
+        self,
+        node_ids: set[str],
+        max_depth: int = 1,
+        relation_type_filter: Optional[list[str]] = None,
+        metadata_filter: Optional[dict] = None,
+    ) -> dict[str, dict[str, list[dict]]]:
+        """Получить связи для нескольких узлов (batch).
+
+        Для каждого узла из node_ids возвращает словарь связанных узлов
+        с информацией о рёбрах. Поддерживает BFS-обход до max_depth.
+
+        Args:
+            node_ids: набор идентификаторов узлов
+            max_depth: глубина BFS (0 = только прямые соседи)
+            relation_type_filter: список допустимых типов связей (None = все)
+            metadata_filter: фильтр по метаданным соседних узлов
+
+        Returns:
+            {source_id: {target_id: [{relation, weight, direction, depth}, ...]}}
+        """
+        result: dict[str, dict[str, list[dict]]] = {}
+
+        for node_id in node_ids:
+            if node_id not in self._nodes:
+                continue
+            edges = self.get_related(
+                node_id,
+                max_depth=max_depth,
+                metadata_filter=metadata_filter,
+            )
+            links: dict[str, list[dict]] = {}
+            for source, target, relation, weight, direction in edges:
+                # Relation type filter
+                if relation_type_filter is not None and relation not in relation_type_filter:
+                    continue
+                # Определяем neighbour_id
+                neighbour = target if direction == "out" else source
+                if neighbour not in links:
+                    links[neighbour] = []
+                links[neighbour].append({
+                    "relation": relation,
+                    "weight": weight,
+                    "direction": direction,
+                })
+            result[node_id] = links
+
+        return result
+
     def clear(self) -> None:
         """
         Очистить все узлы и рёбра.

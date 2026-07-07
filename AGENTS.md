@@ -62,19 +62,19 @@ export OPENROUTER_API_KEY=sk-or-v1-...
 
 ### Поиск / Query
 
-Все три поиска принимают `query` (обязательный), `k` (число результатов, по умолчанию 5), `max_chars` (обрезать текст каждого результата до N символов; `null`/опущен = полный текст) и `metadata_filter` (опциональный фильтр по метаданным — см. «Замечания по параметрам» ниже). Возвращают список `{doc_id, text, score, metadata}`, отсортированный по убыванию score.
+Все три поиска принимают `query` (обязательный), `k` (число результатов, по умолчанию 5), `max_chars` (обрезать текст каждого результата до N символов; `null`/опущен = полный текст), `metadata_filter` (опциональный фильтр по метаданным — см. «Замечания по параметрам» ниже), а также опциональные параметры загрузки реляций (`relations_load_depth`, `relations_load_type_filter`, `relations_load_meta_filter`). Возвращают список `{doc_id, text, score, metadata, links}`, отсортированный по убыванию score.
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_search` | `query`, `k=5`, `max_chars=null`, `metadata_filter=null` | Семантический поиск через векторные эмбеддинги. Лучше для концептуальных запросов. Фильтр использует нативный `where` ChromaDB. |
-| `rag_bm25_search` | `query`, `k=5`, `max_chars=null`, `metadata_filter=null` | Ключевой поиск по алгоритму BM25 (Okapi). Лучше для точного совпадения терминов. Фильтр — post-filter результатов. |
-| `rag_search_hybrid` | `query`, `k=5`, `alpha=null`, `max_chars=null`, `metadata_filter=null` | Гибрид через **Reciprocal Rank Fusion (RRF)**. Формула (**alpha-dilution**): каждый канал взвешивается своей долей — `score = alpha/(RRF_K+rank_sem+1) + (1-alpha)/(RRF_K+rank_bm25+1)` для документов из ОБОИХ каналов; sem-only → `alpha/(RRF_K+rank_sem+1)`; bm25-only → `(1-alpha)/(RRF_K+rank_bm25+1)`. Документы с score=0 (single-channel при крайнем alpha) исключаются — поэтому `alpha=1.0` = чистая семантика, `alpha=0.0` = чистый BM25. `RRF_K=20` (не классическая 60) — даёт широкий разброс скоров для малых корпусов. **Language-aware alpha:** `alpha=null` для запросов с кириллицей → `cyrillic_alpha` (env `RAG_CYRILLIC_ALPHA`, default **0.85** — BM25 без русского стемминга шумит, поэтому семантика доминирует); для остальных → `default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — выбран бенчмарком NDCG@k, см. `scripts/benchmark_alpha.py`). Явно переданный `alpha` имеет приоритет. **Candidate expansion:** из каждого канала забирается `max(k*3, 20)` кандидатов перед fusion. Фильтр применяется к обоим каналам до fusion. |
+| `rag_search` | `query`, `k=5`, `max_chars=null`, `metadata_filter=null`, `relations_load_depth=0`, `relations_load_type_filter=null`, `relations_load_meta_filter=null` | Семантический поиск через векторные эмбеддинги. Лучше для концептуальных запросов. Фильтр использует нативный `where` ChromaDB. |
+| `rag_bm25_search` | `query`, `k=5`, `max_chars=null`, `metadata_filter=null`, `relations_load_depth=0`, `relations_load_type_filter=null`, `relations_load_meta_filter=null` | Ключевой поиск по алгоритму BM25 (Okapi). Лучше для точного совпадения терминов. Фильтр — post-filter результатов. |
+| `rag_search_hybrid` | `query`, `k=5`, `alpha=null`, `max_chars=null`, `metadata_filter=null`, `relations_load_depth=0`, `relations_load_type_filter=null`, `relations_load_meta_filter=null` | Гибрид через **Reciprocal Rank Fusion (RRF)**. Формула (**alpha-dilution**): каждый канал взвешивается своей долей — `score = alpha/(RRF_K+rank_sem+1) + (1-alpha)/(RRF_K+rank_bm25+1)` для документов из ОБОИХ каналов; sem-only → `alpha/(RRF_K+rank_sem+1)`; bm25-only → `(1-alpha)/(RRF_K+rank_bm25+1)`. Документы с score=0 (single-channel при крайнем alpha) исключаются — поэтому `alpha=1.0` = чистая семантика, `alpha=0.0` = чистый BM25. `RRF_K=20` (не классическая 60) — даёт широкий разброс скоров для малых корпусов. **Language-aware alpha:** `alpha=null` для запросов с кириллицей → `cyrillic_alpha` (env `RAG_CYRILLIC_ALPHA`, default **0.85** — BM25 без русского стемминга шумит, поэтому семантика доминирует); для остальных → `default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — выбран бенчмарком NDCG@k, см. `scripts/benchmark_alpha.py`). Явно переданный `alpha` имеет приоритет. **Candidate expansion:** из каждого канала забирается `max(k*3, 20)` кандидатов перед fusion. Фильтр применяется к обоим каналам до fusion. |
 
 ### Чтение / Retrieve
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_get_document` | `doc_id` (обязательный), `offset=0`, `limit=null` | Получить один документ по ID. `offset` — смещение в символах (дефолт 0), `limit` — макс. число возвращаемых символов (`null`/опущен = весь текст начиная с offset). Используется для постраничного чтения больших документов вместо повторного поиска. |
+| `rag_get_document` | `doc_id` (обязательный), `offset=0`, `limit=null`, `relations_load_depth=0`, `relations_load_type_filter=null`, `relations_load_meta_filter=null` | Получить один документ по ID. `offset` — смещение в символах (дефолт 0), `limit` — макс. число возвращаемых символов (`null`/опущен = весь текст начиная с offset). Используется для постраничного чтения больших документов вместо повторного поиска. |
 
 ### Индексация / Store
 
@@ -88,7 +88,7 @@ export OPENROUTER_API_KEY=sk-or-v1-...
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_list_documents` | `limit=20`, `offset=0`, `max_chars=null`, `metadata_filter=null` | Постраничный список документов. `max_chars` обрезает текст каждого документа. `metadata_filter` — опциональный фильтр (см. «Замечания по параметрам»); при активном фильтре `total` отражает число подходящих документов. |
+| `rag_list_documents` | `limit=20`, `offset=0`, `max_chars=null`, `metadata_filter=null`, `relations_load_depth=0`, `relations_load_type_filter=null`, `relations_load_meta_filter=null` | Постраничный список документов. `max_chars` обрезает текст каждого документа. `metadata_filter` — опциональный фильтр (см. «Замечания по параметрам»); при активном фильтре `total` отражает число подходящих документов. |
 | `rag_delete_document` | `doc_id` (обязательный) | Удалить документ из всех хранилищ (векторное, BM25, граф). **Идемпотентен** — безопасно повторять. Возвращает `{status, doc_id, deleted}`. |
 | `rag_clear` | — | ⚠️ Удалить ВСЕ данные (необратимо). Использовать с крайней осторожностью. |
 
@@ -111,6 +111,10 @@ export OPENROUTER_API_KEY=sk-or-v1-...
 - `max_chars` есть у всех поисков, `rag_list_documents` и (как `limit`) у `rag_get_document`. Передавайте конечное значение (например 1500–3000) на поисках, чтобы не переполнять контекст; полный текст забирайте через `rag_get_document` по `doc_id`.
 - `k` (число результатов) есть у всех поисков, по умолчанию 5.
 - `metadata_filter` (опциональный, `null` по умолчанию) есть у `rag_search`, `rag_bm25_search`, `rag_search_hybrid`, `rag_list_documents` и `rag_get_related`. Формат — `dict[str, scalar | list[scalar]]`: каждая пара `key:value` — условие, что `metadata[key] == value`; если `value` — список, то условие `metadata[key]` входит в список (семантика `$in`). Все условия объединяются через **AND**. `null` или `{}` — фильтр отключён. Реализация: для VectorStore используется нативный `where` ChromaDB (`to_chroma_where()`); для BM25 и графа — post-filter (`matches_metadata_filter()`). В `rag_list_documents` при активном фильтре `total` отражает число подходящих документов. В `rag_get_related` фильтр применяется к соседним узлам (neighbor), рёбра к узлам, не проходящим фильтр, исключаются.
+- **Relations inline (`links` field):** все методы, возвращающие документы (`rag_search*`, `rag_get_document`, `rag_list_documents`), включают поле `links` — словарь, где ключи — doc_id связанных узлов, значения — список объектов `{relation, weight, direction}`. Параметры управления:
+  - `relations_load_depth` (int, default 0) — глубина BFS-обхода графа. 0 = не загружать связи (поле `links` = пустой `{}`).
+  - `relations_load_type_filter` (list[str] \| null, default null) — список типов связей для фильтрации (null = все типы).
+  - `relations_load_meta_filter` (dict \| null, default null) — фильтр по метаданным соседних узлов. Тот же формат, что и `metadata_filter`.
 - Ошибок валидации нет — неизвестный инструмент бросает `ValueError`, отсутствующие опциональные параметры берут дефолты из схемы.
 
 ### Гибридный поиск: детали RRF
@@ -166,6 +170,47 @@ NDCG@5 / P@5 / P@1 и печатает таблицу. Среди alpha в пр�
 баланса каналов. Это робастный и детерминированный выбор (в отличие от медианы
 области, чья ширина колеблется из-за tie-breaking в ChromaDB). Результат должен
 совпадать с `RAGConfig.default_alpha`; при расхождении — обновить конфиг.
+
+## TODO — Relations Inline (links field)
+
+### Что нужно сделать
+
+Добавить во все методы, возвращающие документы (`rag_search*`, `rag_get_document`, `rag_list_documents`), поле `links` с реляциями (графовыми связями) прямо в ответе, чтобы не делать отдельный запрос `rag_get_related`.
+
+### Формат
+
+```python
+# Каждый документ в выдаче получает поле links (пустой dict при depth=0):
+{
+  "doc_id": "abc-123",
+  "text": "...",
+  "score": 0.95,
+  "metadata": {},
+  "links": {
+    "def-456": [
+      {"relation": "related_to", "weight": 1.0, "direction": "out", "depth": 1}
+    ]
+  }
+}
+```
+
+### Новые параметры (опциональные, все tools где есть document output)
+
+| Параметр | Тип | Default | Описание |
+|----------|-----|---------|----------|
+| `relations_load_depth` | int | 0 | 0 = не загружать реляции. 1+ = BFS-глубина обхода графа |
+| `relations_load_type_filter` | list[str] \| null | null | Фильтр по типу связи (null = все типы) |
+| `relations_load_meta_filter` | dict \| null | null | Фильтр по метаданным соседних узлов |
+
+### Где менять
+
+1. **`src/graph_store.py`** — `get_edges_batch()`: массовое получение рёбер для списка node_id
+2. **`src/rag.py`** — `_enrich_with_links()` + новые параметры в search/get_document/list_documents
+3. **`src/mcp_server.py`** — TOOL_DEFS (schemas) + handlers (передача новых параметров + вызов _enrich_with_links)
+4. **`src/cli.py`** — аргументы для новых параметров
+5. **`tests/`** — тесты
+
+**Status:** ✅ Done
 
 ## Линтинг
 
