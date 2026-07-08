@@ -41,7 +41,7 @@ def main(argv: list[str]) -> int:
     parser_search.add_argument("--query", type=str, required=True, help="Search query")
     parser_search.add_argument("--k", type=int, default=5, help="Number of results")
     parser_search.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
-    parser_search.add_argument("--relations-load-depth", type=int, default=0, help="BFS depth for graph relations (0=off)")
+    parser_search.add_argument("--relations-load-depth", type=int, default=1, help="BFS depth for graph relations (0=off, 1=direct neighbours)")
     parser_search.add_argument("--relations-load-type-filter", type=str, default=None, help='Comma-separated relation types, e.g. "related_to,similar_to"')
     parser_search.add_argument("--relations-load-meta-filter", type=str, default=None, help='Neighbour metadata filter JSON')
 
@@ -50,7 +50,7 @@ def main(argv: list[str]) -> int:
     parser_bm25.add_argument("--query", type=str, required=True, help="Search query")
     parser_bm25.add_argument("--k", type=int, default=5, help="Number of results")
     parser_bm25.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
-    parser_bm25.add_argument("--relations-load-depth", type=int, default=0, help="BFS depth for graph relations (0=off)")
+    parser_bm25.add_argument("--relations-load-depth", type=int, default=1, help="BFS depth for graph relations (0=off, 1=direct neighbours)")
     parser_bm25.add_argument("--relations-load-type-filter", type=str, default=None, help='Comma-separated relation types')
     parser_bm25.add_argument("--relations-load-meta-filter", type=str, default=None, help='Neighbour metadata filter JSON')
 
@@ -60,7 +60,7 @@ def main(argv: list[str]) -> int:
     parser_hybrid.add_argument("--k", type=int, default=5, help="Number of results")
     parser_hybrid.add_argument("--alpha", type=float, default=0.5, help="Hybrid alpha (0=BM25, 1=semantic)")
     parser_hybrid.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
-    parser_hybrid.add_argument("--relations-load-depth", type=int, default=0, help="BFS depth for graph relations (0=off)")
+    parser_hybrid.add_argument("--relations-load-depth", type=int, default=1, help="BFS depth for graph relations (0=off, 1=direct neighbours)")
     parser_hybrid.add_argument("--relations-load-type-filter", type=str, default=None, help='Comma-separated relation types')
     parser_hybrid.add_argument("--relations-load-meta-filter", type=str, default=None, help='Neighbour metadata filter JSON')
 

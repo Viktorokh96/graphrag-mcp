@@ -401,7 +401,7 @@ class RAGSystem:
         return existed
 
     def get_document(self, doc_id: str, offset: int = 0, limit: Optional[int] = None,
-                     relations_load_depth: int = 0,
+                     relations_load_depth: int = 1,
                      relations_load_type_filter: Optional[list[str]] = None,
                      relations_load_meta_filter: Optional[dict] = None) -> Optional[dict]:
         """Получить один документ по ID с пагинацией текста.
@@ -410,7 +410,7 @@ class RAGSystem:
             doc_id: идентификатор документа
             offset: символьный сдвиг начала текста (по умолчанию 0)
             limit: максимальное количество символов текста (None = весь остаток)
-            relations_load_depth: глубина загрузки реляций (0 = не загружать)
+            relations_load_depth: глубина загрузки реляций (1 = прямые соседи, 0 = не загружать)
             relations_load_type_filter: фильтр типов связей (None = все)
             relations_load_meta_filter: фильтр метаданных соседних узлов
 
@@ -447,7 +447,7 @@ class RAGSystem:
 
     def list_documents(self, limit: int = 20, offset: int = 0, max_chars: Optional[int] = None,
                        metadata_filter: Optional[dict] = None,
-                       relations_load_depth: int = 0,
+                       relations_load_depth: int = 1,
                        relations_load_type_filter: Optional[list[str]] = None,
                        relations_load_meta_filter: Optional[dict] = None) -> dict:
         """
@@ -461,7 +461,7 @@ class RAGSystem:
             metadata_filter: опциональный фильтр по метаданным
                 ({key: scalar | list[scalar]}, AND-комбинация). None/{} — без фильтра.
                 `total` при активном фильтре отражает число подходящих документов.
-            relations_load_depth: глубина загрузки реляций (0 = не загружать)
+            relations_load_depth: глубина загрузки реляций (1 = прямые соседи, 0 = не загружать)
             relations_load_type_filter: фильтр типов связей (None = все)
             relations_load_meta_filter: фильтр метаданных соседних узлов
 
@@ -497,19 +497,19 @@ class RAGSystem:
     def _enrich_with_links(
         self,
         docs: list[dict],
-        relations_load_depth: int = 0,
+        relations_load_depth: int = 1,
         relations_load_type_filter: Optional[list[str]] = None,
         relations_load_meta_filter: Optional[dict] = None,
     ) -> list[dict]:
         """Attach graph relations as `links` field to each document dict.
 
         Each doc dict gets a ``links`` key: ``{neighbour_id: [{relation, weight, direction}, ...]}``.
-        When ``relations_load_depth=0`` (default), the ``links`` field is an empty dict.
+        When ``relations_load_depth=0``, the ``links`` field is an empty dict.
         This makes the field always present, so callers can always access ``doc["links"]``.
 
         Args:
             docs: list of doc dicts (must have "doc_id" key)
-            relations_load_depth: BFS depth (0 = no relations loaded)
+            relations_load_depth: BFS depth (1 = direct neighbours, 0 = no relations loaded)
             relations_load_type_filter: filter by relation type (None = all)
             relations_load_meta_filter: filter by neighbour metadata (None = no filter)
 
