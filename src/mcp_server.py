@@ -105,6 +105,8 @@ TOOL_DEFS = [
             "load graph relations into each result's `links` field (depth 1 = direct "
             "neighbours); `relations_load_type_filter` filters by relation type; "
             "`relations_load_meta_filter` filters neighbour metadata. "
+            "**RECOMMENDED: use `relations_load_depth=1` (or higher) to enrich results "
+            "with graph context — models see not just text but also inter-document relations.** "
             "Requires an embedding provider (Ollama by default, or OpenRouter via "
             "OPENROUTER_API_KEY)."
         ),
@@ -129,7 +131,7 @@ TOOL_DEFS = [
                 },
                 "relations_load_depth": {
                     "type": "integer",
-                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 (default) = no relations loaded. 1 = direct neighbours.",
+                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 (default) = no relations loaded. 1 = direct neighbours. RECOMMENDED: use >= 1 to enrich with graph context.",
                     "default": 0,
                 },
                 "relations_load_type_filter": {
@@ -166,7 +168,9 @@ TOOL_DEFS = [
             "(exact match) or a list ($in). Pass `relations_load_depth` (default 0) to "
             "load graph relations into each result's `links` field; "
             "`relations_load_type_filter` and `relations_load_meta_filter` further "
-            "control which relations are loaded."
+            "control which relations are loaded. "
+            "**RECOMMENDED: use `relations_load_depth=1` (or higher) to enrich results "
+            "with graph context — models see not just text but also inter-document relations.**"
         ),
         inputSchema={
             "type": "object",
@@ -189,7 +193,7 @@ TOOL_DEFS = [
                 },
                 "relations_load_depth": {
                     "type": "integer",
-                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 (default) = no relations loaded.",
+                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 (default) = no relations loaded. RECOMMENDED: use >= 1 to enrich with graph context.",
                     "default": 0,
                 },
                 "relations_load_type_filter": {
@@ -237,7 +241,9 @@ TOOL_DEFS = [
             "(exact match) or a list ($in). The filter applies to BOTH channels before fusion. "
             "Pass `relations_load_depth` (default 0) to load graph relations into each "
             "result's `links` field; `relations_load_type_filter` and "
-            "`relations_load_meta_filter` further control relation loading."
+            "`relations_load_meta_filter` further control relation loading. "
+            "**RECOMMENDED: use `relations_load_depth=1` (or higher) to enrich results "
+            "with graph context — models see not just text but also inter-document relations.**"
         ),
         inputSchema={
             "type": "object",
@@ -269,7 +275,7 @@ TOOL_DEFS = [
                 },
                 "relations_load_depth": {
                     "type": "integer",
-                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 (default) = no relations loaded.",
+                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 (default) = no relations loaded. RECOMMENDED: use >= 1 to enrich with graph context.",
                     "default": 0,
                 },
                 "relations_load_type_filter": {
@@ -405,7 +411,9 @@ TOOL_DEFS = [
             "limit=N; then offset=N, limit=N; etc., until offset >= total_chars. "
             "Pass `relations_load_depth` (default 0) to load graph relations into the "
             "result's `links` field; `relations_load_type_filter` and "
-            "`relations_load_meta_filter` further control relation loading."
+            "`relations_load_meta_filter` further control relation loading. "
+            "**RECOMMENDED: use `relations_load_depth=1` (or higher) to enrich results "
+            "with graph context — models see not just text but also inter-document relations.**"
         ),
         inputSchema={
             "type": "object",
@@ -415,7 +423,7 @@ TOOL_DEFS = [
                 "limit": {"type": "integer", "description": "Maximum characters to return from offset. null or omitted = full text from offset to end.", "default": None},
                 "relations_load_depth": {
                     "type": "integer",
-                    "description": "BFS depth for loading graph relations into the result's `links` field. 0 (default) = no relations loaded.",
+                    "description": "BFS depth for loading graph relations into the result's `links` field. 0 (default) = no relations loaded. RECOMMENDED: use >= 1 to enrich with graph context.",
                     "default": 0,
                 },
                 "relations_load_type_filter": {
@@ -447,7 +455,9 @@ TOOL_DEFS = [
             "...], total: int, limit: int, offset: int}. Pass `relations_load_depth` "
             "(default 0) to load graph relations into each document's `links` field; "
             "`relations_load_type_filter` and `relations_load_meta_filter` further "
-            "control relation loading."
+            "control relation loading. "
+            "**RECOMMENDED: use `relations_load_depth=1` (or higher) to enrich results "
+            "with graph context — models see not just text but also inter-document relations.**"
         ),
         inputSchema={
             "type": "object",
@@ -470,7 +480,7 @@ TOOL_DEFS = [
                 },
                 "relations_load_depth": {
                     "type": "integer",
-                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 (default) = no relations loaded.",
+                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 (default) = no relations loaded. RECOMMENDED: use >= 1 to enrich with graph context.",
                     "default": 0,
                 },
                 "relations_load_type_filter": {

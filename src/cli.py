@@ -107,6 +107,23 @@ def main(argv: list[str]) -> int:
                                   choices=["kamada_kawai", "spring", "circular", "hierarchical"],
                                   help="Layout algorithm (html/dot only)")
 
+    # serve-graph
+    parser_serve = subparsers.add_parser("serve-graph", help="Serve graph with live RAG API")
+    parser_serve.add_argument("--output", "-o", type=str, default="graph_viz.html", help="Output file path")
+    parser_serve.add_argument("--port", "-p", type=int, default=8090, help="HTTP port")
+    parser_serve.add_argument("--max-nodes", "-n", type=int, default=None,
+                              help="Limit to top-N nodes by degree")
+    parser_serve.add_argument("--relation-type", "-r", type=str, action="append", default=None,
+                              help="Filter by relation type (can be repeated)")
+    parser_serve.add_argument("--focus", type=str, default=None,
+                              help="Show subgraph around this doc_id")
+    parser_serve.add_argument("--max-depth", type=int, default=2,
+                              help="BFS depth when using --focus (default: 2)")
+    parser_serve.add_argument("--layout", type=str, default="kamada_kawai",
+                              choices=["kamada_kawai", "spring", "circular", "hierarchical"],
+                              help="Layout algorithm")
+    parser_serve.add_argument("--no-browser", action="store_true", help="Don't open browser")
+
     try:
         args = parser.parse_args(argv)
     except SystemExit:
@@ -227,6 +244,24 @@ def main(argv: list[str]) -> int:
                 focus_node=args.focus,
                 max_depth=args.max_depth,
                 layout=args.layout,
+            )
+            return 0
+
+        elif args.command == "serve-graph":
+            from src.graph_viz import serve_graph
+            from src.graph_store import GraphKnowledgeBase
+            g = GraphKnowledgeBase(store_path=args.store)
+            serve_graph(
+                g,
+                rag=rag,
+                output_path=args.output,
+                port=args.port,
+                max_nodes=args.max_nodes,
+                relation_type=args.relation_type,
+                focus_node=args.focus,
+                max_depth=args.max_depth,
+                layout=args.layout,
+                open_browser=not args.no_browser,
             )
             return 0
 
