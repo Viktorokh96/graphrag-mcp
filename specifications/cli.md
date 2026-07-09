@@ -1,102 +1,174 @@
-# CLI для RAG MCP Tool
+# CLI Reference
 
-## Назначение
-Консольная утилита для ручной работы с RAG системой (без MCP/HTTP сервера).
-
-## Использование
-```bash
-# Базовые опции:
-python -m src.cli [--store ./rag_data] [--http] [--port 8765] <command> [args]
-```
+Сервер: `src/cli.py`. Точка входа: `rag-server` (console_script) или `python -m src.cli`.
 
 ## Глобальные флаги
-| Флаг | Описание |
-|------|----------|
-| `--store PATH` | Путь к хранилищу (по умолч. `./rag_data`) |
-| `--http` | Запустить HTTP сервер (также `server`, `serve`, `s`) |
-| `--port PORT` | Порт HTTP сервера (по умолч. `8765`, с `--http`) |
-| `--rerank` | Включить CrossEncoder reranking |
-| `--query-expansion` | Включить LLM query expansion |
+
+| Флаг | Описание | Дефолт |
+|------|----------|--------|
+| `--store PATH` | Путь к хранилищу | `./rag_data` |
+| `--key KEY` | OpenRouter API ключ | — |
+| `--provider {bge-m3,ollama,openrouter}` | Провайдер эмбеддингов | из env |
+| `--ollama-url URL` | Ollama base URL | из env |
+| `--ollama-model MODEL` | Ollama модель | из env |
+| `--http` | Запустить HTTP REST API + MCP SSE | — |
+| `--port PORT` | HTTP порт (с --http) | 8765 |
 
 ## Команды
 
-### 1. add-document
+### `add-document`
+
 ```bash
-python -m src.cli add-document --text "Текст" [--meta '{"source":"file"}'] [--extract-graph]
+rag-server add-document --text "content" [--meta '{"key":"val"}']
 ```
 
-### 2. add-file
+Параметры:
+- `--text` (обяз.) — текст документа
+- `--meta` — JSON-строка метаданных
+
+### `add-file`
+
 ```bash
-python -m src.cli add-file --path /path/to/file.txt [--meta '{"type":"report"}'] [--extract-graph]
+rag-server add-file --path /path/to/file [--meta '{"key":"val"}']
 ```
 
-### 3. add-structured
+Параметры:
+- `--path` (обяз.) — путь к файлу
+- `--meta` — JSON-строка метаданных
+
+### `add-structured`
+
 ```bash
-python -m src.cli add-structured --path /path/to/repomix.json [--meta '{"source":"repo"}']
+rag-server add-structured --content '{"repository":"...","files":{...}}' [--extract-graph]
 ```
 
-### 4. search — семантический поиск
+Параметры:
+- `--content` (обяз.) — JSON-строка в repomix формате
+- `--extract-graph` — извлекать граф из файлов
+
+### `add-relation`
+
 ```bash
-python -m src.cli search --query "что-то про python" [--k 5] [--rerank] [--query-expansion]
+rag-server add-relation --source <uuid> --target <uuid> --relation related_to [--weight 1.0]
 ```
 
-### 5. bm25-search — поиск по ключевым словам (sparse vectors)
+Параметры:
+- `--source` (обяз.) — doc_id источника
+- `--target` (обяз.) — doc_id цели
+- `--relation` (обяз.) — тип связи
+- `--weight` — вес ребра (default 1.0)
+
+### `search`
+
 ```bash
-python -m src.cli bm25-search --query "python" [--k 5]
+rag-server search --query "text" [--k 5] [--meta-filter '{}'] [--relations-load-depth 1]
 ```
 
-### 6. hybrid-search — гибридный поиск
+Семантический поиск.
+
+### `bm25-search`
+
 ```bash
-python -m src.cli hybrid-search --query "python" [--k 5] [--alpha 0.5] [--rerank] [--query-expansion]
+rag-server bm25-search --query "keywords" [--k 5] [--meta-filter '{}']
 ```
 
-### 7. list-documents — список документов
+BM25 keyword поиск.
+
+### `hybrid-search`
+
 ```bash
-python -m src.cli list-documents [--limit 20] [--offset 0]
+rag-server hybrid-search --query "text" [--k 5] [--alpha 0.5] [--rerank] [--query-expansion] [--meta-filter '{}']
 ```
 
-### 8. get-document — получить документ по ID
+Гибридный поиск (RRF alpha-dilution).
+- `--alpha` — баланс (0=BM25, 1=semantic; null=language-aware)
+- `--rerank` — включить CrossEncoder reranking
+- `--query-expansion` — включить multi-query expansion
+
+### `list-documents`
+
 ```bash
-python -m src.cli get-document --doc-id <uuid>
+rag-server list-documents [--limit 20] [--offset 0] [--max-chars N] [--meta-filter '{}']
 ```
 
-### 9. add-relation — создать ребро графа
+Список документов с пагинацией.
+
+### `get-document`
+
 ```bash
-python -m src.cli add-relation --source-id <uuid> --target-id <uuid> --relation "uses"
+rag-server get-document --doc-id <uuid> [--offset 0] [--limit N] [--relations-load-depth 1]
 ```
 
-### 10. get-related — обход графа
+Получить документ по ID.
+
+### `get-related`
+
 ```bash
-python -m src.cli get-related --node-id <uuid> [--max-depth 2]
+rag-server get-related --node <uuid> [--max-depth 1] [--meta-filter '{}']
 ```
 
-### 11. stats — статистика
+BFS обход графа от узла.
+
+### `stats`
+
 ```bash
-python -m src.cli stats
+rag-server stats
 ```
 
-### 12. clear — очистить всё
+Статистика хранилища.
+
+### `graph-stats`
+
 ```bash
-python -m src.cli clear
+rag-server graph-stats
 ```
 
-## Архитектура
-Файл: `src/cli.py`
-- Использует `argparse` (из коробки)
-- Создаёт `RAGSystem` и вызывает его методы
-- Режим `--http`: запускает HttpAPI через uvicorn
-- Выводит результаты в читаемом виде (с разделителями)
-- При ошибках выводит stderr и exit code 1
+Статистика графа.
 
-## Пример работы
+### `clear`
+
 ```bash
-$ python -m src.cli add-document --text "Python крутой язык"
-✅ Добавлен документ: a1b2c3d4
-
-$ python -m src.cli search --query "язык"
-┌─────────────────────────────────────────┐
-│ Результаты поиска (k=5):                │
-├─────────────────────────────────────────┤
-│ 1. Python крутой язык [0.92]            │
-└─────────────────────────────────────────┘
+rag-server clear
 ```
+
+⚠️ Удалить все данные.
+
+### `reindex`
+
+```bash
+rag-server reindex
+```
+
+Пересчитать эмбеддинги всех документов (после смены провайдера).
+
+### `migrate`
+
+```bash
+rag-server migrate [--dry-run] [--force]
+```
+
+Миграция старых данных (ChromaDB + graph_index.json) → Qdrant + SQLite.
+
+### `graph-viz`
+
+```bash
+rag-server graph-viz --output graph.html [--format html|dot|json|ascii] [--max-nodes N] [--relation-type TYPE] [--focus UUID] [--max-depth 2] [--layout kamada_kawai|spring|circular|hierarchical]
+```
+
+Визуализация графа знаний.
+
+### `serve-graph`
+
+```bash
+rag-server serve-graph --output graph.html [--port 8090] [--max-nodes N] [--relation-type TYPE] [--focus UUID] [--max-depth 2] [--layout kamada_kawai] [--no-browser]
+```
+
+Генерация HTML + live RAG API сервер (запросы документа по клику).
+
+### `--http`
+
+```bash
+rag-server --http [--port 8765]
+```
+
+Запуск HTTP REST API + MCP SSE транспорта.
