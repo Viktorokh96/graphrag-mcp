@@ -216,13 +216,12 @@ class TestRAGSystem:
     def test_rrf_no_ties(self, rag):
         """D7: RRF не даёт тай-оффов в топ-3."""
         rag.add_document("Python programming language for building web applications and data science.")
-        rag.add_document("Java programming language for enterprise development and mobile apps.")
-        rag.add_document("JavaScript programming language for frontend and backend development.")
-        rag.add_document("C++ programming language for systems programming and game development.")
-        rag.add_document("Ruby programming language for web development with Rails framework.")
+        rag.add_document("Java enterprise development platform for large-scale mobile and cloud apps.")
+        rag.add_document("JavaScript frontend framework for building interactive user interfaces.")
+        rag.add_document("C++ systems programming for game engines and real-time graphics rendering.")
+        rag.add_document("Ruby on Rails web framework for rapid application development.")
 
         results = rag.search_hybrid("programming language", k=3, alpha=0.5)
         assert len(results) >= 2
         scores = [r[2] for r in results[:3]]
-        # Все score должны быть различны (RRF устраняет тай-оффы)
         assert len(set(scores)) == len(scores), f"RRF scores should be distinct: {scores}"

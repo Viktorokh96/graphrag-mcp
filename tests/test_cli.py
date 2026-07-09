@@ -97,7 +97,10 @@ class TestCLI:
 
         exit_code = main(["hybrid-search", "--query", "python", "--k", "3", "--alpha", "0.7"])
         assert exit_code == 0
-        mock_rag_instance.search_hybrid.assert_called_once_with("python", 3, 0.7, metadata_filter=None)
+        mock_rag_instance.search_hybrid.assert_called_once()
+        args, kwargs = mock_rag_instance.search_hybrid.call_args
+        assert args == ("python", 3, 0.7)
+        assert kwargs.get("metadata_filter") is None
 
     @patch("src.cli.RAGSystem")
     def test_stats_command(self, mock_rag):

@@ -11,7 +11,7 @@ class TestQueryExpander:
         from src.query_expander import QueryExpander
         assert QueryExpander is not None
 
-    @patch("src.query_expander.Client")
+    @patch("ollama.Client")
     def test_expand_returns_query_when_count_zero(self, mock_client):
         from src.query_expander import QueryExpander
 
@@ -19,7 +19,7 @@ class TestQueryExpander:
         result = e.expand("hello world")
         assert result == ["hello world"]
 
-    @patch("src.query_expander.Client")
+    @patch("ollama.Client")
     def test_expand_parses_llm_response(self, mock_client_class):
         from src.query_expander import QueryExpander
 
@@ -36,7 +36,7 @@ class TestQueryExpander:
         call_kwargs = mock_client.generate.call_args[1]
         assert "mock" in str(call_kwargs.get("model"))
 
-    @patch("src.query_expander.Client")
+    @patch("ollama.Client")
     def test_expand_with_extra_lines(self, mock_client_class):
         from src.query_expander import QueryExpander
 
@@ -50,7 +50,7 @@ class TestQueryExpander:
         result = e.expand("q")
         assert result == ["q", "line1", "line2", "line3"]
 
-    @patch("src.query_expander.Client")
+    @patch("ollama.Client")
     def test_expand_with_short_response(self, mock_client_class):
         from src.query_expander import QueryExpander
 
@@ -63,7 +63,7 @@ class TestQueryExpander:
         assert result == ["q", "only one"]
         assert len(result) == 2
 
-    @patch("src.query_expander.Client")
+    @patch("ollama.Client")
     def test_expand_empty_response(self, mock_client_class):
         from src.query_expander import QueryExpander
 

@@ -11,7 +11,7 @@ class TestReranker:
         from src.reranker import Reranker
         assert Reranker is not None
 
-    @patch("src.reranker.CrossEncoder")
+    @patch("sentence_transformers.CrossEncoder")
     def test_rerank_empty(self, mock_ce):
         from src.reranker import Reranker
 
@@ -19,7 +19,7 @@ class TestReranker:
         result = r.rerank("query", [])
         assert result == []
 
-    @patch("src.reranker.CrossEncoder")
+    @patch("sentence_transformers.CrossEncoder")
     def test_rerank_sorts_by_score(self, mock_ce):
         from src.reranker import Reranker
 
@@ -40,7 +40,7 @@ class TestReranker:
         for d in result:
             assert "rerank_score" in d
 
-    @patch("src.reranker.CrossEncoder")
+    @patch("sentence_transformers.CrossEncoder")
     def test_rerank_top_k(self, mock_ce):
         from src.reranker import Reranker
 
@@ -58,7 +58,7 @@ class TestReranker:
         assert len(result) == 1
         assert result[0]["doc_id"] == "b"
 
-    @patch("src.reranker.CrossEncoder")
+    @patch("sentence_transformers.CrossEncoder")
     def test_rerank_preserves_full_list_when_no_top_k(self, mock_ce):
         from src.reranker import Reranker
 
