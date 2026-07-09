@@ -10,7 +10,6 @@ __pycache__/
 rag_data/
 *.bak
 *.html
-!lib/**/*.html
 
 # uv
 # uv.lock коммитим — воспроизводимость окружения
@@ -24,5 +23,6 @@ PROBLEMS.md
 .coverage
 
 # Build / test artifacts
+lib/
 qdrant/
 *.db*
