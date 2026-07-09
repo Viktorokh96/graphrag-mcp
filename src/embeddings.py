@@ -116,6 +116,58 @@ class EmbeddingGenerator:
         return vector
 
 
+class BgeM3EmbeddingGenerator:
+    """Локальные мультиязычные эмбеддинги BAAI/bge-m3 (sentence-transformers).
+
+    Модель загружается лениво при первом вызове get_embedding/get_embeddings
+    (~2GB RAM, первый запуск скачивает веса с HuggingFace). Векторы
+    L2-нормализованы, размерность 1024.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "BAAI/bge-m3",
+        device: str = "cpu",
+        dimension: int = 1024,
+    ):
+        self.model_name = model_name
+        self.device = device
+        self._dimension = dimension
+        self._model = None
+        self._cache: dict[str, list[float]] = {}
+
+    def _ensure_model(self):
+        if self._model is None:
+            # Ленивая загрузка: sentence-transformers тянет torch (~секунды импорта),
+            # а сама модель — ~2GB RAM. Не грузим, пока эмбеддинги реально не нужны.
+            from sentence_transformers import SentenceTransformer
+            self._model = SentenceTransformer(self.model_name, device=self.device)
+        return self._model
+
+    def get_embedding(self, text: str) -> list[float]:
+        if text in self._cache:
+            return self._cache[text]
+        embedding = self.get_embeddings([text])[0]
+        return embedding
+
+    def get_embeddings(self, texts: list[str]) -> list[list[float]]:
+        missing = [t for t in texts if t not in self._cache]
+        if missing:
+            model = self._ensure_model()
+            vectors = model.encode(missing, normalize_embeddings=True)
+            for text, vec in zip(missing, vectors):
+                self._cache[text] = vec.tolist()
+        return [self._cache[t] for t in texts]
+
+    def get_dimension(self) -> int:
+        for emb in self._cache.values():
+            return len(emb)
+        return self._dimension
+
+    def clear_cache(self):
+        self._cache.clear()
+
+
 class OpenRouterEmbeddingGenerator:
     """Генератор эмбеддингов через OpenRouter API."""
 

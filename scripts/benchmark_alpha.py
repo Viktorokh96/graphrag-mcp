@@ -101,11 +101,16 @@ def precision_at_k(ranked_doc_ids: list[str], judgments: dict[str, int], k: int)
 
 
 def build_rag(store_path: str) -> RAGSystem:
-    """Собрать RAGSystem на mock-генераторе с настоящей семантикой."""
-    rag = RAGSystem(store_path=store_path, config=RAGConfig(store_path=store_path))
-    # Подменяем генератор эмбеддингов на детерминированный семантический mock.
-    rag.embedding_generator = SemanticMockEmbeddingGenerator()
-    return rag
+    """Собрать RAGSystem (Qdrant embedded + SQLite) на семантическом mock-генераторе.
+
+    Генератор передаётся в конструктор явно: дефолтный провайдер (BGE-M3)
+    тянет реальную модель, а мок должен быть подключён до создания коллекции
+    Qdrant (размерность dense-векторов фиксируется при инициализации).
+    """
+    return RAGSystem(
+        config=RAGConfig(store_path=store_path),
+        embedding_generator=SemanticMockEmbeddingGenerator(),
+    )
 
 
 def index_corpus(rag: RAGSystem) -> dict[str, str]:
@@ -138,6 +143,7 @@ def evaluate_alpha(rag: RAGSystem, hint_to_uuid: dict[str, str], alpha: float) -
 def main() -> None:
     temp_dir = tempfile.mkdtemp(prefix="rag_bench_")
     store_path = os.path.join(temp_dir, "rag_data")
+    rag = None
     try:
         rag = build_rag(store_path)
         hint_to_uuid = index_corpus(rag)
@@ -173,7 +179,7 @@ def main() -> None:
         # Робастный выбор: среди alpha в пределах 1% от лучшего NDCG берём то,
         # что ближе всего к 0.5 — естественной точке баланса каналов. Это
         # детерминированно (в отличие от медианы хорошей области, чья ширина
-        # колеблется из-за tie-breaking в ChromaDB) и философски оправдано:
+        # колеблется из-за tie-breaking в векторном сторе) и философски оправдано:
         # баланс по умолчанию, если только данные не говорят обратного.
         threshold = best_ndcg * 0.99
         good_alphas = [r[0] for r in rows if r[1] >= threshold]
@@ -182,7 +188,8 @@ def main() -> None:
         best_row = next(r for r in rows if r[0] == best_alpha)
 
         print(f"Best NDCG@5 = {best_ndcg:.4f}")
-        print(f"Good region (within 1% of best): alpha ∈ [{good_alphas[0]:.2f}, {good_alphas[-1]:.2f}]")
+        # ASCII-only вывод: Windows-консоль (cp1252) не кодирует символ "∈".
+        print(f"Good region (within 1% of best): alpha in [{good_alphas[0]:.2f}, {good_alphas[-1]:.2f}]")
         print(f"Selected default alpha = {best_alpha:.2f}  "
               f"(closest-to-0.5 in good region; NDCG={best_row[1]:.4f}, "
               f"P@5={best_row[2]:.4f}, P@1={best_row[3]:.4f})")
@@ -192,6 +199,10 @@ def main() -> None:
         else:
             print("MISMATCH: update RAGConfig.default_alpha to match.")
     finally:
+        # Windows: Qdrant embedded и SQLite держат файловые локи —
+        # без close() rmtree не сможет удалить временную директорию.
+        if rag is not None:
+            rag.close()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 

@@ -2,27 +2,35 @@
 
 import argparse
 import json
+import os
 import sys
+from typing import Optional
+
 from src.rag import RAGSystem
 
 
-def main(argv: list[str]) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     """
     CLI entry point для RAG системы.
 
     Args:
-        argv: список аргументов командной строки (без имени программы)
+        argv: список аргументов командной строки (без имени программы);
+              None — взять из sys.argv (режим console script `rag-server`)
 
     Returns:
         int: exit code (0 — успех, 1 — ошибка)
     """
+    if argv is None:
+        argv = sys.argv[1:]
 
     parser = argparse.ArgumentParser(description="RAG System CLI")
     parser.add_argument("--store", type=str, default="./rag_data", help="Path to vector store")
     parser.add_argument("--key", type=str, default=None, help="OpenRouter API key")
-    parser.add_argument("--provider", type=str, default=None, choices=["ollama", "openrouter"], help="Embedding provider")
+    parser.add_argument("--provider", type=str, default=None, choices=["bge-m3", "ollama", "openrouter"], help="Embedding provider")
     parser.add_argument("--ollama-url", type=str, default=None, help="Ollama base URL")
     parser.add_argument("--ollama-model", type=str, default=None, help="Ollama model name")
+    parser.add_argument("--http", action="store_true", help="Start HTTP REST API + MCP SSE server")
+    parser.add_argument("--port", type=int, default=8765, help="HTTP server port (default: 8765)")
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -58,7 +66,9 @@ def main(argv: list[str]) -> int:
     parser_hybrid = subparsers.add_parser("hybrid-search", help="Hybrid search")
     parser_hybrid.add_argument("--query", type=str, required=True, help="Search query")
     parser_hybrid.add_argument("--k", type=int, default=5, help="Number of results")
-    parser_hybrid.add_argument("--alpha", type=float, default=0.5, help="Hybrid alpha (0=BM25, 1=semantic)")
+    parser_hybrid.add_argument("--alpha", type=float, default=None, help="Hybrid alpha (0=BM25, 1=semantic; default=language-aware)")
+    parser_hybrid.add_argument("--rerank", action="store_true", default=None, help="Enable CrossEncoder reranker")
+    parser_hybrid.add_argument("--query-expansion", action="store_true", default=None, help="Enable query expansion via LLM")
     parser_hybrid.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
     parser_hybrid.add_argument("--relations-load-depth", type=int, default=1, help="BFS depth for graph relations (0=off, 1=direct neighbours)")
     parser_hybrid.add_argument("--relations-load-type-filter", type=str, default=None, help='Comma-separated relation types')
@@ -88,6 +98,11 @@ def main(argv: list[str]) -> int:
 
     # reindex
     subparsers.add_parser("reindex", help="Re-generate embeddings for all documents (when switching embedding provider)")
+
+    # migrate (старый ChromaDB + graph_index.json → Qdrant + SQLite)
+    parser_migrate = subparsers.add_parser("migrate", help="Migrate old ChromaDB/BM25/JSON-graph data to Qdrant + SQLite")
+    parser_migrate.add_argument("--dry-run", action="store_true", help="Show what would be migrated without writing")
+    parser_migrate.add_argument("--force", action="store_true", help="Do not ask for confirmation")
 
     # graph-viz
     parser_graph_viz = subparsers.add_parser("graph-viz", help="Visualize knowledge graph")
@@ -128,6 +143,9 @@ def main(argv: list[str]) -> int:
         args = parser.parse_args(argv)
     except SystemExit:
         return 1
+
+    if args.http:
+        return _start_http(args)
 
     if not args.command:
         parser.print_help()
@@ -183,7 +201,7 @@ def main(argv: list[str]) -> int:
             meta_filter = json.loads(args.meta_filter) if args.meta_filter else None
             rtype = args.relations_load_type_filter.split(",") if args.relations_load_type_filter else None
             rmeta = json.loads(args.relations_load_meta_filter) if args.relations_load_meta_filter else None
-            results = rag.search_hybrid(args.query, args.k, args.alpha, metadata_filter=meta_filter)
+            results = rag.search_hybrid(args.query, args.k, args.alpha, metadata_filter=meta_filter, rerank=args.rerank, query_expansion=args.query_expansion)
             docs = [{"doc_id": r[0], "text": r[1], "score": r[2], "metadata": r[3]} for r in results]
             rag._enrich_with_links(docs, relations_load_depth=args.relations_load_depth, relations_load_type_filter=rtype, relations_load_meta_filter=rmeta)
             _print_dict_results("Гибридный поиск", docs)
@@ -231,44 +249,67 @@ def main(argv: list[str]) -> int:
             print(f"♻️ Переиндексировано документов: {count}")
             return 0
 
-        elif args.command == "graph-viz":
-            from src.graph_viz import render_graph_viz
-            from src.graph_store import GraphKnowledgeBase
-            g = GraphKnowledgeBase(store_path=args.store)
-            render_graph_viz(
-                g,
-                output_path=args.output,
-                output_format=args.format,
-                max_nodes=args.max_nodes,
-                relation_type=args.relation_type,
-                focus_node=args.focus,
-                max_depth=args.max_depth,
-                layout=args.layout,
+        elif args.command == "migrate":
+            from src.migrate import run_migration
+            stats = run_migration(rag, dry_run=args.dry_run, force=args.force)
+            if stats is None:
+                return 1
+            print(
+                f"✅ Migrated {stats['documents']} documents, {stats['edges']} edges "
+                f"(skipped: {stats['skipped_documents']} docs, {stats['skipped_edges']} edges)"
             )
             return 0
 
-        elif args.command == "serve-graph":
-            from src.graph_viz import serve_graph
-            from src.graph_store import GraphKnowledgeBase
-            g = GraphKnowledgeBase(store_path=args.store)
-            serve_graph(
-                g,
-                rag=rag,
-                output_path=args.output,
-                port=args.port,
-                max_nodes=args.max_nodes,
-                relation_type=args.relation_type,
-                focus_node=args.focus,
-                max_depth=args.max_depth,
-                layout=args.layout,
-                open_browser=not args.no_browser,
-            )
+        elif args.command in ("graph-viz", "serve-graph"):
+            from src.graph_viz import render_graph_viz, serve_graph
+            if args.command == "serve-graph":
+                serve_graph(
+                    rag.graph_kb,
+                    rag=rag,
+                    output_path=args.output,
+                    port=args.port,
+                    max_nodes=args.max_nodes,
+                    relation_type=args.relation_type,
+                    focus_node=args.focus,
+                    max_depth=args.max_depth,
+                    layout=args.layout,
+                    open_browser=not getattr(args, 'no_browser', False),
+                )
+            else:
+                render_graph_viz(
+                    rag.graph_kb,
+                    output_path=args.output,
+                    output_format=args.format,
+                    max_nodes=args.max_nodes,
+                    relation_type=args.relation_type,
+                    focus_node=args.focus,
+                    max_depth=args.max_depth,
+                    layout=args.layout,
+                )
             return 0
 
     except Exception as e:
         print(f"❌ Ошибка: {e}", file=sys.stderr)
         return 1
 
+    return 0
+
+
+def _start_http(args) -> int:
+    """Запустить HTTP REST API + MCP SSE сервер."""
+    import uvicorn
+    os.environ.setdefault("STORE_PATH", args.store or "./rag_data")
+    if args.provider:
+        os.environ["EMBEDDING_MODEL"] = args.provider
+    if args.ollama_url:
+        os.environ["OLLAMA_BASE_URL"] = args.ollama_url
+    if args.ollama_model:
+        os.environ["OLLAMA_MODEL"] = args.ollama_model
+    port = args.port or 8765
+    print(f"🌐 Starting HTTP server on http://localhost:{port}", file=sys.stderr)
+    print(f"   REST API: http://localhost:{port}/docs", file=sys.stderr)
+    print(f"   MCP SSE:  http://localhost:{port}/mcp", file=sys.stderr)
+    uvicorn.run("src.http_api:app", host="0.0.0.0", port=port, log_level="info")
     return 0
 
 
@@ -315,4 +356,4 @@ def _print_dict_results(title: str, docs: list[dict]) -> None:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())

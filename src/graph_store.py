@@ -1,375 +1,125 @@
-"""Графовая база знаний для RAG системы."""
+"""GraphStore — граф знаний: рёбра в SQLite/Postgres + NetworkX-кеш в памяти.
 
-import json
+Узлы графа — это документы (таблица documents, см. document_store.py).
+Рёбра живут в таблице graph_edges c FK ON DELETE CASCADE: удаление документа
+автоматически удаляет его рёбра. NetworkX MultiDiGraph строится из таблицы
+при старте и поддерживается инкрементально — BFS-обходы идут по памяти.
+"""
+
 from collections import deque
-from pathlib import Path
 from typing import Optional
 
+import networkx as nx
+
 from src._meta_filter import matches_metadata_filter
+from src.document_store import Database, DocumentStore
 
 
-class GraphKnowledgeBase:
-    """Графовая база знаний для хранения документов и связей между ними с поддержкой персистентности."""
+class GraphStore:
+    """Графовая база: рёбра в SQL, обход через NetworkX."""
 
-    def __init__(self, store_path: Optional[str] = None):
-        """
-        Инициализация графовой базы знаний.
+    def __init__(self, db: Database, doc_store: DocumentStore):
+        self._db = db
+        self._docs = doc_store
+        self._graph = nx.MultiDiGraph()
+        self._build_graph()
 
-        Args:
-            store_path: путь к директории для сохранения графа (опционально)
-        """
-        self._nodes: dict[str, dict] = {}
-        self._edges: dict[str, dict] = {}
-        self._store_path = store_path
-        
-        # Загружаем граф с диска если store_path указан
-        if store_path:
-            self.load()
+    def _build_graph(self) -> None:
+        """Построить NetworkX-кеш из таблицы graph_edges."""
+        self._graph.clear()
+        rows = self._db.execute("SELECT source_id, target_id, relation, weight FROM graph_edges")
+        for source, target, relation, weight in rows:
+            self._graph.add_edge(source, target, key=relation, weight=weight)
 
-    def add_node(self, node_id: str, text: str, metadata: Optional[dict] = None) -> None:
-        """
-        Добавить или обновить узел в графе.
-
-        Args:
-            node_id: уникальный идентификатор узла
-            text: текст узла
-            metadata: метаданные узла
-        """
-        self._nodes[node_id] = {
-            "text": text,
-            "metadata": metadata or {},
-            "tokens": text.split()
-        }
-        
-        # Сохраняем граф на диск если store_path указан
-        if self._store_path:
-            self.save()
+    # -- mutation ---------------------------------------------------------
 
     def add_edge(self, source_id: str, target_id: str, relation: str, weight: float = 1.0) -> None:
-        """
-        Добавить или обновить ребро между узлами.
-
-        Args:
-            source_id: идентификатор исходного узла
-            target_id: идентификатор целевого узла
-            relation: тип отношения
-            weight: вес ребра
-
-        Raises:
-            ValueError: если один из узлов не существует
-        """
-        if source_id not in self._nodes:
+        if self._docs.get(source_id) is None:
             raise ValueError(f"Source node '{source_id}' does not exist")
-        if target_id not in self._nodes:
+        if self._docs.get(target_id) is None:
             raise ValueError(f"Target node '{target_id}' does not exist")
+        self._db.execute(
+            "INSERT INTO graph_edges (source_id, target_id, relation, weight) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (source_id, target_id, relation) DO UPDATE SET weight=excluded.weight",
+            (source_id, target_id, relation, weight),
+        )
+        self._graph.add_edge(source_id, target_id, key=relation, weight=weight)
 
-        edge_key = f"{source_id}::{relation}::{target_id}"
-        self._edges[edge_key] = {
-            "source": source_id,
-            "target": target_id,
-            "relation": relation,
-            "weight": weight
-        }
-        
-        # Сохраняем граф на диск если store_path указан
-        if self._store_path:
-            self.save()
+    def remove_edge(self, source_id: str, target_id: str, relation: str) -> None:
+        self._db.execute(
+            "DELETE FROM graph_edges WHERE source_id = ? AND target_id = ? AND relation = ?",
+            (source_id, target_id, relation),
+        )
+        if self._graph.has_edge(source_id, target_id, key=relation):
+            self._graph.remove_edge(source_id, target_id, key=relation)
 
-    def search(self, query: str, k: int = 5, expand_relations: bool = True) -> list[tuple[str, str, float, dict]]:
+    def delete_document(self, doc_id: str) -> None:
+        """Убрать узел из кеша (строки graph_edges удаляет FK CASCADE)."""
+        if self._graph.has_node(doc_id):
+            self._graph.remove_node(doc_id)
+
+    def delete_all(self) -> None:
+        self._db.execute("DELETE FROM graph_edges")
+        self._graph.clear()
+
+    # -- traversal --------------------------------------------------------
+
+    def get_related(
+        self,
+        node_id: str,
+        max_depth: int = 1,
+        direction: str = "both",
+        metadata_filter: Optional[dict] = None,
+    ) -> list[tuple[str, str, str, float, str]]:
+        """BFS от узла. Возвращает [(source, target, relation, weight, 'out'|'in')].
+
+        metadata_filter применяется к соседнему узлу: рёбра к узлам,
+        не проходящим фильтр, исключаются.
         """
-        Поиск по тексту узлов с BM25-like scoring.
-
-        Args:
-            query: поисковый запрос
-            k: количество результатов
-            expand_relations: расширять ли на связанные узлы
-
-        Returns:
-            список кортежей (node_id, text, score, metadata)
-        """
-        query_tokens = query.split()
-        if not query_tokens:
+        if not self._graph.has_node(node_id):
             return []
 
-        # Вычисляем BM25-like score для каждого узла
-        scores = []
-        for node_id, node_data in self._nodes.items():
-            tokens = node_data["tokens"]
-            if not tokens:
-                scores.append((node_id, 0.0))
-                continue
+        meta_cache: dict[str, Optional[dict]] = {}
 
-            # TF-IDF like scoring: считаем частоту терминов
-            score = 0.0
-            for token in query_tokens:
-                token_count = tokens.count(token)
-                if token_count > 0:
-                    # Простой BM25-like score
-                    tf = token_count / len(tokens)
-                    score += tf
-
-            scores.append((node_id, score))
-
-        # Сортируем по score
-        scores.sort(key=lambda x: x[1], reverse=True)
-
-        # Берем top-k
-        top_k = scores[:k]
-        results = []
-
-        score = 0.0  # инициализируем для LSP; будет перезаписан в цикле ниже
-        for node_id, score in top_k:
-            node_data = self._nodes[node_id]
-            results.append((node_id, node_data["text"], score, node_data["metadata"]))
-
-        # Расширяем на связанные узлы
-        if expand_relations and results:
-            seen_ids = {node_id for node_id, _, _, _ in results}
-            # Собираем явные score для каждого node_id
-            node_scores = {node_id: sc for node_id, sc in top_k}
-            for node_id, _, _, _ in results:
-                related = self.get_related(node_id, max_depth=1)
-                for source, target, relation, weight, _dir in related:
-                    if target not in seen_ids and target in self._nodes:
-                        target_data = self._nodes[target]
-                        # Score для связанных узлов - уменьшаем на вес ребра
-                        node_score = node_scores.get(node_id, score)
-                        related_score = node_score * weight * 0.5
-                        results.append((target, target_data["text"], related_score, target_data["metadata"]))
-                        seen_ids.add(target)
-
-        # Сортируем финальные результаты по score
-        results.sort(key=lambda x: x[2], reverse=True)
-
-        return results
-
-    def get_related(self, node_id: str, max_depth: int = 1, direction: str = "both",
-                    metadata_filter: Optional[dict] = None) -> list[tuple[str, str, str, float, str]]:
-        """
-        Получить связанные узлы через BFS (двунаправленный).
-
-        Args:
-            node_id: идентификатор узла
-            max_depth: максимальная глубина обхода
-            direction: "out" — только исходящие, "in" — только входящие,
-                       "both" — оба направления (по умолчанию)
-            metadata_filter: опциональный фильтр по метаданным соседних узлов
-                ({key: scalar | list[scalar]}, AND-комбинация). None/{} — без фильтра.
-                Ребро исключается, если соседний (neighbor) узел не проходит фильтр.
-
-        Returns:
-            список кортежей (source_id, target_id, relation, weight, direction)
-        """
-        if node_id not in self._nodes:
-            return []
+        def neighbor_passes(neighbor: str) -> bool:
+            if not metadata_filter:
+                return True
+            if neighbor not in meta_cache:
+                doc = self._docs.get(neighbor)
+                meta_cache[neighbor] = doc["metadata"] if doc else None
+            return matches_metadata_filter(meta_cache[neighbor], metadata_filter)
 
         result = []
-        visited_edges = set()
-
-        # BFS
-        queue = deque([(node_id, 0)])  # (current_node, depth)
-        visited_nodes_at_depth = {node_id: 0}
+        visited_edges: set[tuple[str, str, str]] = set()
+        queue = deque([(node_id, 0)])
+        seen_depth = {node_id: 0}
 
         while queue:
             current, depth = queue.popleft()
-
             if depth >= max_depth:
                 continue
 
-            # Ищем все рёбра от current
-            for edge_key, edge_data in self._edges.items():
-                edge_dir = None
-                neighbor = None
+            candidates = []
+            if direction in ("out", "both"):
+                for _, target, relation, data in self._graph.out_edges(current, keys=True, data=True):
+                    candidates.append((current, target, relation, data.get("weight", 1.0), "out", target))
+            if direction in ("in", "both"):
+                for source, _, relation, data in self._graph.in_edges(current, keys=True, data=True):
+                    candidates.append((source, current, relation, data.get("weight", 1.0), "in", source))
 
-                # Исходящее ребро: current -> target
-                if direction in ("out", "both") and edge_data["source"] == current:
-                    edge_dir = "out"
-                    neighbor = edge_data["target"]
-
-                # Входящее ребро: source -> current (т.е. current = target)
-                if direction in ("in", "both") and edge_data["target"] == current:
-                    edge_dir = "in"
-                    neighbor = edge_data["source"]
-
-                if edge_dir is not None and edge_key not in visited_edges:
-                    # D-функционал: post-filter соседнего узла по его метаданным
-                    if metadata_filter and neighbor in self._nodes:
-                        neighbor_meta = self._nodes[neighbor].get("metadata")
-                        if not matches_metadata_filter(neighbor_meta, metadata_filter):
-                            continue
-                    visited_edges.add(edge_key)
-                    result.append((
-                        edge_data["source"],
-                        edge_data["target"],
-                        edge_data["relation"],
-                        edge_data["weight"],
-                        edge_dir,
-                    ))
-
-                    # Добавляем neighbour в очередь для дальнейшего обхода
-                    if neighbor not in visited_nodes_at_depth or visited_nodes_at_depth[neighbor] > depth + 1:
-                        visited_nodes_at_depth[neighbor] = depth + 1
-                        queue.append((neighbor, depth + 1))
+            for source, target, relation, weight, edge_dir, neighbor in candidates:
+                edge_key = (source, target, relation)
+                if edge_key in visited_edges:
+                    continue
+                if not neighbor_passes(neighbor):
+                    continue
+                visited_edges.add(edge_key)
+                result.append((source, target, relation, weight, edge_dir))
+                if neighbor not in seen_depth or seen_depth[neighbor] > depth + 1:
+                    seen_depth[neighbor] = depth + 1
+                    queue.append((neighbor, depth + 1))
 
         return result
-
-    def get_all_node_ids(self) -> set[str]:
-        """Получить множество всех node_id в графе."""
-        return set(self._nodes.keys())
-
-    def remove_phantom_edges(self, valid_ids: set[str]) -> int:
-        """Удалить рёбра, чьи source или target не входят в valid_ids.
-
-        Args:
-            valid_ids: множество валидных идентификаторов узлов
-
-        Returns:
-            количество удалённых рёбер
-        """
-        keys_to_remove = []
-        for edge_key, edge_data in self._edges.items():
-            if edge_data["source"] not in valid_ids or edge_data["target"] not in valid_ids:
-                keys_to_remove.append(edge_key)
-        for key in keys_to_remove:
-            del self._edges[key]
-        if keys_to_remove and self._store_path:
-            self.save()
-        return len(keys_to_remove)
-
-    def remove_phantom_nodes(self, valid_ids: set[str]) -> int:
-        """Удалить узлы, не входящие в valid_ids.
-
-        Args:
-            valid_ids: множество валидных идентификаторов
-
-        Returns:
-            количество удалённых узлов
-        """
-        keys_to_remove = [nid for nid in self._nodes if nid not in valid_ids]
-        for nid in keys_to_remove:
-            self.remove_node(nid)
-        return len(keys_to_remove)
-
-    def get_relation_types(self) -> list[str]:
-        """
-        Получить список уникальных типов отношений.
-
-        Returns:
-            список уникальных relation
-        """
-        relations = set()
-        for edge_data in self._edges.values():
-            relations.add(edge_data["relation"])
-        return list(relations)
-
-    def stats(self) -> dict:
-        """
-        Получить статистику графа.
-
-        Returns:
-            dict с total_nodes, total_edges, relation_types
-        """
-        return {
-            "total_nodes": len(self._nodes),
-            "total_edges": len(self._edges),
-            "relation_types": self.get_relation_types()
-        }
-
-    def remove_node(self, node_id: str) -> None:
-        """
-        Удалить узел и все связанные с ним рёбра.
-
-        Args:
-            node_id: идентификатор узла
-        """
-        if node_id not in self._nodes:
-            return
-
-        # Удаляем узел
-        del self._nodes[node_id]
-
-        # Удаляем все рёбра, связанные с этим узлом
-        edges_to_remove = []
-        for edge_key, edge_data in self._edges.items():
-            if edge_data["source"] == node_id or edge_data["target"] == node_id:
-                edges_to_remove.append(edge_key)
-
-        for edge_key in edges_to_remove:
-            del self._edges[edge_key]
-        
-        # Сохраняем граф на диск если store_path указан
-        if self._store_path:
-            self.save()
-
-    def remove_edge(self, source_id: str, target_id: str, relation: str) -> None:
-        """
-        Удалить конкретное ребро.
-
-        Args:
-            source_id: идентификатор исходного узла
-            target_id: идентификатор целевого узла
-            relation: тип отношения
-        """
-        edge_key = f"{source_id}::{relation}::{target_id}"
-        if edge_key in self._edges:
-            del self._edges[edge_key]
-        
-        # Сохраняем граф на диск если store_path указан
-        if self._store_path:
-            self.save()
-
-    def save(self) -> None:
-        """
-        Сохранить граф на диск в формате JSON.
-
-        Сохраняет:
-        - nodes: узлы графа
-        - edges: рёбра графа
-        """
-        if not self._store_path:
-            return
-        
-        # Создаем директорию если не существует
-        store_path = Path(self._store_path)
-        store_path.mkdir(parents=True, exist_ok=True)
-        
-        # Путь к файлу графа
-        graph_file = store_path / "graph_index.json"
-        
-        # Данные для сохранения
-        data = {
-            "nodes": self._nodes,
-            "edges": self._edges
-        }
-        
-        # Сохраняем в JSON
-        with open(graph_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
-    def load(self) -> bool:
-        """
-        Загрузить граф с диска.
-
-        Returns:
-            True если успешно загружено, False если файла нет
-        """
-        if not self._store_path:
-            return False
-        
-        # Путь к файлу графа
-        graph_file = Path(self._store_path) / "graph_index.json"
-        
-        if not graph_file.exists():
-            return False
-        
-        # Загружаем из JSON
-        with open(graph_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        self._nodes = data.get("nodes", {})
-        self._edges = data.get("edges", {})
-        
-        return True
 
     def get_edges_batch(
         self,
@@ -378,59 +128,78 @@ class GraphKnowledgeBase:
         relation_type_filter: Optional[list[str]] = None,
         metadata_filter: Optional[dict] = None,
     ) -> dict[str, dict[str, list[dict]]]:
-        """Получить связи для нескольких узлов (batch).
-
-        Для каждого узла из node_ids возвращает словарь связанных узлов
-        с информацией о рёбрах. Поддерживает BFS-обход до max_depth.
-
-        Args:
-            node_ids: набор идентификаторов узлов
-            max_depth: глубина BFS (0 = только прямые соседи)
-            relation_type_filter: список допустимых типов связей (None = все)
-            metadata_filter: фильтр по метаданным соседних узлов
-
-        Returns:
-            {source_id: {target_id: [{relation, weight, direction, depth}, ...]}}
-        """
+        """Связи для набора узлов: {node_id: {neighbor_id: [{relation, weight, direction}]}}."""
         result: dict[str, dict[str, list[dict]]] = {}
-
         for node_id in node_ids:
-            if node_id not in self._nodes:
+            if not self._graph.has_node(node_id):
                 continue
-            edges = self.get_related(
-                node_id,
-                max_depth=max_depth,
-                metadata_filter=metadata_filter,
-            )
             links: dict[str, list[dict]] = {}
-            for source, target, relation, weight, direction in edges:
-                # Relation type filter
+            for source, target, relation, weight, edge_dir in self.get_related(
+                node_id, max_depth=max_depth, metadata_filter=metadata_filter
+            ):
                 if relation_type_filter is not None and relation not in relation_type_filter:
                     continue
-                # Определяем neighbour_id
-                neighbour = target if direction == "out" else source
-                if neighbour not in links:
-                    links[neighbour] = []
-                links[neighbour].append({
-                    "relation": relation,
-                    "weight": weight,
-                    "direction": direction,
-                })
+                neighbor = target if edge_dir == "out" else source
+                links.setdefault(neighbor, []).append(
+                    {"relation": relation, "weight": weight, "direction": edge_dir}
+                )
             result[node_id] = links
-
         return result
 
-    def clear(self) -> None:
+    # -- compatibility shims for graph_viz.py --------------------------------
+
+    @property
+    def _nodes(self) -> dict:
+        """Совместимость с graph_viz: dict {node_id: {text, metadata}}."""
+        result: dict = {}
+        for nid in self._graph.nodes():
+            doc = self._docs.get(nid)
+            if doc:
+                result[nid] = {"text": doc["text"], "metadata": doc.get("metadata", {})}
+        return result
+
+    @property
+    def _edges(self) -> dict:
+        """Совместимость с graph_viz: dict {idx: {source, target, relation, weight}}."""
+        result: dict = {}
+        for i, (s, t, r, w) in enumerate(self.get_all_edges()):
+            result[i] = {"source": s, "target": t, "relation": r, "weight": w}
+        return result
+
+    # -- maintenance --------------------------------------------------------
+
+    def remove_phantom_edges(self, valid_ids: set[str]) -> int:
+        """Удалить рёбра, ссылающиеся на несуществующие документы.
+
+        При FK CASCADE фантомы невозможны, но метод сохранён для sync-логики
+        (например, после ручного вмешательства в базу).
         """
-        Очистить все узлы и рёбра.
-        
-        Если store_path указан — удаляет файл с диска.
-        """
-        self._nodes.clear()
-        self._edges.clear()
-        
-        # Удаляем файл с диска если store_path указан
-        if self._store_path:
-            graph_file = Path(self._store_path) / "graph_index.json"
-            if graph_file.exists():
-                graph_file.unlink()
+        rows = self._db.execute("SELECT source_id, target_id, relation FROM graph_edges")
+        removed = 0
+        for source, target, relation in rows:
+            if source not in valid_ids or target not in valid_ids:
+                self.remove_edge(source, target, relation)
+                removed += 1
+        return removed
+
+    def get_all_edges(self) -> list[tuple[str, str, str, float]]:
+        return [
+            (s, t, r, d.get("weight", 1.0))
+            for s, t, r, d in self._graph.edges(keys=True, data=True)
+        ]
+
+    def get_relation_types(self) -> list[str]:
+        return sorted({r for _, _, r in self._graph.edges(keys=True)})
+
+    def degree(self, node_id: str) -> int:
+        if not self._graph.has_node(node_id):
+            return 0
+        return self._graph.degree(node_id)
+
+    def stats(self) -> dict:
+        """Статистика: узлы = документы с рёбрами + все документы стора."""
+        return {
+            "total_nodes": self._docs.count(),
+            "total_edges": self._graph.number_of_edges(),
+            "relation_types": self.get_relation_types(),
+        }

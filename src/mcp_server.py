@@ -18,8 +18,8 @@ TOOL_DEFS = [
         name="rag_add_document",
         description=(
             "Add a text document to the knowledge base. The document is indexed in all "
-            "three stores: vector (ChromaDB, via embeddings), BM25 (keyword index), and "
-            "graph (as a new node). Use this to store any textual knowledge — architectural "
+            "stores: vector (Qdrant, dense embeddings), BM25 (Qdrant sparse vectors), and "
+            "the document/graph database. Use this to store any textual knowledge — architectural "
             "decisions, discovered patterns, bug notes, specifications, summaries — that "
             "future searches should retrieve. `meta` is optional and persists verbatim: it "
             "is echoed back unchanged in search/get/list results, so callers can later "
@@ -47,6 +47,11 @@ TOOL_DEFS = [
                         "results by source, type, project, etc."
                     ),
                     "default": None,
+                },
+                "extract_graph": {
+                    "type": "boolean",
+                    "description": "Auto-extract entity-relation graph from text via Ollama LLM (Qwen3-4B). Default false.",
+                    "default": False,
                 },
             },
             "required": ["text"],
@@ -282,6 +287,16 @@ TOOL_DEFS = [
                     "description": "Optional filter on neighbour node metadata for relations. null/omitted = no filter.",
                     "default": None,
                 },
+                "rerank": {
+                    "type": "boolean",
+                    "description": "Re-rank final candidates via CrossEncoder (BGE-reranker-v2-m3). null/omitted = use RERANK_ENABLED env.",
+                    "default": None,
+                },
+                "query_expansion": {
+                    "type": "boolean",
+                    "description": "Generate alternative query phrasings via a small LLM and merge results via RRF. null/omitted = use QUERY_EXPANSION_ENABLED env.",
+                    "default": None,
+                },
             },
             "required": ["query"],
         },
@@ -486,6 +501,34 @@ TOOL_DEFS = [
             },
         },
     ),
+    Tool(
+        name="rag_add_structured",
+        description=(
+            "Index a structured code repository in repomix JSON format. "
+            "The JSON must contain 'repository' (string), 'structure' (list of file paths), "
+            "and 'files' (dict of path -> {content, language?, size?}). "
+            "Each file is indexed as a separate document with metadata "
+            "{source, path, language, type: file}. The directory tree is indexed as "
+            "a 'structure' document. Files in the same directory are auto-linked "
+            "with 'sibling' relations. Returns {status, structure_doc_id, "
+            "file_doc_ids: dict[path->doc_id], files_count, errors}."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "JSON string in repomix format.",
+                },
+                "extract_graph": {
+                    "type": "boolean",
+                    "description": "Extract entity-relation graph from each file (requires Ollama). Default false.",
+                    "default": False,
+                },
+            },
+            "required": ["content"],
+        },
+    ),
 ]
 
 
@@ -549,7 +592,7 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
         text = p["text"]
         meta = _parse_meta(p.get("meta"))
         existing = rag.is_duplicate(text)
-        doc_id = rag.add_document(text, meta)
+        doc_id = rag.add_document(text, meta, extract_graph=p.get("extract_graph", False))
         return {"doc_id": doc_id, "duplicate": existing is not None}
 
     def _add_file_handler(p):
@@ -584,6 +627,8 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
             rag.search_hybrid(
                 p.get("query", ""), k=p.get("k", 5), alpha=p.get("alpha"),
                 metadata_filter=normalize_metadata_filter(p.get("metadata_filter")),
+                rerank=p.get("rerank"),
+                query_expansion=p.get("query_expansion"),
             ),
             max_chars=p.get("max_chars"),
         )),
@@ -629,6 +674,9 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
             relations_load_type_filter=p.get("relations_load_type_filter"),
             relations_load_meta_filter=normalize_metadata_filter(p.get("relations_load_meta_filter")),
         ),
+        "rag_add_structured": lambda p: rag.index_structured(
+            p["content"], extract_graph=p.get("extract_graph", False),
+        ),
     }
     fn = handlers.get(name)
     if not fn:
@@ -639,8 +687,16 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
 def main():
     from src.rag import RAGSystem
     from src.config import RAGConfig
+    from src.migrate import has_old_data
 
     config = RAGConfig.from_env()
+    if has_old_data(config.store_path):
+        print(
+            f"WARNING: Found old data in {config.store_path} (chroma.sqlite3 / graph_index.json).\n"
+            "These are NOT compatible with the new store (Qdrant + SQLite).\n"
+            "Run `rag-server migrate` to re-index them, or delete them manually.",
+            file=sys.stderr,
+        )
     rag = RAGSystem(config=config)
     server = Server("rag-knowledge-base")
 

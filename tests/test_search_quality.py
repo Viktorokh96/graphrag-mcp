@@ -19,9 +19,6 @@
 """
 
 import math
-import os
-import shutil
-import tempfile
 
 import pytest
 
@@ -40,13 +37,6 @@ K = 5
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _build_rag(store_path: str) -> RAGSystem:
-    """Собрать RAGSystem с детерминированным семантическим mock-генератором."""
-    rag = RAGSystem(store_path=store_path, config=RAGConfig(store_path=store_path))
-    rag.embedding_generator = SemanticMockEmbeddingGenerator()
-    return rag
 
 
 def _index_corpus(rag: RAGSystem) -> dict[str, str]:
@@ -85,15 +75,17 @@ def _precision_at_k(ranked: list[str], judgments: dict[str, int], k: int) -> flo
 
 
 @pytest.fixture
-def rag_with_corpus():
-    """RAG-система с проиндексированным корпусом во временном хранилище."""
-    temp_dir = tempfile.mkdtemp(prefix="rag_quality_")
-    store_path = os.path.join(temp_dir, "rag_data")
-    rag = _build_rag(store_path)
+def rag_with_corpus(make_rag):
+    """RAG-система (Qdrant embedded + SQLite) с проиндексированным корпусом.
+
+    Использует фабрику make_rag из conftest: временный стор в tmp_path и
+    гарантированный rag.close() в teardown (Windows держит файловые локи
+    Qdrant embedded и SQLite до закрытия).
+    """
+    rag = make_rag(embedder=SemanticMockEmbeddingGenerator())
     hint_to_uuid = _index_corpus(rag)
     uuid_to_hint = {u: h for h, u in hint_to_uuid.items()}
-    yield rag, hint_to_uuid, uuid_to_hint
-    shutil.rmtree(temp_dir, ignore_errors=True)
+    return rag, hint_to_uuid, uuid_to_hint
 
 
 # ---------------------------------------------------------------------------
@@ -198,20 +190,21 @@ class TestSemanticSearchQuality:
             )
 
     def test_scores_in_zero_one_range(self, rag_with_corpus):
-        """Скоры семантического поиска лежат в [0, 1] после улучшенной нормализации."""
+        """Скоры семантического поиска лежат в [0, 1] (cosine из Qdrant, клип в [0,1])."""
         rag, _, _ = rag_with_corpus
         results = rag.search("python programming", k=5)
         for _doc_id, _text, score, _meta in results:
             assert 0.0 <= score <= 1.0
 
     def test_better_discrimination_than_old_formula(self, rag_with_corpus):
-        """Улучшенная нормализация даёт широкий разброс скоров (не узкий кластер)."""
+        """Cosine-скоры дают широкий разброс (не узкий кластер как у старой 1/(1+d))."""
         rag, _, _ = rag_with_corpus
         results = rag.search("python programming", k=5)
         scores = [r[2] for r in results]
         if len(scores) >= 2:
             spread = max(scores) - min(scores)
-            # старая формула 1/(1+d) давала разброс ~0.1; новая должна быть шире
+            # формула 1/(1+d) из ChromaDB-эпохи давала разброс ~0.1;
+            # cosine similarity должна различать документы шире
             assert spread > 0.1, f"разброс скоров слишком мал: {spread:.4f}"
 
 

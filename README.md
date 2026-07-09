@@ -1,78 +1,53 @@
-# RAG MCP Tool — Графовая база знаний с гибридным поиском
+# GraphRAG — Графовая база знаний с гибридным поиском
 
-Семантический поиск + BM25 + графовые реляции между документами.  
-Работает как **MCP сервер** (JSON-RPC через stdio) — подключается к Claude Desktop, Cline и любым MCP-клиентам.
+Семантический поиск + BM25 (разреженные векторы) + графовые реляции между документами.
+
+Работает как **MCP сервер** (JSON-RPC через stdio/SSE) или **HTTP REST API** (FastAPI).
 
 ---
 
-## 🔧 Установка
+## Установка
 
 ```bash
-# 1. Клонировать
-git clone <url> && cd graphrag
-
-# 2. Зависимости
-pip install -r requirements.txt
-
-# 3. Настройка провайдера эмбеддингов (см. ниже)
+# Зависимости
+uv sync   # или pip install -e .
 ```
 
-**requirements.txt:**
-```
-chromadb>=0.5.0
-rank-bm25>=0.2.2
-httpx>=0.27.0
-numpy>=1.24.0
-pytest>=8.0.0
-scikit-learn>=1.3.0
-networkx>=3.0
-pyvis>=0.3
-```
+**Зависимости:** Python ≥3.11, Qdrant (embedded), sentence-transformers (BGE-M3), FastAPI, NetworkX, SQLite.
 
 ---
 
-## 🚀 Быстрый старт (CLI)
+## Быстрый старт (CLI)
 
 ```bash
 # Добавить документ
 python -m src.cli add-document --text "Python — мощный язык программирования"
 
-# Добавить файл
-python -m src.cli add-file --path ./doc.txt
-
 # Семантический поиск
 python -m src.cli search --query "язык программирования"
 
-# BM25 поиск (по ключевым словам)
-python -m src.cli bm25-search --query "Python"
+# Гибридный поиск (RRF alpha-dilution)
+python -m src.cli hybrid-search --query "Python" --alpha 0.5
 
-# Гибридный поиск (alpha=null → RAGConfig.default_alpha=0.5, см. ниже)
-python -m src.cli hybrid-search --query "Python"
-# Явно задать баланс: 0.0=BM25, 1.0=семантика
-python -m src.cli hybrid-search --query "Python" --alpha 0.3
+# С CrossEncoder reranking
+python -m src.cli hybrid-search --query "Python" --rerank
 
-# Граф: добавить связь между документами
+# С LLM query expansion
+python -m src.cli search --query "Python" --query-expansion
+
+# Repomix-style индексация кода
+python -m src.cli add-structured --path ./repomix-output.json
+
+# Граф
 python -m src.cli add-relation --source UUID1 --target UUID2 --relation "related_to"
-
-# Граф: получить связанные документы
 python -m src.cli get-related --node UUID --max-depth 2
-
-# Граф: статистика
-python -m src.cli graph-stats
-
-# Граф: визуализация (интерактивный HTML)
 python -m src.cli graph-viz -o graph.html
 
-# Граф: подграф вокруг узла
-python -m src.cli graph-viz --focus UUID --max-depth 2
-
-# Граф: live-сервер с поиском и RAG API (открывает браузер)
-python -m src.cli serve-graph --port 8090
-# Без открытия браузера:
-python -m src.cli serve-graph --no-browser
-
-# Статистика хранилища
+# Статистика
 python -m src.cli stats
+
+# Запуск HTTP сервера
+python -m src.cli --http --port 8765
 
 # Очистить всё
 python -m src.cli clear
@@ -80,31 +55,7 @@ python -m src.cli clear
 
 ---
 
-## 🤖 Подключение как MCP сервер к Claude
-
-### Вариант 1: Claude Desktop
-
-В файле конфигурации `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "rag-knowledge-base": {
-      "command": "python",
-      "args": [
-        "-m", "src.mcp_server"
-      ],
-      "env": {
-        "OPENROUTER_API_KEY": "sk-or-v1-..."
-      }
-    }
-  }
-}
-```
-
-### Вариант 2: Cline / VS Code Extension
-
-В настройках MCP серверов:
+## MCP сервер (Claude / Cline)
 
 ```json
 {
@@ -113,402 +64,166 @@ python -m src.cli clear
       "command": "python",
       "args": ["-m", "src.mcp_server"],
       "env": {
-        "OPENROUTER_API_KEY": "sk-or-v1-..."
+        "EMBEDDING_PROVIDER": "bge-m3"
       }
     }
   }
 }
 ```
 
-### Вариант 3: Любой MCP клиент
-
-Подключитесь к процессу: `python -m src.mcp_server`  
-Протокол: JSON-RPC 2.0 через stdin/stdout
+Или standalone: `python -m src.mcp_server` (stdio) / `python -m src.http_api` (HTTP).
 
 ---
 
-## 📦 MCP Инструменты (доступны Claude после подключения)
+## Инструменты
 
-> Полный актуальный реестр инструментов поддерживается в `AGENTS.md` (раздел
-> «MCP инструменты»). При расхождении — источник истины `AGENTS.md`. Ниже —
-> сводка; детали поведения и edge-cases см. в AGENTS.md и `specifications/api.md`.
+### Поиск
+| Инструмент | Описание |
+|-----------|----------|
+| `rag_search` | Dense + sparse hybrid (Qdrant). Параметры: `rerank`, `query_expansion` |
+| `rag_bm25_search` | Разреженные векторы (Qdrant sparse) |
+| `rag_search_hybrid` | RRF alpha-dilution + language-aware alpha |
 
-### Поиск / Query
+### Индексация
+| Инструмент | Описание |
+|-----------|----------|
+| `rag_add_document` | Текст → DocumentStore + Vector + Graph. Параметр: `extract_graph` |
+| `rag_add_file` | Файл с диска |
+| `rag_add_structured` | Repomix JSON → чанки + sibling связи |
+| `rag_add_relation` | Ребро графа |
 
-Все три поиска принимают `query` (обязательный), `k` (число результатов, по умолчанию 5), `max_chars` (обрезать текст каждого результата до N символов; `null`/опущен = полный текст) и `metadata_filter` (опциональный фильтр по метаданным: dict `key->value`, value — scalar (точное совпадение) или list ($in); все условия объединяются через AND; `null`/`{}` = без фильтра). Возвращают список `{doc_id, text, score, metadata}`, отсортированных по убыванию score.
+### Чтение и управление
+| Инструмент | Описание |
+|-----------|----------|
+| `rag_get_document` | Полный текст с offset/limit пагинацией |
+| `rag_list_documents` | Список с метаданными |
+| `rag_delete_document` | Каскадное удаление (каналы + граф) |
 
-| Инструмент | Параметры | Описание |
-|-----------|-----------|----------|
-| `rag_search` | `query`, `k=5`, `max_chars=null`, `metadata_filter=null` | Семантический поиск через векторные эмбеддинги. Лучше для концептуальных запросов. Нулевой вектор запроса (неизвестные идентификаторы) → пустой результат. Фильтр использует нативный `where` ChromaDB. |
-| `rag_bm25_search` | `query`, `k=5`, `max_chars=null`, `metadata_filter=null` | Ключевой поиск по алгоритму BM25 (Okapi). Лучше для точного совпадения терминов/идентификаторов. Работает офлайн. Фильтр — post-filter результатов. |
-| `rag_search_hybrid` | `query`, `k=5`, `alpha=null`, `max_chars=null`, `metadata_filter=null` | Гибрид через **RRF** (Reciprocal Rank Fusion). Формула alpha-dilution: `score = alpha/(RRF_K+rank_sem+1) + (1-alpha)/(RRF_K+rank_bm25+1)`. `alpha=null` → language-aware: кириллица → `cyrillic_alpha` (env `RAG_CYRILLIC_ALPHA`, default **0.85**), иначе `default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — бенчмарк NDCG@k). `alpha=1.0` = чистая семантика, `alpha=0.0` = чистый BM25. `RRF_K=20`. **Candidate expansion:** `max(k*3, 20)` кандидатов на канал. Фильтр применяется к обоим каналам до fusion. |
-
-### Чтение / Retrieve
-
-| Инструмент | Параметры | Описание |
-|-----------|-----------|----------|
-| `rag_get_document` | `doc_id`, `offset=0`, `limit=null` | Получить один документ по ID с посимвольной пагинацией. |
-
-### Индексация / Store
-
-| Инструмент | Параметры | Описание |
-|-----------|-----------|----------|
-| `rag_add_document` | `text`, `meta=null` | Добавить текстовый документ. `meta`: dict/null/""/JSON-строка/строка. |
-| `rag_add_file` | `filepath`, `meta=null` | Прочитать файл с диска и проиндексировать. |
-| `rag_add_relation` | `source_id`, `target_id`, `relation`, `weight=1.0` | Создать направленное ребро в графе между документами. |
-
-### Управление / Inspect
-
-| Инструмент | Параметры | Описание |
-|-----------|-----------|----------|
-| `rag_list_documents` | `limit=20`, `offset=0`, `max_chars=null`, `metadata_filter=null` | Постраничный список документов. При активном фильтре `total` отражает число подходящих документов. |
-| `rag_delete_document` | `doc_id` | Удалить документ из всех хранилищ. Идемпотентен. |
-| `rag_clear` | — | ⚠️ Удалить ВСЕ данные (необратимо). |
-
-### Графовый обход / Traversal
-
-| Инструмент | Параметры | Описание |
-|-----------|-----------|----------|
-| `rag_get_related` | `node_id`, `max_depth=1`, `metadata_filter=null` | BFS-обход от узла (двунаправленный). Фильтр применяется к соседним узлам — рёбра к узлам, не проходящим фильтр, исключаются. |
-
-### Статистика
-
-| Инструмент | Параметры | Описание |
-|-----------|-----------|----------|
-| `rag_stats` | — | `{total_documents, store_path, dimension}`. |
-| `rag_graph_stats` | — | `{total_nodes, total_edges, relation_types}`. |
+### Граф
+| Инструмент | Описание |
+|-----------|----------|
+| `rag_get_related` | BFS обход (out+in) с фильтром |
+| `rag_graph_stats` | Статистика графа |
 
 ---
 
-## 🧠 Архитектура
+## Фичи
+
+- **BGE-M3** — мультиязычные эмбеддинги 1024d (lazy load, sentence-transformers)
+- **Qdrant** — плотные + разреженные векторы, on_disk, HNSW
+- **SQLite** — DocumentStore как source of truth, синхронизация сторов
+- **CrossEncoder reranker** — `BAAI/bge-reranker-v2-m3` (lazy load)
+- **Query expansion** — Qwen3-1.8B multi-query + RRF слияние
+- **Auto graph extraction** — LLM (Qwen3-4B) + spaCy NER fallback
+- **Repomix индексация** — чанки кода с авто-sibling связями
+- **HTTP REST API** — FastAPI, 15 эндпоинтов, `/docs` (OpenAPI)
+- **MCP SSE** — Streamable HTTP транспорт
+- **Docker** — Dockerfile + docker-compose.yml (Qdrant + Postgres)
+
+---
+
+## Архитектура
 
 ```
-                    ┌──────────────────────┐
-                    │    MCP Client         │
-                    │  (Claude, Cline...)   │
-                    └──────────┬───────────┘
-                               │  JSON-RPC (stdin/stdout)
-                    ┌──────────▼───────────┐
-                    │   src/mcp_server.py   │
-                    └──────────┬───────────┘
-                               │
-          ┌────────────────────┼────────────────────┐
-          │                    │                     │
-          ▼                    ▼                     ▼
-   ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐
-   │ Semantic     │    │  BM25        │    │  GraphKnowledge  │
-   │ Search       │    │  Search      │    │  Base            │
-   │ (OpenRouter) │    │ (rank_bm25)  │    │  (реляции)       │
-   └──────┬───────┘    └──────┬───────┘    └────────┬─────────┘
-          │                   │                      │
-          └───────────────────┼──────────────────────┘
-                              │
-                      ┌────────▼────────┐
-                      │   Hybrid Search  │
-                      │  (RRF + alpha)   │
-                      └─────────────────┘
+MCP Client (stdio)         HTTP Client (REST)
+       │                         │
+       ▼                         ▼
+┌──────────────────────────────────────┐
+│     MCPServer / HttpAPI             │
+│  JSON-RPC stdio + SSE + FastAPI     │
+└──────────┬───────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────┐
+│          RAGSystem                  │
+│  search / hybrid / rerank / expand  │
+└────┬──────┬──────┬──────┬───────────┘
+     │      │      │      │
+     ▼      ▼      ▼      ▼
+┌──────┐ ┌──────┐ ┌──────┐ ┌──────────┐
+│Vector│ │Sparse│ │Graph │ │Document  │
+│Store │ │      │ │Store │ │Store     │
+│(Qdrt)│ │(Qdrt)│ │(Nx)  │ │(SQLite)  │
+└──────┘ └──────┘ └──────┘ └──────────┘
 ```
-
-### Компоненты
 
 | Компонент | Файл | Технология |
 |-----------|------|-----------|
-| Эмбеддинги | `src/embeddings.py` | OpenRouter API (fallback: TF-IDF) |
-| Векторное хранилище | `src/vector_store.py` | ChromaDB (persistent) |
-| BM25 индекс | `src/bm25_index.py` | rank_bm25 (Okapi BM25) |
-| Графовая БЗ | `src/graph_store.py` | собственный in-memory граф + BFS |
-| Оркестратор | `src/rag.py` | объединяет всё + гибридный поиск |
-| MCP сервер | `src/mcp_server.py` | JSON-RPC 2.0 через stdio |
-| CLI | `src/cli.py` | argparse |
-| Визуализация графа | `src/graph_viz.py` | vis.js + networkx |
+| Эмбеддинги | `src/embeddings.py` | BGE-M3 / Ollama / OpenRouter |
+| Векторное хранилище | `src/vector_store.py` | Qdrant (dense + sparse) |
+| Граф | `src/graph_store.py` | SQLite + NetworkX |
+| Реестр документов | `src/vector_store.py` | SQLite (DocumentStore) |
+| Оркестратор | `src/rag.py` | RRF + reranker + expansion + graph |
+| MCP сервер | `src/mcp_server.py` | Python MCP SDK 1.28.1 |
+| HTTP API | `src/http_api.py` | FastAPI |
+| Reranker | `src/reranker.py` | CrossEncoder (lazy load) |
+| Query expansion | `src/query_expander.py` | Ollama Qwen3 |
+| Graph extraction | `src/graph_extractor.py` | LLM + spaCy NER |
+| Структур. индексатор | `src/structured_indexer.py` | repomix JSON → чанки |
+| Визуализация | `src/graph_viz.py` | vis.js + NetworkX |
 
 ---
 
-## 🔍 Как работает граф
-
-Документы становятся **узлами** графа. Между ними можно задавать **отношения**:
-
-```python
-from src.rag import RAGSystem
-
-rag = RAGSystem()
-doc1 = rag.add_document("Django — веб-фреймворк на Python")
-doc2 = rag.add_document("Flask — лёгкий веб-фреймворк")
-
-# Связываем
-rag.add_relation(doc1, doc2, "similar_to")
-rag.add_relation(doc1, doc2, "competitor")
-
-# Поиск найдёт связанные документы автоматически
-results = rag.search("веб-фреймворк", k=1)
-# К результату добавится doc2 через отношение "similar_to"
-```
-
-**Поиск с expansion** — когда находится документ, система проверяет его связи в графе и добавляет связанные узлы в результаты (с пониженным скоринговым весом).
-
----
-
-## 🌐 Live-сервер визуализации
-
-```bash
-# Запуск с RAG поиском (гибридный, через /api/search)
-python -m src.cli serve-graph --port 8090
-
-# Без открытия браузера
-python -m src.cli serve-graph --no-browser
-```
-
-Открывает интерактивный граф в браузере (vis.js) с HTTP API:
-
-| Endpoint | Описание |
-|----------|----------|
-| `/` | HTML-страница с графом и боковой панелью |
-| `/api/search?q=` | Гибридный поиск (`rag.search_hybrid`), возвращает `{results: [{doc_id, text, score, label}]}` |
-| `/api/document/<id>` | Текст документа + связанные узлы (`links` с direction/relation/label) |
-
-**Возможности страницы:**
-- 🔍 Поиск (Ctrl+F) — стоковый результат подсвечивается золотом, размер узла пропорционален score
-- 📋 Выпадающий список результатов — клик по результату фокусирует узел и открывает боковую панель
-- 🖱️ Клик по узлу — открывает панель с текстом документа и связанными узлами
-- 🔗 Связанные узлы в панели — кликабельны, ведут к соответствующему документу
-- ⟳ Reset — сбрасывает поиск, закрывает панель, показывает все узлы
-
----
-
-## 🧪 Тесты
-
-```bash
-# Полный набор
-python3 -m pytest tests/ -v          # 267 тестов, все зелёные
-
-# Качество поиска (NDCG, релевантность, alpha-калибровка)
-python3 -m pytest tests/test_search_quality.py -v   # 30 тестов
-
-# Только MCP-слой
-python3 -m pytest tests/test_mcp_server.py -v
-```
-
-### Бенчмарк выбора alpha
-
-```bash
-# Калибровка default_alpha по NDCG@k на детерминированном корпусе
-python3 -m scripts.benchmark_alpha
-```
-
-Скрипт прогоняет `search_hybrid` по сетке alpha ∈ [0.0, 1.0] (шаг 0.05) на
-корпусе с настоящей семантической структурой (`tests/semantic_mock.py`), считает
-NDCG@5 / P@5 / P@1 и печатает таблицу. Среди alpha в пределах 1% от лучшего NDCG
-(«хорошая область») берётся значение, ближайшее к 0.5 — точке естественного
-баланса каналов (робастный и детерминированный выбор). Результат должен совпадать
-с `RAGConfig.default_alpha`; при расхождении — обновить конфиг.
-
----
-
-## 📁 Структура проекта
-
-```
-graphrag/
-├── src/
-│   ├── bm25_index.py       # BM25 индекс
-│   ├── cli.py              # CLI интерфейс
-│   ├── config.py           # RAGConfig (из env)
-│   ├── embeddings.py       # Эмбеддинги: Ollama / OpenRouter
-│   ├── graph_store.py      # Графовая база знаний
-│   ├── graph_viz.py        # Визуализация графа (vis.js)
-│   ├── index.py            # (устаревший)
-│   ├── mcp_server.py       # MCP сервер (JSON-RPC)
-│   ├── rag.py              # Оркестратор RAG + гибридный поиск
-│   ├── vector_store.py     # ChromaDB обёртка
-│   └── __init__.py
-├── scripts/
-│   ├── __init__.py
-│   └── benchmark_alpha.py # Бенчмарк NDCG@k для выбора default_alpha
-├── tests/
-│   ├── semantic_mock.py    # Детерминированный семантический mock-генератор + корпус
-│   ├── test_search_quality.py # 30 тестов качества поиска (NDCG, alpha, релевантность)
-│   ├── test_bm25.py        # BM25 тесты
-│   ├── test_cli.py         # CLI тесты
-│   ├── test_embeddings.py  # TF-IDF эмбеддинги
-│   ├── test_embeddings_v2.py # OpenRouter/Ollama эмбеддинги
-│   ├── test_graph_store.py # Граф тесты
-│   ├── test_graph_persistence.py
-│   ├── test_bm25_persistence.py
-│   ├── test_dimension_mismatch.py
-│   ├── test_mcp_server.py  # MCP тесты
-│   ├── test_rag.py         # RAG-оркестратор тесты
-│   ├── test_rag_v2.py      # RAG с моками
-│   ├── test_vector_store.py # VectorStore тесты
-│   ├── test_config.py      # RAGConfig тесты
-│   ├── test_index.py       # (устаревший)
-│   └── __init__.py
-├── specifications/
-│   ├── api.md              # API спецификация
-│   ├── architecture.md     # Архитектура
-│   └── cli.md              # CLI спецификация
-├── rag_data/               # ChromaDB на диске (.gitignored)
-├── requirements.txt
-├── .gitignore
-└── README.md
-```
-
----
-
-## 🔐 Переменные окружения
+## Переменные окружения
 
 | Переменная | Описание | По умолчанию |
 |-----------|----------|-------------|
-| `EMBEDDING_PROVIDER` | Провайдер эмбеддингов: `ollama` или `openrouter` | `ollama` |
+| `EMBEDDING_PROVIDER` | Провайдер: `bge-m3`, `ollama`, `openrouter` | `bge-m3` |
 | `OLLAMA_BASE_URL` | URL сервера Ollama | `http://localhost:11434` |
-| `OLLAMA_MODEL` | Модель эмбеддингов Ollama | `qwen3-embedding:8b` |
-| `OLLAMA_DIMENSION` | Размерность эмбеддингов | `4096` |
+| `OLLAMA_MODEL` | Модель эмбеддингов | `qwen3-embedding:8b` |
 | `OPENROUTER_API_KEY` | API ключ OpenRouter | — |
-| `OPENROUTER_MODEL` | Модель эмбеддингов OpenRouter | `openai/text-embedding-3-small` |
+| `QDRANT_URL` | URL Qdrant HTTP (опционально) | — |
 | `STORE_PATH` | Путь к хранилищу | `./rag_data` |
-| `RAG_DEFAULT_ALPHA` | Баланс гибридного поиска (0=BM25, 1=семантика) — выбран бенчмарком NDCG@k | `0.5` |
-| `RAG_HYBRID_EXPAND` | Candidate expansion: `max(k * EXPAND, MIN)` кандидатов из каждого канала | `3` |
-| `RAG_HYBRID_MIN_CANDIDATES` | Минимум кандидатов из каждого канала при fusion | `20` |
+| `RAG_DEFAULT_ALPHA` | Баланс гибрида (0=BM25, 1=семантика) | `0.5` |
+| `RAG_CYRILLIC_ALPHA` | Для кириллических запросов | `0.85` |
+| `RERANK_ENABLED` | Включить reranker по умолч. | `false` |
+| `QUERY_EXPANSION_ENABLED` | Включить expansion по умолч. | `false` |
 
-> **Ollama** — работает сразу после установки (ollama pull qwen3-embedding).  
-> **OpenRouter** — требуется API ключ. Переключиться: `EMBEDDING_PROVIDER=openrouter`
+---
 
-### Быстрый старт с Ollama
+## Тесты
 
 ```bash
-# 1. Установите Ollama: https://ollama.com/
-# 2. Скачайте модель эмбеддингов:
-ollama pull qwen3-embedding
-
-# 3. Всё! Система использует Ollama по умолчанию
-python -m src.cli add-document --text "Hello world"
-python -m src.cli search --query "hello"
+python -m pytest tests/ -v
+python -m pytest tests/test_mcp_server.py -v
+python -m pytest tests/test_search_quality.py -v
 ```
 
-### Переключение на OpenRouter
+## Docker
 
 ```bash
-export EMBEDDING_PROVIDER=openrouter
-export OPENROUTER_API_KEY=sk-or-v1-...
+docker compose up --build
+# HTTP API на порту 8765
 ```
 
 ---
 
-## 💾 Персистентность данных
+## Структура
 
-Все данные сохраняются на диск автоматически:
-
-| Компонент | Путь | Формат |
-|-----------|------|--------|
-| Векторное хранилище | `rag_data/` | ChromaDB (SQLite + binary) |
-| BM25 индекс | `rag_data/bm25_index.pkl` | Pickle |
-| Граф знаний | `rag_data/graph_store.pkl` | Pickle |
-
-**Важно:**
-- Папка `rag_data/` уже добавлена в `.gitignore`
-- Данные сохраняются автоматически при каждом изменении
-- При перезапуске приложения данные загружаются из файлов
-
-**Управление данными:**
-```bash
-# Очистить всё
-python -m src.cli clear
-
-# Удалить вручную
-rm -rf rag_data/
+```
+src/
+├── cli.py              # CLI (argparse)
+├── config.py           # RAGConfig (env)
+├── embeddings.py       # BGE-M3 / Ollama / OpenRouter
+├── graph_extractor.py  # LLM + NER → триплеты
+├── graph_store.py      # SQLite + NetworkX
+├── graph_viz.py        # vis.js визуализация
+├── http_api.py         # FastAPI сервер
+├── mcp_server.py       # MCP (stdio + SSE)
+├── rag.py              # Оркестратор
+├── reranker.py         # CrossEncoder reranker
+├── query_expander.py   # Multi-query expansion
+├── structured_indexer.py  # Repomix JSON
+├── vector_store.py     # Qdrant + DocumentStore
+├── _meta_filter.py     # Фильтр метаданных
+tests/
+├── test_rag.py, test_mcp_server.py, ...  # тесты
+specifications/
+├── api.md, architecture.md, cli.md
 ```
 
 ---
 
-## 🔧 Настройка OpenRouter API
+## История изменений
 
-1. Получите API ключ на https://openrouter.ai/
-2. Создайте файл `.env` на основе `.env.example`:
-   ```bash
-   cp .env.example .env
-   ```
-3. Отредактируйте `.env` и вставьте ваш ключ:
-   ```
-   OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxx
-   ```
-4. Или установите через переменную окружения:
-   ```bash
-   export OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxx
-   ```
-
-**Без API ключа:**
-- ✅ BM25 поиск работает
-- ✅ Графовые функции работают
-- ❌ Семантический поиск недоступен (используется TF-IDF fallback)
-
----
-
-## 🤖 MCP сервер интеграция
-
-Подключите RAG систему как MCP сервер к любым MCP-клиентам:
-
-**Claude Desktop / Cline:**
-```json
-{
-  "mcpServers": {
-    "rag-knowledge-base": {
-      "command": "python",
-      "args": ["-m", "src.mcp_server"],
-      "env": {
-        "EMBEDDING_PROVIDER": "ollama",
-        "OLLAMA_BASE_URL": "http://localhost:11434",
-        "OLLAMA_MODEL": "qwen3-embedding"
-      }
-    }
-  }
-}
-```
-
-Для OpenRouter:
-```json
-{
-  "mcpServers": {
-    "rag-knowledge-base": {
-      "command": "python",
-      "args": ["-m", "src.mcp_server"],
-      "env": {
-        "EMBEDDING_PROVIDER": "openrouter",
-        "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}"
-      }
-    }
-  }
-}
-```
-
-**Запуск standalone:**
-```bash
-python -m src.mcp_server
-```
-
-**Доступные инструменты:**
-- `rag_add_document`, `rag_add_file` — индексация
-- `rag_search`, `rag_bm25_search`, `rag_search_hybrid` — поиск
-- `rag_add_relation`, `rag_get_related`, `rag_graph_stats` — граф
-- `rag_stats`, `rag_clear` — управление
-
----
-
-## 📈 Roadmap
-
-- [x] Семантический поиск (OpenRouter embeddings)
-- [x] BM25 поиск
-- [x] Гибридный поиск (RRF — Reciprocal Rank Fusion)
-- [x] Графовая база знаний с реляциями
-- [x] BFS обход графа (двунаправленный: out + in)
-- [x] MCP сервер + CLI
-- [x] Персистентность данных (BM25 + Graph на диск)
-- [x] Ollama эмбеддинги (локально, по умолчанию)
-- [x] OpenRouter эмбеддинги (внешние, опционально)
-- [x] Конфиг через переменные окружения
-- [x] Улучшенная нормализация семантических скоров (L2 → косинусная сходность, [0,1])
-- [x] Candidate expansion в гибридном поиске (max(k*3, 20) кандидатов)
-- [x] RRF с alpha-dilution (single-channel docs взвешиваются долей канала)
-- [x] Language-aware alpha (кириллица → 0.85, иначе 0.5)
-- [x] Параметризуемый default_alpha через RAGConfig (env RAG_DEFAULT_ALPHA)
-- [x] Бенчмарк NDCG@k для калибровки alpha (`scripts/benchmark_alpha.py`)
-- [x] Тесты качества поиска на детерминированном корпусе (`tests/test_search_quality.py`)
-- [x] Фильтрация по метаданным (metadata_filter: точное совпадение / $in, AND-комбинация)
-- [x] Визуализация графа (vis.js, интерактивный HTML)
+См. `CHANGELOG.md`.

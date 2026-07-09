@@ -2,86 +2,114 @@
 
 ## 1. EmbeddingGenerator (`src/embeddings.py`)
 
-### Класс: `OpenRouterEmbeddingGenerator`
+### Класс: `EmbeddingGenerator` (фабрика / select_embedding)
 
 ```python
+# Основной: BGE-M3 через sentence-transformers
+class BGEEmbeddingGenerator:
+    def __init__(self, model_name: str = "BAAI/bge-m3", device: str = "cpu")
+    def get_embedding(self, text: str) -> list[float]
+    def get_embeddings(self, texts: list[str]) -> list[list[float]]
+    def get_dimension(self) -> int  # 1024
+
+# Fallback: Ollama
+class OllamaEmbeddingGenerator:
+    def __init__(self, base_url: str = "http://localhost:11434", model: str = "qwen3-embedding:8b")
+    def get_embedding(self, text: str) -> list[float]
+    def get_embeddings(self, texts: list[str]) -> list[list[float]]
+    def get_dimension(self) -> int  # 4096
+
+# Альтернатива: OpenRouter
 class OpenRouterEmbeddingGenerator:
-    def __init__(self, api_key: str | None = None, model: str = "openai/text-embedding-3-small")
+    def __init__(self, api_key: str, model: str = "openai/text-embedding-3-small")
     def get_embedding(self, text: str) -> list[float]
     def get_embeddings(self, texts: list[str]) -> list[list[float]]
     def get_dimension(self) -> int
 ```
 
-**Параметры:**
-- `api_key`: OpenRouter API ключ (из env `OPENROUTER_API_KEY` или аргумент)
-- `model`: модель для эмбеддингов (по умолчанию `openai/text-embedding-3-small`)
-
 **Поведение:**
-- При вызове `get_embedding` делает HTTP POST запрос к `https://openrouter.ai/api/v1/embeddings`
-- Кеширует результаты в памяти (dict text → embedding)
-- При недоступности API использует простейший fallback (TF-IDF как заглушка)
+- Выбор провайдера по env `EMBEDDING_PROVIDER` (bge-m3 / ollama / openrouter)
+- BGE-M3 lazy load (инициализируется при первом вызове)
+- Кеширование результатов (dict text → embedding)
 
-### .env / конфигурация
+**Параметры env:**
 ```bash
+EMBEDDING_PROVIDER=bge-m3
+# Ollama альтернатива:
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen3-embedding:8b
+# OpenRouter:
 OPENROUTER_API_KEY=sk-or-v1-...
 OPENROUTER_MODEL=openai/text-embedding-3-small
 ```
 
 ---
 
-## 2. BM25Index (`src/bm25_index.py`)
-
-### Класс: `BM25Index`
-
-```python
-class BM25Index:
-    def __init__(self)
-    def add_document(self, doc_id: str, text: str, metadata: dict | None = None)
-    def add_documents(self, documents: dict[str, str], metadata: dict[str, dict] | None = None)
-    def search(self, query: str, k: int = 5, metadata_filter: dict | None = None) -> list[tuple[str, str, float, dict]]
-    def clear(self)
-    def stats(self) -> dict
-    def remove(self, doc_id: str)
-```
-
-**Поведение:**
-- Использует `rank_bm25` библиотеку (`BM25Okapi`)
-- Хранит тексты и метаданные отдельно
-- `search()` возвращает `[(doc_id, text, score, metadata), ...]` отсортированные по убыванию score
-- `metadata_filter` — post-filter: документы, чьи метаданные не проходят `matches_metadata_filter()`, исключаются до сортировки/обрезки по k
-- `stats()` возвращает `{"total_documents": int, "total_tokens": int}`
-
----
-
-## 3. VectorStore (`src/vector_store.py`)
+## 2. VectorStore (`src/vector_store.py`)
 
 ### Класс: `VectorStore`
 
 ```python
 class VectorStore:
-    def __init__(self, store_path: str = "./rag_data")
-    def add_document(self, doc_id: str, text: str, embedding: list[float], metadata: dict | None = None)
-    def add_documents(self, documents: dict[str, tuple[str, list[float]]], metadata: dict[str, dict] | None = None)
-    def search(self, query_embedding: list[float], k: int = 5, where: dict | None = None) -> list[tuple[str, str, float, dict]]
-    def list_documents(self, limit: int = 20, offset: int = 0, where: dict | None = None) -> tuple[list[tuple[str, str, dict]], int]
+    def __init__(self, store_path: str = "./rag_data", qdrant_url: str | None = None,
+                 dimension: int = 1024, embedding_provider: str = "bge-m3")
+    def add_document(self, doc_id: str, text: str, embedding: list[float],
+                     metadata: dict | None = None)
+    def add_documents(self, documents: dict[str, tuple[str, list[float]]],
+                      metadata: dict[str, dict] | None = None)
+    def search(self, query_embedding: list[float], k: int = 5,
+               where: dict | None = None) -> list[tuple[str, str, float, dict]]
+    def sparse_search(self, query: str, k: int = 5,
+                      where: dict | None = None) -> list[tuple[str, str, float, dict]]
+    def list_documents(self, limit: int = 20, offset: int = 0,
+                       where: dict | None = None) -> tuple[list[tuple[str, str, dict]], int]
+    def get_document(self, doc_id: str) -> tuple[str, str, dict] | None
     def clear(self)
     def stats(self) -> dict
     def remove(self, doc_id: str)
     def count(self) -> int
     def get_all_texts(self) -> list[str]
+    def get_metadata(self, doc_id: str) -> dict | None
 ```
 
 **Поведение:**
-- Обёртка над ChromaDB (persistent клиент)
-- Коллекция называется `rag_docs`
-- `search()` использует ChromaDB `query()` с `n_results=k`, берёт `max(k*3, 20)` кандидатов для гибридной fusion. Параметр `where` — нативная `where`-клауза ChromaDB (преобразуется из `metadata_filter` через `to_chroma_where()`); `None` — без фильтрации.
-- `list_documents()` принимает `where` для фильтрации списка; при активном фильтре `total` отражает число подходящих документов (считается отдельным `collection.get(where=...)`).
-- Нормализация скора: `score = clip(1 - distance²/2, 0, 1)` — корректное
-  преобразование L2-расстояния в косинусную сходность для L2-нормализованных
-  эмбеддингов. Даёт широкий диапазон скоров [0, 1] вместо узкого кластера
-  (старая формула `1/(1+distance)`).
-- `stats()` возвращает `{"total_documents": int, "store_path": str, "dimension": int}`
-- `get_all_texts()` возвращает все тексты для BM25 индексации
+- Qdrant embedded (local) или HTTP (если указан `qdrant_url`)
+- Две коллекции: `rag_docs` (dense vectors) + `rag_docs_sparse` (sparse vectors)
+- Dense: Cosine distance, HNSW hnsw_config
+- Sparse: Qdrant sparse vector (замена BM25)
+- Нормализация скора: `score = clip(1 - distance²/2, 0, 1)`
+- Фильтр `where` через Qdrant `Filter` (should/must)
+- `_map_filter()`: преобразует `metadata_filter` в Qdrant условия
+- `search()` берёт `max(k*3, 20)` кандидатов для гибридной fusion
+- `stats()` → `{"total_documents": int, "store_path": str, "dimension": int}`
+- `get_document()` → `(doc_id, text, metadata)` или `None`
+- `list_documents()` → `([(doc_id, text, metadata)], total)`
+
+---
+
+## 3. DocumentStore (внутренний, `src/vector_store.py`)
+
+### Класс: `DocumentStore`
+
+```python
+class DocumentStore:
+    def __init__(self, store_path: str = "./rag_data")
+    def add_document(self, doc_id: str, text: str, metadata: dict | None = None,
+                     content_hash: str | None = None)
+    def get_document(self, doc_id: str) -> tuple[str, str, dict, str] | None
+    def get_all(self) -> list[tuple[str, str, dict]]
+    def remove(self, doc_id: str)
+    def count(self) -> int
+    def find_by_hash(self, content_hash: str) -> str | None
+    def clear(self)
+```
+
+**Поведение:**
+- SQLite, таблицы `documents` (id, text, metadata_json, content_hash, created_at)
+- Единый источник правды (`source of truth`) для `rag_list_documents` / `rag_get_document`
+- При добавлении: проверка `content_hash` на дубликат
+- При удалении: каскадное удаление из всех сторов (`remove_from_all`)
+- `_sync_stores()` вызывается при старте: сверяет doc_id между Store/Vector/Graph
 
 ---
 
@@ -91,202 +119,231 @@ class VectorStore:
 
 ```python
 class RAGSystem:
-    def __init__(self, store_path: str = "./rag_data", api_key: str | None = None,
+    def __init__(self, store_path: str = "./rag_data",
                  config: RAGConfig | None = None)
-    def add_document(self, text: str, metadata: dict | None = None) -> str
+    def add_document(self, text: str, metadata: dict | None = None,
+                     extract_graph: bool = False) -> str
     def add_documents(self, texts: list[str], metadata: list[dict] | None = None) -> list[str]
     def add_file(self, filepath: str, metadata: dict | None = None) -> str
-    def search(self, query: str, k: int = 5, metadata_filter: dict | None = None) -> list[tuple[str, str, float, dict]]
-    def bm25_search(self, query: str, k: int = 5, metadata_filter: dict | None = None) -> list[tuple[str, str, float, dict]]
-    def search_hybrid(self, query: str, k: int = 5, alpha: float | None = None, metadata_filter: dict | None = None) -> list[tuple[str, str, float, dict]]
-    def list_documents(self, limit: int = 20, offset: int = 0, max_chars: int | None = None, metadata_filter: dict | None = None) -> dict
-    def get_related(self, node_id: str, max_depth: int = 1, direction: str = "both", metadata_filter: dict | None = None) -> list[tuple[str, str, str, float, str]]
+    def index_structured(self, filepath: str) -> list[str]
+    def search(self, query: str, k: int = 5, metadata_filter: dict | None = None,
+               rerank: bool = False, query_expansion: bool = False) -> list[dict]
+    def bm25_search(self, query: str, k: int = 5,
+                    metadata_filter: dict | None = None) -> list[dict]
+    def search_hybrid(self, query: str, k: int = 5, alpha: float | None = None,
+                      metadata_filter: dict | None = None, rerank: bool = False,
+                      query_expansion: bool = False) -> list[dict]
+    def get_document(self, doc_id: str) -> dict | None
+    def list_documents(self, limit: int = 20, offset: int = 0,
+                       metadata_filter: dict | None = None,
+                       relations_load_depth: int = 1) -> dict
+    def add_relation(self, source_id: str, target_id: str, relation: str,
+                     weight: float = 1.0)
+    def get_related(self, node_id: str, max_depth: int = 1,
+                    metadata_filter: dict | None = None) -> dict
+    def delete_document(self, doc_id: str) -> bool
     def clear(self)
     def stats(self) -> dict
+    def graph_stats(self) -> dict
 ```
 
-**Фильтрация по метаданным (`metadata_filter`):**
-
-Опциональный параметр `metadata_filter` (dict | None, по умолчанию None) есть у
-`search`, `bm25_search`, `search_hybrid`, `list_documents` и `get_related`.
+### Фильтрация по метаданным (`metadata_filter`)
 
 Формат — `dict[str, scalar | list[scalar]]`:
-- Каждая пара `key: value` означает: документ подходит, если `metadata[key] == value`.
-- Если `value` — список, то условие: `metadata[key]` входит в список (семантика `$in`).
-- Все условия объединяются через **AND** (должны выполняться все).
-- `None` или `{}` — фильтр отключён.
+- `key: scalar` → `metadata[key] == value`
+- `key: list` → `metadata[key]` in list ($in)
+- Все условия AND
+- `None` или `{}` → фильтр отключён
 
 Реализация:
-- **VectorStore**: фильтр преобразуется в нативный `where` ChromaDB через
-  `to_chroma_where()` (`src/_meta_filter.py`): scalar → direct equality,
-  list → `{"$in": [...]}`, несколько ключей → `{"$and": [...]}`.
-- **BM25Index**: post-filter результатов через `matches_metadata_filter()`.
-- **GraphKnowledgeBase**: post-filter соседних узлов в `get_related` — рёбра к
-  узлам, не проходящим фильтр, исключаются.
-- **search_hybrid**: фильтр применяется к обоим каналам (semantic + BM25) до fusion.
-- **list_documents**: при активном фильтре `total` отражает число подходящих документов.
+- **VectorStore**: `_map_filter()` → Qdrant Filter (should/must)
+- **GraphStore**: post-filter соседей в `get_related`
 
-**Семантический поиск (`search`):**
-- Возвращает пустой список, если: хранилище пусто, размерность эмбеддинга не
-  совпадает с хранилищем, или вектор запроса нулевой (все слова неизвестны
-  эмбеддинг-модели — например, чистые идентификаторы типа `pytest`/`jwt`).
-  В последнем случае запрос должен обслуживаться BM25-каналом.
+### Гибридный поиск (`search_hybrid`)
 
-**Гибридный поиск (`search_hybrid`):**
-
-Использует **Reciprocal Rank Fusion (RRF)** — объединение через ранги, а не
-линейную комбинацию скоров. RRF устойчив к разным шкалам (семантика в [0,1],
-BM25 не ограничен), не требует нормализации, исключает тай-оффы.
-
+**Reciprocal Rank Fusion (RRF) с alpha-dilution:**
 ```
-RRF_K = 20  # не классическая 60 — для малых корпусов даёт широкий разброс скоров
-
-# Документ из обоих каналов:
-score = alpha / (RRF_K + rank_sem + 1) + (1 - alpha) / (RRF_K + rank_bm25 + 1)
-
-# Только семантический канал:
-score = alpha / (RRF_K + rank_sem + 1)
-
-# Только BM25:
-score = (1 - alpha) / (RRF_K + rank_bm25 + 1)
+RRF_K = 20
+score = alpha/(RRF_K + rank_sem + 1) + (1-alpha)/(RRF_K + rank_bm25 + 1)  # оба канала
+score = alpha/(RRF_K + rank_sem + 1)                                       # sem-only
+score = (1-alpha)/(RRF_K + rank_bm25 + 1)                                   # bm25-only
 ```
 
-**Alpha-dilution:** single-channel документы взвешиваются долей своего канала
-(alpha для sem-only, 1-alpha для bm25-only). Документы с score=0 (single-channel
-при крайнем alpha) исключаются: `alpha=1.0` = чистая семантика (BM25-only
-исключены), `alpha=0.0` = чистый BM25 (sem-only исключены). Документ из обоих
-каналов всегда получает score > 0 при любом alpha > 0.
+**Language-aware alpha:** `alpha=None`
+- Кириллица → `cyrillic_alpha` (0.85)
+- Остальные → `default_alpha` (0.5)
+- Явный `alpha` имеет приоритет
 
-**Language-aware alpha:** при `alpha=None` (по умолчанию):
-- Кириллические запросы (русский и др.) → `cyrillic_alpha` (env
-  `RAG_CYRILLIC_ALPHA`, default **0.85**). BM25 без русского стемминга даёт
-  шумовый сигнал, поэтому семантический канал доминирует.
-- Остальные запросы → `default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** —
-  точка естественного баланса, подтверждённая бенчмарком NDCG@k).
-- Явно переданный `alpha` имеет приоритет.
+**Candidate expansion:** `max(k * 3, 20)` из каждого канала.
 
-- `alpha` за пределами [0, 1] клиппится к границам.
-- **Candidate expansion:** из каждого канала забирается
-  `max(k * hybrid_expand, hybrid_min_candidates)` кандидатов (по умолчанию
-  `max(k*3, 20)`) перед fusion. Это спасает документы, релевантные по одному
-  каналу, но оказавшиеся за пределами top-k по другому.
-
-**При добавлении документа:**
-1. Текст → эмбеддинг-генератор → эмбеддинг
-2. Эмбеддинг → VectorStore (ChromaDB)
-3. Текст → BM25Index
-4. Узел → GraphKnowledgeBase
+**Reranker:** если `rerank=True`, после fusion все кандидаты переранжируются CrossEncoder.
+**Query expansion:** если `query_expansion=True`, перед search генерируются N парафразов, каждый search независимо, затем RRF-слияние.
 
 ---
 
 ## 5. MCPServer (`src/mcp_server.py`)
 
-### Класс: `MCPServer`
+### Инструменты (MCP методы)
 
-```python
-class MCPServer:
-    def __init__(self, rag: RAGSystem)
-    def handle_request(self, request: dict) -> dict
-    def run(self)
-```
+#### Query
+| Инструмент | Параметры | Описание |
+|-----------|-----------|----------|
+| `rag_search` | `query`, `k=5`, `max_chars=2000`, `metadata_filter`, `rerank=false`, `query_expansion=false`, relations params | Dense + sparse hybrid (Qdrant) |
+| `rag_bm25_search` | `query`, `k=5`, `max_chars`, `metadata_filter`, relations params | Sparse vectors (Qdrant) |
+| `rag_search_hybrid` | `query`, `k=5`, `alpha=null`, `max_chars`, `metadata_filter`, `rerank=false`, `query_expansion=false`, relations params | RRF alpha-dilution |
 
-**JSON-RPC Формат запроса:**
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "rag_add_document",
-    "params": {
-        "text": "some text",
-        "meta": {"source": "user"}
-    }
-}
-```
+#### Retrieve
+| Инструмент | Параметры | Описание |
+|-----------|-----------|----------|
+| `rag_get_document` | `doc_id`, `offset=0`, `limit=null`, relations params | Полный текст по ID |
 
-**Ответ:**
-```json
-{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "result": {"doc_id": "uuid", "status": "ok"}
-}
-```
+#### Store
+| Инструмент | Параметры | Описание |
+|-----------|-----------|----------|
+| `rag_add_document` | `text`, `meta=null`, `extract_graph=false` | Добавить документ |
+| `rag_add_file` | `filepath`, `meta=null`, `extract_graph=false` | Проиндексировать файл |
+| `rag_add_structured` | `filepath`, `meta=null` | Repomix JSON → чанки |
+| `rag_add_relation` | `source_id`, `target_id`, `relation`, `weight=1.0` | Ребро графа |
 
-**Инструменты (MCP методы):**
+#### Manage
+| Инструмент | Параметры | Описание |
+|-----------|-----------|----------|
+| `rag_list_documents` | `limit=20`, `offset=0`, `max_chars`, `metadata_filter`, relations params | Список доков |
+| `rag_delete_document` | `doc_id` | Удалить (каскадно) |
+| `rag_clear` | — | Очистить всё |
 
-> Канонический реестр поддерживается в `AGENTS.md` (раздел «MCP инструменты»).
-> При расхождении — источник истины `AGENTS.md`. Ниже — сводка.
+#### Graph
+| Инструмент | Параметры | Описание |
+|-----------|-----------|----------|
+| `rag_get_related` | `node_id`, `max_depth=1`, `metadata_filter` | BFS обход (out+in) |
+| `rag_graph_stats` | — | Статистика графа |
 
-Поиск (все принимают `query`, `k=5`, `max_chars=null`, `metadata_filter=null`;
-возвращают `[{doc_id, text, score, metadata}]` отсортированные по убыванию score):
-1. `rag_search(query, k=5, max_chars=null, metadata_filter=null)` — семантический поиск (эмбеддинги).
-2. `rag_bm25_search(query, k=5, max_chars=null, metadata_filter=null)` — BM25 keyword-поиск.
-3. `rag_search_hybrid(query, k=5, alpha=null, max_chars=null, metadata_filter=null)` — гибрид (RRF);
-   `alpha=null` → language-aware: кириллица → `cyrillic_alpha` (0.85), иначе
-   `default_alpha` (0.5). RRF_K=20, alpha-dilution. `metadata_filter` применяется
-   к обоим каналам до fusion.
-
-Чтение:
-4. `rag_get_document(doc_id, offset=0, limit=null)` → `{doc_id, text, metadata, total_chars, offset, limit}` или null.
-
-Индексация:
-5. `rag_add_document(text, meta=null)` → `{doc_id}`. `meta`: dict/null/""/JSON-строка/строка.
-6. `rag_add_file(filepath, meta=null)` → `{doc_id}`. `meta` как у add_document.
-7. `rag_add_relation(source_id, target_id, relation, weight=1.0)` → `{status: ok}`.
-
-Управление:
-8. `rag_list_documents(limit=20, offset=0, max_chars=null, metadata_filter=null)` → `{documents, total, limit, offset}`. При активном фильтре `total` — число подходящих документов.
-9. `rag_delete_document(doc_id)` → `{status, doc_id, deleted}` (идемпотентен).
-10. `rag_clear()` → `{status: ok}`. ⚠️ необратимо.
-
-Граф:
-11. `rag_get_related(node_id, max_depth=1, metadata_filter=null)` → `{relations: [{source, target, relation, weight, direction}]}`. Фильтр применяется к соседним узлам; рёбра к узлам, не проходящим фильтр, исключаются.
-12. `rag_graph_stats()` → `{total_nodes, total_edges, relation_types}`.
-
-Статистика:
-13. `rag_stats()` → `{total_documents, store_path, dimension}`.
+#### Stats
+| Инструмент | Параметры | Описание |
+|-----------|-----------|----------|
+| `rag_stats` | — | Статистика хранилища |
 
 ---
 
-## 6. GraphKnowledgeBase (`src/graph_store.py`)
+## 6. GraphStore (`src/graph_store.py`)
 
-### Класс: `GraphKnowledgeBase`
+### Класс: `GraphStore`
 
 ```python
-class GraphKnowledgeBase:
+class GraphStore:
     def __init__(self, store_path: str = "./rag_data")
     def add_node(self, node_id: str, metadata: dict | None = None)
-    def add_relation(self, source_id: str, target_id: str, relation: str, weight: float = 1.0)
-    def get_related(self, node_id: str, max_depth: int = 1, direction: str = "both", metadata_filter: dict | None = None) -> list[tuple[str, str, str, float, str]]
+    def add_relation(self, source_id: str, target_id: str, relation: str,
+                     weight: float = 1.0)
+    def get_related(self, node_id: str, max_depth: int = 1,
+                    metadata_filter: dict | None = None) -> list[tuple]
+    def get_edges_batch(self, node_ids: list[str],
+                        type_filter: list[str] | None = None,
+                        meta_filter: dict | None = None,
+                        depth: int = 1) -> dict[str, dict[str, list[dict]]]
+    def remove_node(self, node_id: str)
     def stats(self) -> dict
     def clear(self)
 ```
 
 **Поведение:**
-- Хранит граф знаний in-memory (dict узлов + dict рёбер) с JSON-персистентностью
-- `add_node()` добавляет узел с метаданными
-- `add_relation()` (он же `add_edge()`) добавляет направленное ребро с типом отношения и весом
-- `get_related()` выполняет двунаправленный BFS (out + in) до max_depth, возвращает `[(source, target, relation, weight, direction), ...]`. `direction`: `"out"`/`"in"`/`"both"`. `metadata_filter` — post-filter соседних узлов: рёбра к узлам, чьи метаданные не проходят `matches_metadata_filter()`, исключаются.
-- `stats()` возвращает `{"total_nodes": int, "total_edges": int, "relation_types": list[str]}`
+- SQLite (3 таблицы: `nodes`, `edges`, `node_metadata`) + NetworkX in-memory
+- `get_related()` двунаправленный BFS (out + in), возвращает `[(source, target, relation, weight, direction)]`
+- `get_edges_batch()`: для списка node_id массово грузит рёбра (BFS на каждую)
+- `remove_node()` удаляет узел и все инцидентные рёбра (CASCADE в SQLite)
+- `stats()` → `{"total_nodes", "total_edges", "relation_types"}`
 
-**Пример использования:**
+---
+
+## 7. HttpAPI (`src/http_api.py`)
+
+### FastAPI сервер (порт 8765, docs at /docs)
+
 ```python
-from src.graph_store import GraphKnowledgeBase
-
-graph = GraphKnowledgeBase(store_path="./rag_data")
-
-# Добавляем узлы
-graph.add_node("doc1", {"title": "Python basics"})
-graph.add_node("doc2", {"title": "Python advanced"})
-
-# Добавляем отношение
-graph.add_relation("doc1", "doc2", "prerequisite", weight=1.0)
-
-# Получаем связанные узлы
-related = graph.get_related("doc1", max_depth=1)
-# [("doc1", "doc2", "prerequisite", 1.0)]
-
-# Статистика
-stats = graph.stats()
-# {"total_nodes": 2, "total_edges": 1, "relation_types": ["prerequisite"]}
+app = FastAPI(title="RAG MCP HTTP API", version="0.2.0")
 ```
+
+| Метод | Путь | Параметры | Описание |
+|-------|------|-----------|----------|
+| POST | `/search` | `query, k, max_chars, metadata_filter, rerank, query_expansion` | Гибридный поиск |
+| POST | `/bm25_search` | `query, k, max_chars, metadata_filter` | Sparse vectors |
+| POST | `/hybrid_search` | `query, k, alpha, max_chars, metadata_filter, rerank, query_expansion` | RRF гибрид |
+| GET | `/document/{doc_id}` | `offset, limit` | Полный текст |
+| POST | `/documents` | `text, meta, extract_graph` | Добавить документ |
+| POST | `/file` | `filepath, meta, extract_graph` | Файл |
+| POST | `/structured` | `filepath, meta` | Repomix |
+| GET | `/documents` | `limit, offset` | Список |
+| DELETE | `/documents/{doc_id}` | — | Удалить |
+| POST | `/relations` | `source_id, target_id, relation, weight` | Ребро |
+| GET | `/related/{node_id}` | `max_depth, metadata_filter` | Граф |
+| GET | `/stats` | — | Статистика |
+| GET | `/graph_stats` | — | Статистика графа |
+| DELETE | `/clear` | — | Очистить всё |
+| GET | `/health` | — | Health check |
+
+---
+
+## 8. Reranker (`src/reranker.py`)
+
+```python
+class Reranker:
+    def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3",
+                 device: str = "cpu")
+    def rerank(self, query: str, documents: list[dict], top_k: int | None = None) -> list[dict]
+```
+
+**Поведение:**
+- CrossEncoder, lazy load (инициализация при первом вызове)
+- Принимает список `{doc_id, text, score, metadata}`, возвращает переранжированный список
+- Model config: `RERANK_ENABLED`, `RERANK_MODEL`, `RERANK_DEVICE`, `RERANK_TOP_K_MULTIPLIER`
+- Если CrossEncoder недоступен — fallback (возвращает как есть)
+
+---
+
+## 9. QueryExpander (`src/query_expander.py`)
+
+```python
+class QueryExpander:
+    def __init__(self, model: str = "qwen3:1.8b",
+                 ollama_base_url: str = "http://localhost:11434")
+    def expand(self, query: str, n_queries: int = 3) -> list[str]
+```
+
+**Поведение:**
+- Генерирует N парафразов исходного запроса через Ollama LLM
+- Каждый парафраз → независимый поиск → RRF слияние
+- Config: `QUERY_EXPANSION_ENABLED`, `QUERY_EXPANSION_MODEL`, `QUERY_EXPANSION_COUNT`
+
+---
+
+## 10. GraphExtractor (`src/graph_extractor.py`)
+
+```python
+class GraphExtractor:
+    def __init__(self)
+    def extract(self, text: str, doc_id: str) -> list[tuple[str, str, str, float]]
+    def extract_graph(self, doc_id: str, text: str, graph_store: GraphStore)
+```
+
+**Поведение:**
+- LLM (Qwen3-4B через Ollama) → триплеты `(source, relation, target)`
+- spaCy NER fallback (если LLM не отвечает)
+- `extract_graph()` добавляет узлы и рёбра в GraphStore
+
+---
+
+## 11. StructuredIndexer (`src/structured_indexer.py`)
+
+### Класс: `StructuredIndexer`
+
+```python
+class StructuredIndexer:
+    def __init__(self, rag: RAGSystem)
+    def index(self, filepath: str, metadata: dict | None = None) -> list[str]
+```
+
+**Поведение:**
+- Парсит repomix JSON: `{files: [{path, content, ...}]}`
+- Каждый файл → чанки (по строкам, с контекстом)
+- Авто-создание sibling связей между файлами в одной директории
+- Возвращает список doc_id всех созданных чанков

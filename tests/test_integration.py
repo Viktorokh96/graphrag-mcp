@@ -1,48 +1,17 @@
 """Интеграционные тесты для RAG MCP server.
 
 Покрывают полные сценарии через handle_tool_call с временным хранилищем.
-Все данные создаются и удаляются в tempfile.mkdtemp() — реальные данные не затрагиваются.
+Используется фикстура `rag` из conftest.py: RAGSystem на Qdrant + SQLite во
+временном каталоге с HashEmbeddingGenerator и автоматическим close().
 
 Сценарии:
 - Полный lifecycle: add → list → search → delete
 - Пагинация list_documents
 - Графовые связи: add_relation → get_related → delete с рёбрами
 - Идемпотентное удаление
-- Удаление очищает vector + BM25 + graph одновременно
+- Удаление очищает vector store (dense + BM25) и граф одновременно
 - Совместное использование search (semantic, BM25, hybrid) после удаления
 """
-
-import os
-import shutil
-import tempfile
-from unittest.mock import MagicMock, patch
-
-import pytest
-
-
-def _mock_embedding_response():
-    """Мок ответа embeddings API (OpenRouter/OpenAI)."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"data": [{"embedding": [0.1, 0.2, 0.3]}]}
-    mock_client = MagicMock()
-    mock_client.__enter__.return_value = mock_client
-    mock_client.post.return_value = mock_response
-    return mock_client
-
-
-@pytest.fixture
-def rag():
-    """Создать RAGSystem во временном каталоге."""
-    temp_dir = tempfile.mkdtemp()
-    store_path = os.path.join(temp_dir, "rag_data")
-    with patch("src.embeddings.httpx.Client") as mock_httpx:
-        mock_httpx.return_value = _mock_embedding_response()
-        from src.rag import RAGSystem
-        system = RAGSystem(store_path=store_path, api_key="test-key")
-        yield system
-    if os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir)
 
 
 def _call(rag, tool_name, **kwargs):

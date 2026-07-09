@@ -1,6 +1,7 @@
 # AGENTS — graphrag
 
-MCP-сервер графовой базы знаний с гибридным поиском (семантический + BM25 + граф).
+MCP-сервер графовой базы знаний с гибридным поиском (dense + sparse + граф).
+Стек: BGE-M3, Qdrant, SQLite, FastAPI, CrossEncoder, NetworkX.
 
 ## Quick Start
 
@@ -8,44 +9,57 @@ MCP-сервер графовой базы знаний с гибридным п
 cd ~/Work/graphrag
 
 # Запуск MCP-сервера (stdio)
-EMBEDDING_PROVIDER=ollama python3 -m src.mcp_server
+EMBEDDING_PROVIDER=bge-m3 python3 -m src.mcp_server
+
+# HTTP API (FastAPI)
+python3 -m src.http_api
 
 # Тесты
 python3 -m pytest tests/ -v
 
-# CLI (если нужен)
+# CLI
 python3 -m src.cli --help
-
-# Визуализация графа
 python3 -m src.cli graph-viz -o rag_data/graph.html
 ```
 
 ## Структура
 
-| Файл / Каталог | Описание |
+| Файл | Описание |
 |------|----------|
-| `src/mcp_server.py` | MCP-сервер (JSON-RPC over stdio) |
+| `src/mcp_server.py` | MCP-сервер (JSON-RPC stdio + SSE) |
+| `src/http_api.py` | FastAPI HTTP REST API (порт 8765) |
 | `src/rag.py` | RAGSystem — оркестратор поиска |
-| `src/embeddings.py` | Эмбеддинги: Ollama (локально) / OpenRouter |
-| `src/vector_store.py` | ChromaDB векторное хранилище |
-| `src/bm25_index.py` | BM25 индекс ключевых слов |
-| `src/graph_store.py` | Графовая база знаний (реляции) |
+| `src/embeddings.py` | Эмбеддинги: BGE-M3 / Ollama / OpenRouter |
+| `src/vector_store.py` | Qdrant (dense + sparse) + DocumentStore (SQLite) |
+| `src/graph_store.py` | Граф: SQLite + NetworkX |
+| `src/reranker.py` | CrossEncoder reranker (lazy load) |
+| `src/query_expander.py` | Multi-query expansion (Ollama LLM) |
+| `src/graph_extractor.py` | Авто-извлечение графа (LLM + NER) |
+| `src/structured_indexer.py` | Repomix JSON → чанки + sibling связи |
 | `src/config.py` | RAGConfig (из env) |
 | `src/graph_viz.py` | Визуализация графа (vis.js) |
-| `src/cli.py` | CLI |
-| `src/index.py` | Индексация |
-| `tests/` | pytest тесты (287 шт) |
+| `src/cli.py` | CLI (argparse) |
+| `src/__init__.py` | init |
+| `src/_meta_filter.py` | Фильтр метаданных |
+| `scripts/benchmark_alpha.py` | Бенчмарк NDCG@k для default_alpha |
+| `tests/` | pytest тесты |
+| `specifications/` | api.md, architecture.md, cli.md |
 | `rag_data/` | Хранилище (gitignored) |
 | `.env.example` | Пример конфигурации env |
 | `pytest.ini` | Конфиг pytest |
+| `CHANGELOG.md` | История изменений |
+| `Dockerfile`, `docker-compose.yml` | Docker |
 
 ## Провайдеры эмбеддингов
 
-По умолчанию — **Ollama** (локально, `qwen3-embedding:8b`, 4096-мерные).
-Альтернатива — OpenRouter (нужен API-ключ). См. `.env.example`.
+По умолчанию — **BGE-M3** (sentence-transformers, 1024d, lazy load).
+Альтернативы — Ollama (4096d) или OpenRouter.
 
 ```bash
-# Ollama (по умолчанию)
+# BGE-M3 (по умолчанию)
+export EMBEDDING_PROVIDER=bge-m3
+
+# Ollama
 export EMBEDDING_PROVIDER=ollama
 export OLLAMA_BASE_URL=http://localhost:11434
 export OLLAMA_MODEL=qwen3-embedding:8b
@@ -57,160 +71,121 @@ export OPENROUTER_API_KEY=sk-or-v1-...
 
 ## MCP инструменты
 
-Полный актуальный реестр инструментов MCP-сервера (`src/mcp_server.py`, `TOOL_DEFS`).
-Это канонический справочник интерфейса — при изменении `mcp_server.py` обновляйте и этот раздел.
+Полный актуальный реестр — `src/mcp_server.py`, `TOOL_DEFS`.
 
 ### Поиск / Query
 
-Все три поиска принимают `query` (обязательный), `k` (число результатов, по умолчанию 5), `max_chars` (обрезать текст каждого результата до N символов; `null`/опущен = полный текст), `metadata_filter` (опциональный фильтр по метаданным — см. «Замечания по параметрам» ниже), а также опциональные параметры загрузки реляций (`relations_load_depth`, `relations_load_type_filter`, `relations_load_meta_filter`). Возвращают список `{doc_id, text, score, metadata, links}`, отсортированный по убыванию score.
+Все методы принимают: `query` (обяз.), `k=5`, `max_chars=null`, `metadata_filter`, `relations_load_depth=1`, `relations_load_type_filter`, `relations_load_meta_filter`. Возвращают `[{doc_id, text, score, metadata, links}]`.
 
-| Инструмент | Параметры | Описание |
-|-----------|-----------|----------|
-| `rag_search` | `query`, `k=5`, `max_chars=null`, `metadata_filter=null`, `relations_load_depth=1`, `relations_load_type_filter=null`, `relations_load_meta_filter=null` | Семантический поиск через векторные эмбеддинги. Лучше для концептуальных запросов. Фильтр использует нативный `where` ChromaDB. |
-| `rag_bm25_search` | `query`, `k=5`, `max_chars=null`, `metadata_filter=null`, `relations_load_depth=1`, `relations_load_type_filter=null`, `relations_load_meta_filter=null` | Ключевой поиск по алгоритму BM25 (Okapi). Лучше для точного совпадения терминов. Фильтр — post-filter результатов. |
-| `rag_search_hybrid` | `query`, `k=5`, `alpha=null`, `max_chars=null`, `metadata_filter=null`, `relations_load_depth=1`, `relations_load_type_filter=null`, `relations_load_meta_filter=null` | Гибрид через **Reciprocal Rank Fusion (RRF)**. Формула (**alpha-dilution**): каждый канал взвешивается своей долей — `score = alpha/(RRF_K+rank_sem+1) + (1-alpha)/(RRF_K+rank_bm25+1)` для документов из ОБОИХ каналов; sem-only → `alpha/(RRF_K+rank_sem+1)`; bm25-only → `(1-alpha)/(RRF_K+rank_bm25+1)`. Документы с score=0 (single-channel при крайнем alpha) исключаются — поэтому `alpha=1.0` = чистая семантика, `alpha=0.0` = чистый BM25. `RRF_K=20` (не классическая 60) — даёт широкий разброс скоров для малых корпусов. **Language-aware alpha:** `alpha=null` для запросов с кириллицей → `cyrillic_alpha` (env `RAG_CYRILLIC_ALPHA`, default **0.85** — BM25 без русского стемминга шумит, поэтому семантика доминирует); для остальных → `default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — выбран бенчмарком NDCG@k, см. `scripts/benchmark_alpha.py`). Явно переданный `alpha` имеет приоритет. **Candidate expansion:** из каждого канала забирается `max(k*3, 20)` кандидатов перед fusion. Фильтр применяется к обоим каналам до fusion. |
+**Новые параметры:**
+- `rerank` (bool, default false) — CrossEncoder reranking
+- `query_expansion` (bool, default false) — LLM multi-query expansion
+
+| Инструмент | Особенности |
+|-----------|------------|
+| `rag_search` | Dense + sparse (Qdrant). `rerank`, `query_expansion` |
+| `rag_bm25_search` | Разреженные векторы (Qdrant sparse) |
+| `rag_search_hybrid` | RRF alpha-dilution. `alpha=null` → language-aware (кир. 0.85, иначе 0.5). `rerank`, `query_expansion` |
 
 ### Чтение / Retrieve
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_get_document` | `doc_id` (обязательный), `offset=0`, `limit=null`, `relations_load_depth=1`, `relations_load_type_filter=null`, `relations_load_meta_filter=null` | Получить один документ по ID. `offset` — смещение в символах (дефолт 0), `limit` — макс. число возвращаемых символов (`null`/опущен = весь текст начиная с offset). Используется для постраничного чтения больших документов вместо повторного поиска. | `offset` — смещение в символах (дефолт 0), `limit` — макс. число возвращаемых символов (`null`/опущен = весь текст начиная с offset). Используется для постраничного чтения больших документов вместо повторного поиска. |
+| `rag_get_document` | `doc_id`, `offset=0`, `limit=null`, `relations_load_depth=1`, ... | Полный текст с offset/limit пагинацией |
 
 ### Индексация / Store
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_add_document` | `text` (обязательный), `meta=null` | Добавить текстовый документ. Возвращает `{doc_id, status}`. `meta` опционален: dict / null / "" / JSON-строка / произвольная строка (оборачивается в `{"_raw": ...}`). |
-| `rag_add_file` | `filepath` (обязательный), `meta=null` | Прочитать файл с диска и проиндексировать. Нормализация `meta` как у `rag_add_document`. |
-| `rag_add_relation` | `source_id`, `target_id`, `relation` (все обязательные), `weight=1.0` | Создать направленное ребро в графе между двумя документами. `relation` — произвольная строка (`related_to`, `similar_to`, `prerequisite`, ...). |
+| `rag_add_document` | `text`, `meta=null`, `extract_graph=false` | Добавить документ. `extract_graph=true` → LLM триплеты |
+| `rag_add_file` | `filepath`, `meta=null`, `extract_graph=false` | Проиндексировать файл |
+| `rag_add_structured` | `filepath`, `meta=null` | Repomix JSON: чанки кода + sibling связи |
+| `rag_add_relation` | `source_id`, `target_id`, `relation`, `weight=1.0` | Ребро графа |
 
 ### Управление / Inspect
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_list_documents` | `limit=20`, `offset=0`, `max_chars=null`, `metadata_filter=null`, `relations_load_depth=1`, `relations_load_type_filter=null`, `relations_load_meta_filter=null` | Постраничный список документов. `max_chars` обрезает текст каждого документа. `metadata_filter` — опциональный фильтр (см. «Замечания по параметрам»); при активном фильтре `total` отражает число подходящих документов. |
-| `rag_delete_document` | `doc_id` (обязательный) | Удалить документ из всех хранилищ (векторное, BM25, граф). **Идемпотентен** — безопасно повторять. Возвращает `{status, doc_id, deleted}`. |
-| `rag_clear` | — | ⚠️ Удалить ВСЕ данные (необратимо). Использовать с крайней осторожностью. |
+| `rag_list_documents` | `limit=20`, `offset=0`, `max_chars`, `metadata_filter`, relations params | Список документов |
+| `rag_delete_document` | `doc_id` | Каскадное удаление (DocumentStore + Vector + Graph). Идемпотентен |
+| `rag_clear` | — | ⚠️ Удалить ВСЕ данные |
 
-### Графовый обход / Traversal
-
-| Инструмент | Параметры | Описание |
-|-----------|-----------|----------|
-| `rag_get_related` | `node_id` (обязательный), `max_depth=1`, `metadata_filter=null` | BFS-обход от узла в ОБА направления (out + in). `max_depth` — сколько рёбер пройти (1 = прямые соседи). `metadata_filter` применяется к соседним (neighbor) узлам — рёбра к узлам, не проходящим фильтр, исключаются. Возвращает `{relations: [{source, target, relation, weight, direction}]}`. `direction: "out"` — исходящее ребро (source→target), `"in"` — входящее (target←source). |
-
-### Статистика
+### Граф / Статистика
 
 | Инструмент | Параметры | Описание |
 |-----------|-----------|----------|
-| `rag_stats` | — | `{total_documents, store_path, dimension}`. |
-| `rag_graph_stats` | — | `{total_nodes, total_edges, relation_types}`. |
+| `rag_get_related` | `node_id`, `max_depth=1`, `metadata_filter` | BFS обход (out+in). `direction` в каждом ребре |
+| `rag_graph_stats` | — | `{total_nodes, total_edges, relation_types}` |
+| `rag_stats` | — | `{total_documents, store_path, dimension}` |
 
 ### Замечания по параметрам
 
-- `meta` в `rag_add_document` / `rag_add_file` опционален и устойчив к типам: принимает dict, null, пустую строку, JSON-строку, любую другую строку. См. `_parse_meta()` в `src/mcp_server.py`.
-- `max_chars` есть у всех поисков, `rag_list_documents` и (как `limit`) у `rag_get_document`. Передавайте конечное значение (например 1500–3000) на поисках, чтобы не переполнять контекст; полный текст забирайте через `rag_get_document` по `doc_id`.
-- `k` (число результатов) есть у всех поисков, по умолчанию 5.
-- `metadata_filter` (опциональный, `null` по умолчанию) есть у `rag_search`, `rag_bm25_search`, `rag_search_hybrid`, `rag_list_documents` и `rag_get_related`. Формат — `dict[str, scalar | list[scalar]]`: каждая пара `key:value` — условие, что `metadata[key] == value`; если `value` — список, то условие `metadata[key]` входит в список (семантика `$in`). Все условия объединяются через **AND**. `null` или `{}` — фильтр отключён. Реализация: для VectorStore используется нативный `where` ChromaDB (`to_chroma_where()`); для BM25 и графа — post-filter (`matches_metadata_filter()`). В `rag_list_documents` при активном фильтре `total` отражает число подходящих документов. В `rag_get_related` фильтр применяется к соседним узлам (neighbor), рёбра к узлам, не проходящим фильтр, исключаются.
-- **Relations inline (`links` field):** все методы, возвращающие документы (`rag_search*`, `rag_get_document`, `rag_list_documents`), включают поле `links` — словарь, где ключи — doc_id связанных узлов, значения — список объектов `{relation, weight, direction}`. Параметры управления:
-  - `relations_load_depth` (int, default 1) — глубина BFS-обхода графа. 0 = не загружать связи (поле `links` = пустой `{}`).
-  - `relations_load_type_filter` (list[str] \| null, default null) — список типов связей для фильтрации (null = все типы).
-  - `relations_load_meta_filter` (dict \| null, default null) — фильтр по метаданным соседних узлов. Тот же формат, что и `metadata_filter`.
-- Ошибок валидации нет — неизвестный инструмент бросает `ValueError`, отсутствующие опциональные параметры берут дефолты из схемы.
+- `meta` в `rag_add_document`/`rag_add_file`/`rag_add_structured`: dict/null/""/JSON-строка/строка → `_parse_meta()`
+- `metadata_filter`: `dict[key, scalar|list]` — AND. VectorStore → Qdrant Filter, Graph → post-filter
+- `max_chars` у всех поисков и `rag_list_documents`. Полный текст → `rag_get_document`
+- **Relations inline (`links`)**: все возвращающие документы методы включают `links: {doc_id: [{relation, weight, direction}]}`. `relations_load_depth=0` → пустой `{}`
+- Ошибки: неизвестный инструмент → `ValueError`, опциональные параметры → дефолты из схемы
 
-### Гибридный поиск: детали RRF
-
-`rag_search_hybrid` использует **Reciprocal Rank Fusion (RRF)** — не линейную комбинацию скоров, а объединение через ранги. RRF устойчив к разным шкалам скоров (семантика в [0,1], BM25 — не ограничен), не требует нормализации и гарантирует отсутствие тай-оффов (ранги всегда различны).
-
-**Формула (alpha-dilution):**
+### Гибридный поиск: RRF
 
 ```
-RRF_K = 20  # не классическая 60 — для малых корпусов даёт широкий разброс
-
-# Документ из обоих каналов:
-score = alpha / (RRF_K + rank_sem + 1) + (1 - alpha) / (RRF_K + rank_bm25 + 1)
-
-# Только семантический канал:
-score = alpha / (RRF_K + rank_sem + 1)
-
-# Только BM25:
-score = (1 - alpha) / (RRF_K + rank_bm25 + 1)
+RRF_K = 20
+score = alpha/(K + rank_sem + 1) + (1-alpha)/(K + rank_bm25 + 1)  # оба канала
+score = alpha/(K + rank_sem + 1)                                    # sem-only
+score = (1-alpha)/(K + rank_bm25 + 1)                                # bm25-only
 ```
 
-Документы с `score = 0` (single-channel при крайнем alpha: sem-only при `alpha=0.0`, bm25-only при `alpha=1.0`) исключаются из выдачи. Поэтому `alpha=1.0` = чистая семантика, `alpha=0.0` = чистый BM25 — без «призрачных» результатов.
+**Language-aware alpha:** `alpha=null` → кириллица → `cyrillic_alpha` (0.85), иначе `default_alpha` (0.5). Явный `alpha` приоритетен.
 
-**Language-aware alpha:** при `alpha=null` (по умолчанию) система выбирает alpha в зависимости от языка запроса:
-- **Кириллические запросы** (русский и др.) → `cyrillic_alpha` (env `RAG_CYRILLIC_ALPHA`, default **0.85**). BM25 без русского стемминга даёт шумовый сигнал для русских запросов, поэтому семантический канал должен доминировать.
-- **Остальные запросы** → `default_alpha` (env `RAG_DEFAULT_ALPHA`, default **0.5** — точка естественного баланса каналов, подтверждённая бенчмарком NDCG@k).
-- Явно переданный `alpha` имеет приоритет над language-aware выбором.
+**Reranker:** `rerank=true` → CrossEncoder `BAAI/bge-reranker-v2-m3` (lazy load).
+
+**Query expansion:** `query_expansion=true` → N парафразов Qwen3-1.8B → каждый search → RRF слияние.
+
+**Candidate expansion:** `max(k*3, 20)` из каждого канала.
+
+## Docker
+
+```bash
+docker compose up --build  # Qdrant + Postgres + RAG
+# HTTP API: http://localhost:8765
+# OpenAPI docs: http://localhost:8765/docs
+```
+
+## HTTP API (FastAPI)
+
+```bash
+python3 -m src.http_api
+# GET  /health
+# POST /search, /bm25_search, /hybrid_search
+# POST /documents, /file, /structured
+# GET  /documents, /document/{doc_id}
+# DELETE /documents/{doc_id}
+# POST /relations
+# GET  /related/{node_id}
+# GET  /stats, /graph_stats
+# DELETE /clear
+```
 
 ## Тестирование
 
 ```bash
-# Полный набор
 python3 -m pytest tests/ -v
-
-# Только MCP-слой
 python3 -m pytest tests/test_mcp_server.py -v
-
-# Только качество поиска (NDCG, релевантность, alpha)
 python3 -m pytest tests/test_search_quality.py -v
+
+# Новые тесты (Phase 4, 8)
+python3 -m pytest tests/test_reranker.py -v
+python3 -m pytest tests/test_query_expander.py -v
 ```
 
-## Бенчмарк выбора alpha
+## Бенчмарк alpha
 
 ```bash
-# Калибровка default_alpha по NDCG@k на детерминированном корпусе
 python3 -m scripts.benchmark_alpha
 ```
 
-Скрипт прогоняет `search_hybrid` по сетке alpha ∈ [0.0, 1.0] (шаг 0.05) на
-корпусе с настоящей семантической структурой (`tests/semantic_mock.py`), считает
-NDCG@5 / P@5 / P@1 и печатает таблицу. Среди alpha в пределах 1% от лучшего NDCG
-(«хорошая область») берётся значение, ближайшее к 0.5 — точке естественного
-баланса каналов. Это робастный и детерминированный выбор (в отличие от медианы
-области, чья ширина колеблется из-за tie-breaking в ChromaDB). Результат должен
-совпадать с `RAGConfig.default_alpha`; при расхождении — обновить конфиг.
-
-## TODO — Relations Inline (links field)
-
-### Что нужно сделать
-
-Добавить во все методы, возвращающие документы (`rag_search*`, `rag_get_document`, `rag_list_documents`), поле `links` с реляциями (графовыми связями) прямо в ответе, чтобы не делать отдельный запрос `rag_get_related`.
-
-### Формат
-
-```python
-# Каждый документ в выдаче получает поле links (пустой dict при depth=0):
-{
-  "doc_id": "abc-123",
-  "text": "...",
-  "score": 0.95,
-  "metadata": {},
-  "links": {
-    "def-456": [
-      {"relation": "related_to", "weight": 1.0, "direction": "out", "depth": 1}
-    ]
-  }
-}
-```
-
-### Новые параметры (опциональные, все tools где есть document output)
-
-| Параметр | Тип | Default | Описание |
-|----------|-----|---------|----------|
-| `relations_load_depth` | int | 1 | 0 = не загружать реляции. 1+ = BFS-глубина обхода графа |
-| `relations_load_type_filter` | list[str] \| null | null | Фильтр по типу связи (null = все типы) |
-| `relations_load_meta_filter` | dict \| null | null | Фильтр по метаданным соседних узлов |
-
-### Где менять
-
-1. **`src/graph_store.py`** — `get_edges_batch()`: массовое получение рёбер для списка node_id
-2. **`src/rag.py`** — `_enrich_with_links()` + новые параметры в search/get_document/list_documents
-3. **`src/mcp_server.py`** — TOOL_DEFS (schemas) + handlers (передача новых параметров + вызов _enrich_with_links)
-4. **`src/cli.py`** — аргументы для новых параметров
-5. **`tests/`** — тесты
-
-**Status:** ✅ Done
+Сетка alpha ∈ [0.0, 1.0], шаг 0.05, NDCG@5 / P@5 / P@1.
+Выбор: среди alpha в 1% от лучшего NDCG — ближайшее к 0.5.
 
 ## Линтинг
 

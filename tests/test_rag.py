@@ -1,64 +1,59 @@
-"""Тесты для модуля RAGSystem (оркестратор RAG)"""
+"""Тесты для модуля RAGSystem (оркестратор RAG) на новом стеке Qdrant + SQLite.
+
+Используются фикстуры conftest: rag (HashEmbeddingGenerator), semantic_rag
+(SemanticMockEmbeddingGenerator), make_rag (фабрика). Все они делают rag.close()
+в teardown — это критично для файловых локов Qdrant/SQLite на Windows.
+"""
 
 import pytest
-import os
-import shutil
-import tempfile
-from unittest.mock import patch, MagicMock
-from src.rag import RAGSystem
+
 from src.config import RAGConfig
-from src.embeddings import OpenRouterEmbeddingGenerator, OllamaEmbeddingGenerator
+from src.embeddings import OllamaEmbeddingGenerator, OpenRouterEmbeddingGenerator
+from src.rag import RAGSystem
+from tests.conftest import HashEmbeddingGenerator
 
 
-class TestRAGSystem:
-    """Класс тестов для RAG-системы."""
+@pytest.fixture
+def make_raw_rag(tmp_path):
+    """Фабрика RAGSystem без mock-эмбеддера — для тестов выбора провайдера.
 
-    @pytest.fixture(autouse=True)
-    def setup_temp_dir(self):
-        """Фикстура: временная директория для каждого теста."""
-        self.temp_dir = tempfile.mkdtemp()
-        self.store_path = os.path.join(self.temp_dir, "rag_data")
-        yield
-        if os.path.exists(self.temp_dir):
-            shutil.rmtree(self.temp_dir)
+    Провайдеры Ollama/OpenRouter не делают сетевых вызовов при init
+    (эмбеддинги нужны только при add/search), поэтому реальная модель
+    не загружается. Teardown закрывает все созданные системы.
+    """
+    created: list[RAGSystem] = []
 
-    @pytest.fixture(autouse=True)
-    def mock_httpx(self):
-        """Мокаем httpx.Client для всех тестов."""
-        with patch("src.embeddings.httpx.Client") as mock_client_class:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {
-                "data": [{"embedding": [0.1] * 128}]
-            }
-            mock_client = MagicMock()
-            mock_client.__enter__.return_value = mock_client
-            mock_client.post.return_value = mock_response
-            mock_client_class.return_value = mock_client
-            yield
+    def _make(**kwargs):
+        rag = RAGSystem(**kwargs)
+        created.append(rag)
+        return rag
 
-    @pytest.fixture
-    def rag(self):
-        """Фикстура: пустая RAG-система с временным хранилищем."""
-        return RAGSystem(store_path=self.store_path, api_key="test-key")
+    yield _make
+    for rag in created:
+        try:
+            rag.close()
+        except Exception:
+            pass
 
-    def test_ingest_and_query_basic(self, rag):
+
+class TestSearch:
+    """Индексация и поиск."""
+
+    def test_ingest_and_query_basic(self, semantic_rag):
         """После индексации документов запрос должен возвращать результаты."""
-        # Используем новый API: add_documents вместо ingest
         texts = [
             "Python is a programming language for general purpose",
             "Java runs on a virtual machine and is statically typed",
             "Python is great for machine learning and data science",
         ]
-        doc_ids = rag.add_documents(texts)
-        results = rag.search("Python programming", k=2)
+        doc_ids = semantic_rag.add_documents(texts)
+        results = semantic_rag.search("Python programming", k=2)
         assert len(results) == 2
-        # Должен вернуть 2 результата из 3 добавленных документов
         result_doc_ids = [r[0] for r in results]
         assert len(set(result_doc_ids) & set(doc_ids)) == 2
 
     def test_ingest_empty(self, rag):
-        """Ingest с пустым списком не должен вызывать ошибок."""
+        """add_documents с пустым списком не должен вызывать ошибок."""
         rag.add_documents([])
         results = rag.search("test", k=5)
         assert results == []
@@ -68,54 +63,59 @@ class TestRAGSystem:
         results = rag.search("anything")
         assert results == []
 
-    def test_query_returns_sorted_by_relevance(self, rag):
+    def test_query_returns_sorted_by_relevance(self, semantic_rag):
         """Результаты запроса должны быть отсортированы по релевантности."""
         texts = [
             "machine learning deep learning neural networks artificial intelligence",
             "deep learning concepts overview and fundamental principles explained",
             "cooking recipes for pasta with tomato sauce and fresh vegetables",
         ]
-        rag.add_documents(texts)
-        results = rag.search("machine learning deep learning", k=3)
+        semantic_rag.add_documents(texts)
+        results = semantic_rag.search("machine learning deep learning", k=3)
+        assert len(results) >= 2
         scores = [r[2] for r in results]
         for i in range(len(scores) - 1):
             assert scores[i] >= scores[i + 1], "Результаты должны быть отсортированы по релевантности"
 
     def test_query_with_metadata(self, rag):
-        """Запрос должен возвращать метаданные if указаны при добавлении."""
-        texts = ["artificial intelligence and deep learning concepts overview", "machine learning with neural networks and data analysis"]
+        """Запрос должен возвращать метаданные, если указаны при добавлении."""
+        texts = [
+            "artificial intelligence and deep learning concepts overview",
+            "machine learning with neural networks and data analysis",
+        ]
         metadata = [{"category": "AI"}, {"category": "ML"}]
         rag.add_documents(texts, metadata)
         results = rag.search("AI", k=2)
-        # Проверяем, что метаданные сохранились
+        assert len(results) == 2
         for doc_id, text, score, meta in results:
             assert "category" in meta, f"У {doc_id} нет метаданных"
 
-    def test_reingest_updates_index(self, rag):
-        """Повторное добавление должно обновлять существующие документы."""
-        doc_id_1 = rag.add_document("Python programming language for scripting and automation")
-        # Удаляем старый и добавляем новый с тем же текстом
-        rag.vector_store.remove(doc_id_1)
-        rag.bm25_index.remove(doc_id_1)
-        rag.graph_kb.remove_node(doc_id_1)
-        doc_id_2 = rag.add_document("Java programming language for enterprise applications")
-        results = rag.search("Java", k=1)
+    def test_reingest_updates_index(self, semantic_rag):
+        """После удаления и добавления нового документа индекс актуален."""
+        doc_id_1 = semantic_rag.add_document(
+            "Python programming language for scripting and automation"
+        )
+        assert semantic_rag.delete_document(doc_id_1) is True
+
+        doc_id_2 = semantic_rag.add_document(
+            "Java programming language for enterprise applications"
+        )
+        results = semantic_rag.search("Java", k=1)
         assert results[0][0] == doc_id_2
-        # Python больше не должен быть ассоциирован с doc_id_2
-        results_java = rag.search("Java", k=1)
-        java_score = results_java[0][2]
-        results_python = rag.search("Python", k=1)
-        python_score = results_python[0][2]
+        # Python больше не должен быть релевантнее Java
+        java_score = semantic_rag.search("Java", k=1)[0][2]
+        python_results = semantic_rag.search("Python", k=1)
+        python_score = python_results[0][2] if python_results else 0.0
         assert java_score >= python_score, (
             f"Java ({java_score:.3f}) должна быть >= Python ({python_score:.3f})"
         )
 
     def test_large_top_k(self, rag):
-        """top_k больше числа документов не должно вызывать ошибок."""
+        """k больше числа документов не должно вызывать ошибок."""
         texts = [f"sample text document number {i} for testing and analysis" for i in range(5)]
         rag.add_documents(texts)
         results = rag.search("text", k=100)
-        assert len(results) <= 5  # Не больше, чем есть документов
+        assert len(results) <= 5
 
     def test_full_pipeline_integration(self, rag):
         """Полный pipeline: индексация → поиск → форматирование ответа."""
@@ -126,10 +126,13 @@ class TestRAGSystem:
         doc_ids = rag.add_documents(texts)
         results = rag.search("How to reset password?", k=2)
         assert len(results) == 2
-        # Форматируем как контекст для LLM
         context = "\n\n".join([f"[{doc_id}] {text}" for doc_id, text, _, _ in results])
         assert doc_ids[0] in context or doc_ids[1] in context
         assert "password" in context.lower()
+
+
+class TestGetDocument:
+    """get_document: пагинация текста."""
 
     def test_get_document_full_text(self, rag):
         """get_document возвращает полный текст по умолчанию."""
@@ -187,6 +190,10 @@ class TestRAGSystem:
             offset += 10
         assert collected == full_text
 
+
+class TestListDocuments:
+    """list_documents: усечение текста."""
+
     def test_list_documents_max_chars_truncates(self, rag):
         """list_documents с max_chars обрезает текст каждого документа."""
         rag.add_document("A" * 2000)
@@ -202,6 +209,10 @@ class TestRAGSystem:
         result = rag.list_documents(limit=1)
         assert result["documents"][0]["text"] == long_text
 
+
+class TestReindex:
+    """reindex(): пересчёт эмбеддингов."""
+
     def test_reindex_updates_embeddings(self, rag):
         rag.add_document("Python programming for scripting and automation tasks")
         rag.add_document("Java programming for enterprise software development")
@@ -216,80 +227,84 @@ class TestRAGSystem:
 
     def test_reindex_with_dimension_change(self, rag):
         """Reindex должен пересоздать коллекцию при смене размерности."""
-        # Добавляем с текущим моком (128-dim от OpenRouter)
         rag.add_document("Python programming for scripting and automation tasks")
         rag.add_document("Java programming for enterprise software development")
+        assert rag.stats()["dimension"] == 64  # HashEmbeddingGenerator по умолчанию
+
+        # Меняем генератор на 128-dim и переиндексируем
+        rag.embedding_generator = HashEmbeddingGenerator(dimension=128)
+        count = rag.reindex()
+        assert count == 2
         assert rag.stats()["dimension"] == 128
 
-        # Меняем мок на 256-dim
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "data": [{"embedding": [0.1] * 256}]
-        }
-        mock_client = MagicMock()
-        mock_client.__enter__.return_value = mock_client
-        mock_client.post.return_value = mock_response
-        with patch("src.embeddings.httpx.Client", return_value=mock_client):
-            count = rag.reindex()
-            assert count == 2
-            assert rag.stats()["dimension"] == 256
+        # Поиск должен работать после reindex
+        results = rag.search("Python", k=1)
+        assert len(results) == 1
 
-            # Поиск должен работать после reindex (под тем же моком)
-            results = rag.search("Python", k=1)
-            assert len(results) == 1
 
-    def test_provider_selection_ollama_by_default(self):
-        """Без api_key и без EMBEDDING_PROVIDER — Ollama."""
-        with patch.dict(os.environ, {}, clear=False):
-            for key in ["OPENROUTER_API_KEY", "EMBEDDING_PROVIDER"]:
-                os.environ.pop(key, None)
-            rag = RAGSystem(store_path=self.store_path)
-            assert isinstance(rag.embedding_generator, OllamaEmbeddingGenerator)
+class TestProviderSelection:
+    """Выбор провайдера эмбеддингов (без загрузки реальных моделей)."""
 
-    def test_provider_selection_openrouter_with_api_key(self):
+    def test_default_provider_is_bge_m3(self):
+        """Дефолтный провайдер конфигурации — bge-m3 (локальная модель)."""
+        assert RAGConfig().embedding_provider == "bge-m3"
+
+    def test_provider_selection_openrouter_with_api_key(self, tmp_path, make_raw_rag):
         """При передаче api_key — принудительно OpenRouter."""
-        rag = RAGSystem(store_path=self.store_path, api_key="test-key")
+        rag = make_raw_rag(store_path=str(tmp_path / "s1"), api_key="test-key", config=RAGConfig())
         assert isinstance(rag.embedding_generator, OpenRouterEmbeddingGenerator)
 
-    def test_provider_selection_openrouter_from_config(self):
-        """При EMBEDDING_PROVIDER=openrouter + api_key в конфиге — OpenRouter."""
-        cfg = RAGConfig(
-            embedding_provider="openrouter",
-            openrouter_api_key="cfg-key",
-        )
-        rag = RAGSystem(store_path=self.store_path, config=cfg)
+    def test_provider_selection_openrouter_from_config(self, tmp_path, make_raw_rag):
+        """При embedding_provider=openrouter + api_key в конфиге — OpenRouter."""
+        cfg = RAGConfig(embedding_provider="openrouter", openrouter_api_key="cfg-key")
+        rag = make_raw_rag(store_path=str(tmp_path / "s2"), config=cfg)
         assert isinstance(rag.embedding_generator, OpenRouterEmbeddingGenerator)
 
-    def test_provider_selection_ollama_from_config(self):
-        """При EMBEDDING_PROVIDER=ollama — Ollama, даже если openrouter_api_key задан."""
-        cfg = RAGConfig(
-            embedding_provider="ollama",
-            openrouter_api_key="some-key",
-        )
-        rag = RAGSystem(store_path=self.store_path, config=cfg)
+    def test_provider_selection_ollama_from_config(self, tmp_path, make_raw_rag):
+        """При embedding_provider=ollama — Ollama, даже если openrouter_api_key задан."""
+        cfg = RAGConfig(embedding_provider="ollama", openrouter_api_key="some-key")
+        rag = make_raw_rag(store_path=str(tmp_path / "s3"), config=cfg)
         assert isinstance(rag.embedding_generator, OllamaEmbeddingGenerator)
 
-    def test_api_key_overrides_config_provider(self):
+    def test_api_key_overrides_config_provider(self, tmp_path, make_raw_rag):
         """api_key приоритетнее config.embedding_provider."""
         cfg = RAGConfig(embedding_provider="ollama")
-        rag = RAGSystem(store_path=self.store_path, api_key="force-openrouter", config=cfg)
+        rag = make_raw_rag(store_path=str(tmp_path / "s4"), api_key="force-openrouter", config=cfg)
         assert isinstance(rag.embedding_generator, OpenRouterEmbeddingGenerator)
 
-    def test_store_path_from_config(self):
-        """store_path берётся из config если не передан явно."""
-        custom_path = os.path.join(self.temp_dir, "custom_store")
+    def test_embedding_generator_overrides_everything(self, tmp_path, make_raw_rag):
+        """Явный embedding_generator имеет приоритет над api_key и config."""
+        embedder = HashEmbeddingGenerator()
+        cfg = RAGConfig(embedding_provider="ollama")
+        rag = make_raw_rag(
+            store_path=str(tmp_path / "s5"), api_key="test-key",
+            config=cfg, embedding_generator=embedder,
+        )
+        assert rag.embedding_generator is embedder
+
+
+class TestStorePath:
+    """Разрешение store_path."""
+
+    def test_store_path_from_config(self, tmp_path, make_raw_rag):
+        """store_path берётся из config, если не передан явно."""
+        custom_path = str(tmp_path / "custom_store")
         cfg = RAGConfig(store_path=custom_path)
-        rag = RAGSystem(config=cfg)
+        rag = make_raw_rag(config=cfg, embedding_generator=HashEmbeddingGenerator())
         assert rag.store_path == custom_path
 
-    def test_store_path_explicit_overrides_config(self):
+    def test_store_path_explicit_overrides_config(self, tmp_path, make_raw_rag):
         """Явный store_path приоритетнее config.store_path."""
-        cfg = RAGConfig(store_path="/from/config")
-        rag = RAGSystem(store_path=self.store_path, config=cfg)
-        assert rag.store_path == self.store_path
+        explicit = str(tmp_path / "explicit_store")
+        cfg = RAGConfig(store_path=str(tmp_path / "from_config"))
+        rag = make_raw_rag(
+            store_path=explicit, config=cfg, embedding_generator=HashEmbeddingGenerator()
+        )
+        assert rag.store_path == explicit
 
-    # ── _enrich_with_links ──────────────────────────────────────────────
+
+class TestEnrichWithLinks:
+    """_enrich_with_links и загрузка связей."""
 
     def test_enrich_with_links_depth_zero(self, rag):
         """_enrich_with_links при depth=0 добавляет пустой links."""
@@ -348,11 +363,11 @@ class TestRAGSystem:
 
         docs = [{"doc_id": doc_a}, {"doc_id": doc_b}]
         rag._enrich_with_links(docs, relations_load_depth=1)
-        # doc_a has links to b and c
+        # doc_a связан с b и c
         assert len(docs[0]["links"]) == 2
         assert doc_b in docs[0]["links"]
         assert doc_c in docs[0]["links"]
-        # doc_b has an incoming edge from doc_a (direction="in")
+        # doc_b имеет входящее ребро от doc_a (direction="in")
         assert doc_a in docs[1]["links"]
         assert docs[1]["links"][doc_a][0]["direction"] == "in"
 

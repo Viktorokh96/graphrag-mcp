@@ -1,283 +1,287 @@
-"""Тесты для графовой базы знаний."""
+"""Тесты для GraphStore (рёбра в SQLite + NetworkX-кеш).
+
+Узлы графа — документы из DocumentStore: перед add_edge узлы создаются
+через doc_store.add(). Сохранение автоматическое (SQL), метод search()
+у графа удалён.
+"""
 
 import pytest
-from src.graph_store import GraphKnowledgeBase
+
+from src.document_store import Database, DocumentStore
+from src.graph_store import GraphStore
 
 
-class TestGraphKnowledgeBase:
-    """Тесты для класса GraphKnowledgeBase."""
+@pytest.fixture
+def db(tmp_path):
+    """SQLite Database во временной директории; close() в teardown (Windows)."""
+    database = Database(str(tmp_path / "store.db"))
+    yield database
+    database.close()
 
-    def test_init_empty(self):
+
+@pytest.fixture
+def docs(db):
+    return DocumentStore(db)
+
+
+@pytest.fixture
+def graph(db, docs):
+    return GraphStore(db, docs)
+
+
+def add_docs(docs: DocumentStore, *doc_ids: str) -> None:
+    """Создать документы-узлы с текстом-заглушкой."""
+    for doc_id in doc_ids:
+        docs.add(doc_id, f"Text of {doc_id}")
+
+
+class TestGraphStore:
+    """Тесты для класса GraphStore."""
+
+    def test_init_empty(self, graph):
         """Тест инициализации пустого графа."""
-        gkb = GraphKnowledgeBase()
-        stats = gkb.stats()
+        stats = graph.stats()
         assert stats["total_nodes"] == 0
         assert stats["total_edges"] == 0
         assert stats["relation_types"] == []
 
-    def test_add_and_search_basic(self):
-        """Тест добавления узлов и поиска по тексту."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("node1", "Python is a programming language")
-        gkb.add_node("node2", "Django is a web framework")
-
-        results = gkb.search("Python programming", k=2)
-        assert len(results) == 2
-        assert results[0][0] == "node1"  # node1 должен быть первым
-        assert "Python" in results[0][1]
-
-    def test_add_edge_and_get_related(self):
+    def test_add_edge_and_get_related(self, graph, docs):
         """Тест добавления рёбер и получения связанных узлов."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("node1", "Text 1")
-        gkb.add_node("node2", "Text 2")
-        gkb.add_node("node3", "Text 3")
+        add_docs(docs, "node1", "node2", "node3")
 
-        gkb.add_edge("node1", "node2", "related_to", 1.0)
-        gkb.add_edge("node1", "node3", "similar_to", 0.8)
+        graph.add_edge("node1", "node2", "related_to", 1.0)
+        graph.add_edge("node1", "node3", "similar_to", 0.8)
 
-        related = gkb.get_related("node1", max_depth=1)
+        related = graph.get_related("node1", max_depth=1)
         assert len(related) == 2
 
         relations = [(s, t, r) for s, t, r, w, d in related]
         assert ("node1", "node2", "related_to") in relations
         assert ("node1", "node3", "similar_to") in relations
 
-    def test_search_with_relation_expansion(self):
-        """Тест поиска с расширением на связанные узлы."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("node1", "Python programming language")
-        gkb.add_node("node2", "Django web framework")
-        gkb.add_edge("node1", "node2", "related_to", 1.0)
+    def test_delete_document_cascades_edges(self, graph, docs, db):
+        """Удаление документа каскадно удаляет его рёбра (SQL + кеш).
 
-        # Поиск без расширения
-        results_no_expand = gkb.search("Python", k=1, expand_relations=False)
-        assert len(results_no_expand) == 1
-        assert results_no_expand[0][0] == "node1"
+        Как в RAGSystem.delete_document: DocumentStore.delete() удаляет
+        строки graph_edges через FK CASCADE, GraphStore.delete_document()
+        убирает узел из NetworkX-кеша.
+        """
+        add_docs(docs, "node1", "node2", "node3")
+        graph.add_edge("node1", "node2", "related_to", 1.0)
+        graph.add_edge("node2", "node3", "similar_to", 0.8)
 
-        # Поиск с расширением
-        results_expand = gkb.search("Python", k=1, expand_relations=True)
-        assert len(results_expand) >= 1
-        node_ids = [r[0] for r in results_expand]
-        assert "node1" in node_ids
-        # node2 должен быть добавлен через расширение
-        assert "node2" in node_ids
+        assert docs.delete("node2") is True
+        graph.delete_document("node2")
 
-    def test_remove_node_cascades_edges(self):
-        """Тест удаления узла и каскадного удаления рёбер."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("node1", "Text 1")
-        gkb.add_node("node2", "Text 2")
-        gkb.add_node("node3", "Text 3")
+        # SQL: оба ребра удалены каскадом
+        rows = db.execute("SELECT COUNT(*) FROM graph_edges")
+        assert rows[0][0] == 0
 
-        gkb.add_edge("node1", "node2", "related_to", 1.0)
-        gkb.add_edge("node2", "node3", "similar_to", 0.8)
-
-        gkb.remove_node("node2")
-
-        assert "node2" not in gkb._nodes
-        # Оба ребра должны быть удалены
-        stats = gkb.stats()
+        # Кеш: рёбер нет, узлы = оставшиеся документы
+        stats = graph.stats()
         assert stats["total_edges"] == 0
+        assert stats["total_nodes"] == 2
+        assert graph.get_related("node1") == []
 
-    def test_remove_edge(self):
+    def test_remove_edge(self, graph, docs):
         """Тест удаления ребра."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("node1", "Text 1")
-        gkb.add_node("node2", "Text 2")
-        gkb.add_edge("node1", "node2", "related_to", 1.0)
+        add_docs(docs, "node1", "node2")
+        graph.add_edge("node1", "node2", "related_to", 1.0)
 
-        assert gkb.stats()["total_edges"] == 1
+        assert graph.stats()["total_edges"] == 1
 
-        gkb.remove_edge("node1", "node2", "related_to")
-        assert gkb.stats()["total_edges"] == 0
+        graph.remove_edge("node1", "node2", "related_to")
+        assert graph.stats()["total_edges"] == 0
 
         # Удаление несуществующего ребра - silent
-        gkb.remove_edge("node1", "node2", "related_to")
-        assert gkb.stats()["total_edges"] == 0
+        graph.remove_edge("node1", "node2", "related_to")
+        assert graph.stats()["total_edges"] == 0
 
-    def test_clear(self):
-        """Тест очистки графа."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("node1", "Text 1")
-        gkb.add_node("node2", "Text 2")
-        gkb.add_edge("node1", "node2", "related_to", 1.0)
+    def test_delete_all(self, graph, docs):
+        """Тест очистки графа и документов."""
+        add_docs(docs, "node1", "node2")
+        graph.add_edge("node1", "node2", "related_to", 1.0)
 
-        gkb.clear()
+        graph.delete_all()
+        docs.clear()
 
-        stats = gkb.stats()
+        stats = graph.stats()
         assert stats["total_nodes"] == 0
         assert stats["total_edges"] == 0
 
-    def test_get_relation_types(self):
+    def test_get_relation_types(self, graph, docs):
         """Тест получения типов отношений."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("node1", "Text 1")
-        gkb.add_node("node2", "Text 2")
-        gkb.add_node("node3", "Text 3")
+        add_docs(docs, "node1", "node2", "node3")
 
-        gkb.add_edge("node1", "node2", "related_to", 1.0)
-        gkb.add_edge("node1", "node3", "similar_to", 0.8)
-        gkb.add_edge("node2", "node3", "related_to", 0.5)
+        graph.add_edge("node1", "node2", "related_to", 1.0)
+        graph.add_edge("node1", "node3", "similar_to", 0.8)
+        graph.add_edge("node2", "node3", "related_to", 0.5)
 
-        relation_types = gkb.get_relation_types()
-        assert set(relation_types) == {"related_to", "similar_to"}
+        relation_types = graph.get_relation_types()
+        assert relation_types == ["related_to", "similar_to"]
 
-    def test_add_edge_missing_node_raises(self):
+    def test_add_edge_missing_node_raises(self, graph, docs):
         """Тест ValueError при добавлении ребра с несуществующим узлом."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("node1", "Text 1")
+        add_docs(docs, "node1")
 
         with pytest.raises(ValueError, match="Target node"):
-            gkb.add_edge("node1", "node2", "related_to", 1.0)
+            graph.add_edge("node1", "node2", "related_to", 1.0)
 
         with pytest.raises(ValueError, match="Source node"):
-            gkb.add_edge("node2", "node1", "related_to", 1.0)
+            graph.add_edge("node2", "node1", "related_to", 1.0)
 
-    def test_search_empty(self):
-        """Тест поиска в пустом графе."""
-        gkb = GraphKnowledgeBase()
-        results = gkb.search("query", k=5)
-        assert results == []
-
-    def test_get_related_max_depth(self):
+    def test_get_related_max_depth(self, graph, docs):
         """Тест BFS с глубиной > 1."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("node1", "Text 1")
-        gkb.add_node("node2", "Text 2")
-        gkb.add_node("node3", "Text 3")
-        gkb.add_node("node4", "Text 4")
+        add_docs(docs, "node1", "node2", "node3", "node4")
 
-        gkb.add_edge("node1", "node2", "related_to", 1.0)
-        gkb.add_edge("node2", "node3", "related_to", 1.0)
-        gkb.add_edge("node3", "node4", "related_to", 1.0)
+        graph.add_edge("node1", "node2", "related_to", 1.0)
+        graph.add_edge("node2", "node3", "related_to", 1.0)
+        graph.add_edge("node3", "node4", "related_to", 1.0)
 
         # max_depth=1: только node1->node2
-        related_depth1 = gkb.get_related("node1", max_depth=1)
+        related_depth1 = graph.get_related("node1", max_depth=1)
         assert len(related_depth1) == 1
         assert related_depth1[0][1] == "node2"
 
         # max_depth=2: node1->node2, node2->node3
-        related_depth2 = gkb.get_related("node1", max_depth=2)
+        related_depth2 = graph.get_related("node1", max_depth=2)
         assert len(related_depth2) == 2
 
         # max_depth=3: все три ребра
-        related_depth3 = gkb.get_related("node1", max_depth=3)
+        related_depth3 = graph.get_related("node1", max_depth=3)
         assert len(related_depth3) == 3
 
-    def test_add_node_updates_existing(self):
-        """Тест обновления существующего узла."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("node1", "Original text", {"key": "value1"})
+    def test_duplicate_edge_updates_weight(self, graph, docs):
+        """Тест обновления веса при повторном добавлении ребра (upsert)."""
+        add_docs(docs, "node1", "node2")
 
-        gkb.add_node("node1", "Updated text", {"key": "value2"})
+        graph.add_edge("node1", "node2", "related_to", 1.0)
+        assert graph.get_all_edges() == [("node1", "node2", "related_to", 1.0)]
 
-        assert gkb._nodes["node1"]["text"] == "Updated text"
-        assert gkb._nodes["node1"]["metadata"]["key"] == "value2"
+        graph.add_edge("node1", "node2", "related_to", 0.5)
+        assert graph.get_all_edges() == [("node1", "node2", "related_to", 0.5)]
+        # Ребро одно, не дубликат
+        assert graph.stats()["total_edges"] == 1
 
-    def test_duplicate_edge_updates_weight(self):
-        """Тест обновления веса при повторном добавлении ребра."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("node1", "Text 1")
-        gkb.add_node("node2", "Text 2")
+    def test_degree(self, graph, docs):
+        """degree считает входящие и исходящие рёбра узла."""
+        add_docs(docs, "a", "b", "c")
+        graph.add_edge("a", "b", "related_to", 1.0)
+        graph.add_edge("c", "a", "depends_on", 0.5)
 
-        gkb.add_edge("node1", "node2", "related_to", 1.0)
-        assert gkb._edges["node1::related_to::node2"]["weight"] == 1.0
+        assert graph.degree("a") == 2
+        assert graph.degree("b") == 1
+        assert graph.degree("nonexistent") == 0
 
-        gkb.add_edge("node1", "node2", "related_to", 0.5)
-        assert gkb._edges["node1::related_to::node2"]["weight"] == 0.5
+    def test_remove_phantom_edges(self, graph, docs):
+        """remove_phantom_edges удаляет рёбра к узлам вне valid_ids."""
+        add_docs(docs, "a", "b", "c")
+        graph.add_edge("a", "b", "related_to", 1.0)
+        graph.add_edge("b", "c", "similar_to", 0.8)
+
+        removed = graph.remove_phantom_edges({"a", "b"})
+        assert removed == 1
+        assert graph.get_all_edges() == [("a", "b", "related_to", 1.0)]
+
+        # Все id валидны — ничего не удаляется
+        assert graph.remove_phantom_edges({"a", "b", "c"}) == 0
 
     # ── D3: Bidirectional BFS ──────────────────────────────────────────
 
-    def test_get_related_bidirectional(self):
-        """D3: get_related находит входящие рёбра (direction='both')."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("source", "Source node")
-        gkb.add_node("target", "Target node")
-        gkb.add_edge("source", "target", "uses", 1.0)
+    def test_get_related_bidirectional(self, graph, docs):
+        """D3: get_related находит входящие рёбра (direction='in')."""
+        add_docs(docs, "source", "target")
+        graph.add_edge("source", "target", "uses", 1.0)
 
         # Исходящие рёбра от source
-        related_out = gkb.get_related("source", max_depth=1, direction="out")
+        related_out = graph.get_related("source", max_depth=1, direction="out")
         assert len(related_out) == 1
         assert related_out[0][1] == "target"
         assert related_out[0][4] == "out"
 
         # Входящие рёбра к target (должен найти source → target, но как "in")
-        related_in = gkb.get_related("target", max_depth=1, direction="in")
+        related_in = graph.get_related("target", max_depth=1, direction="in")
         assert len(related_in) == 1, f"Рёбер от target как target: {related_in}"
         assert related_in[0][0] == "source"
         assert related_in[0][1] == "target"
         assert related_in[0][4] == "in"
 
-    def test_get_related_default_is_both(self):
+    def test_get_related_default_is_both(self, graph, docs):
         """D3: По умолчанию direction='both', обход включает оба направления."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("a", "Node A")
-        gkb.add_node("b", "Node B")
-        gkb.add_node("c", "Node C")
-        gkb.add_edge("a", "b", "related_to", 1.0)
-        gkb.add_edge("c", "a", "depends_on", 0.8)
+        add_docs(docs, "a", "b", "c")
+        graph.add_edge("a", "b", "related_to", 1.0)
+        graph.add_edge("c", "a", "depends_on", 0.8)
 
         # От 'a' — два ребра: a→b (out) и c→a (in)
-        related = gkb.get_related("a", max_depth=1, direction="both")
+        related = graph.get_related("a", max_depth=1, direction="both")
         assert len(related) == 2
         directions = {r[4] for r in related}
         assert "out" in directions
         assert "in" in directions
 
-    def test_get_related_depth2_bidirectional(self):
+    def test_get_related_depth2_bidirectional(self, graph, docs):
         """D3: BFS глубиной 2 обходит оба направления."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("a", "Node A")
-        gkb.add_node("b", "Node B")
-        gkb.add_node("c", "Node C")
-        gkb.add_edge("a", "b", "related_to", 1.0)
-        gkb.add_edge("c", "b", "depends_on", 0.8)
+        add_docs(docs, "a", "b", "c")
+        graph.add_edge("a", "b", "related_to", 1.0)
+        graph.add_edge("c", "b", "depends_on", 0.8)
 
-        # От 'a': a→b (depth 1), потом c→b (depth 2, т.к. b→c входящее)
-        related = gkb.get_related("a", max_depth=2, direction="both")
+        # От 'a': a→b (depth 1), потом c→b (depth 2, входящее к b)
+        related = graph.get_related("a", max_depth=2, direction="both")
         assert len(related) == 2
-        # Одно ребро от a к b
-        assert ("a", "b") in [(r[0], r[1]) for r in related]
-        # Одно ребро от c к b
-        assert ("c", "b") in [(r[0], r[1]) for r in related]
+        pairs = [(r[0], r[1]) for r in related]
+        assert ("a", "b") in pairs
+        assert ("c", "b") in pairs
 
-    def test_get_related_unknown_node_returns_empty(self):
+    def test_get_related_unknown_node_returns_empty(self, graph):
         """get_related для несуществующего узла возвращает [].
 
         regression: не падает с KeyError.
         """
-        gkb = GraphKnowledgeBase()
-        assert gkb.get_related("nonexistent") == []
+        assert graph.get_related("nonexistent") == []
 
-    def test_get_related_single_node_no_edges(self):
+    def test_get_related_single_node_no_edges(self, graph, docs):
         """get_related для узла без рёбер возвращает []."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("lonely", "Just me")
-        assert gkb.get_related("lonely") == []
+        add_docs(docs, "lonely")
+        assert graph.get_related("lonely") == []
+
+    def test_get_related_metadata_filter(self, graph, docs):
+        """metadata_filter применяется к соседнему узлу."""
+        docs.add("hub", "Hub", {"type": "hub"})
+        docs.add("person", "Person doc", {"type": "person"})
+        docs.add("place", "Place doc", {"type": "place"})
+        graph.add_edge("hub", "person", "mentions", 1.0)
+        graph.add_edge("hub", "place", "mentions", 1.0)
+
+        related = graph.get_related("hub", metadata_filter={"type": "person"})
+        assert len(related) == 1
+        assert related[0][1] == "person"
+
+        # Список — семантика $in
+        related_in = graph.get_related("hub", metadata_filter={"type": ["person", "place"]})
+        assert len(related_in) == 2
+
+        # Никто не проходит
+        assert graph.get_related("hub", metadata_filter={"type": "event"}) == []
 
     # ── get_edges_batch ─────────────────────────────────────────────────
 
-    def test_get_edges_batch_empty(self):
+    def test_get_edges_batch_empty(self, graph, docs):
         """get_edges_batch с пустым набором или без связей."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("a", "Node A")
-        result = gkb.get_edges_batch(set())
+        add_docs(docs, "a")
+        result = graph.get_edges_batch(set())
         assert result == {}
 
-        result = gkb.get_edges_batch({"a"})
-        assert result == {"a": {}}
+        # Узел без рёбер отсутствует в NetworkX-кеше
+        result = graph.get_edges_batch({"a"})
+        assert result == {}
 
-    def test_get_edges_batch_basic(self):
+    def test_get_edges_batch_basic(self, graph, docs):
         """get_edges_batch возвращает связи для нескольких узлов."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("a", "Node A")
-        gkb.add_node("b", "Node B")
-        gkb.add_node("c", "Node C")
-        gkb.add_edge("a", "b", "related_to", 1.0)
-        gkb.add_edge("a", "c", "similar_to", 0.8)
+        add_docs(docs, "a", "b", "c")
+        graph.add_edge("a", "b", "related_to", 1.0)
+        graph.add_edge("a", "c", "similar_to", 0.8)
 
-        result = gkb.get_edges_batch({"a"})
+        result = graph.get_edges_batch({"a"})
         assert "a" in result
         assert "b" in result["a"]
         assert "c" in result["a"]
@@ -286,53 +290,55 @@ class TestGraphKnowledgeBase:
         assert result["a"]["b"][0]["weight"] == 1.0
         assert result["a"]["b"][0]["direction"] == "out"
 
-    def test_get_edges_batch_multiple_nodes(self):
+    def test_get_edges_batch_multiple_nodes(self, graph, docs):
         """get_edges_batch для нескольких source node."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("a", "Node A")
-        gkb.add_node("b", "Node B")
-        gkb.add_node("c", "Node C")
-        gkb.add_edge("a", "b", "related_to", 1.0)
-        gkb.add_edge("b", "c", "depends_on", 0.5)
+        add_docs(docs, "a", "b", "c")
+        graph.add_edge("a", "b", "related_to", 1.0)
+        graph.add_edge("b", "c", "depends_on", 0.5)
 
-        result = gkb.get_edges_batch({"a", "b"})
+        result = graph.get_edges_batch({"a", "b"})
         assert "a" in result
         assert "b" in result["a"]
         assert "b" in result
         assert "c" in result["b"]
 
-    def test_get_edges_batch_with_depth(self):
+    def test_get_edges_batch_with_depth(self, graph, docs):
         """get_edges_batch с BFS глубиной > 1."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("a", "Node A")
-        gkb.add_node("b", "Node B")
-        gkb.add_node("c", "Node C")
-        gkb.add_edge("a", "b", "related_to", 1.0)
-        gkb.add_edge("b", "c", "related_to", 1.0)
+        add_docs(docs, "a", "b", "c")
+        graph.add_edge("a", "b", "related_to", 1.0)
+        graph.add_edge("b", "c", "related_to", 1.0)
 
-        result = gkb.get_edges_batch({"a"}, max_depth=1)
+        result = graph.get_edges_batch({"a"}, max_depth=1)
         assert "b" in result["a"]
         assert "c" not in result["a"]
 
-        result = gkb.get_edges_batch({"a"}, max_depth=2)
+        result = graph.get_edges_batch({"a"}, max_depth=2)
         assert "b" in result["a"]
         assert "c" in result["a"]
 
-    def test_get_edges_batch_type_filter(self):
+    def test_get_edges_batch_type_filter(self, graph, docs):
         """get_edges_batch фильтрует по типу связи."""
-        gkb = GraphKnowledgeBase()
-        gkb.add_node("a", "Node A")
-        gkb.add_node("b", "Node B")
-        gkb.add_node("c", "Node C")
-        gkb.add_edge("a", "b", "related_to", 1.0)
-        gkb.add_edge("a", "c", "similar_to", 0.8)
+        add_docs(docs, "a", "b", "c")
+        graph.add_edge("a", "b", "related_to", 1.0)
+        graph.add_edge("a", "c", "similar_to", 0.8)
 
-        result = gkb.get_edges_batch({"a"}, relation_type_filter=["related_to"])
+        result = graph.get_edges_batch({"a"}, relation_type_filter=["related_to"])
         assert "b" in result["a"]
         assert "c" not in result["a"]
 
-    def test_get_edges_batch_unknown_node(self):
+    def test_get_edges_batch_metadata_filter(self, graph, docs):
+        """get_edges_batch фильтрует соседей по метаданным."""
+        docs.add("hub", "Hub", {"type": "hub"})
+        docs.add("person", "Person doc", {"type": "person"})
+        docs.add("place", "Place doc", {"type": "place"})
+        graph.add_edge("hub", "person", "mentions", 1.0)
+        graph.add_edge("hub", "place", "mentions", 1.0)
+
+        result = graph.get_edges_batch({"hub"}, metadata_filter={"type": "person"})
+        assert "person" in result["hub"]
+        assert "place" not in result["hub"]
+
+    def test_get_edges_batch_unknown_node(self, graph):
         """get_edges_batch для несуществующего узла."""
-        gkb = GraphKnowledgeBase()
-        result = gkb.get_edges_batch({"nonexistent"})
+        result = graph.get_edges_batch({"nonexistent"})
         assert result == {}

@@ -1,36 +1,20 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-.venv
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
 
-# Tests
-.coverage
-htmlcov/
-.tox/
-.nox/
+# Data / runtime
+rag_data/
+*.bak
+*.html
+!lib/**/*.html
 
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
+# uv
+# uv.lock коммитим — воспроизводимость окружения
 
 # OS
 .DS_Store
 Thumbs.db
-
-# Opencode
-.opencode/state/
-.opencode/logs/
-
-# Data
-rag_data/
-lib/
-data/*.json
-*.log

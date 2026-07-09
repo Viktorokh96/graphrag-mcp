@@ -1,200 +1,273 @@
-"""Тесты для BM25Index."""
+"""Тесты BM25-поиска: sparse-векторы в Qdrant (QdrantVectorStore.bm25_search)."""
+
+import pytest
+
+DIM = 8
 
 
+def unit(i: int, dim: int = DIM) -> list[float]:
+    v = [0.0] * dim
+    v[i % dim] = 1.0
+    return v
 
-class TestBM25Index:
-    """Тесты для BM25 индекса."""
+
+@pytest.fixture
+def make_store(tmp_path):
+    """Фабрика сторов с гарантированным close() в teardown (Windows file lock)."""
+    from src.vector_store import QdrantVectorStore
+
+    stores = []
+
+    def _make(subdir: str = "qdrant", dimension: int = DIM) -> QdrantVectorStore:
+        store = QdrantVectorStore(location=str(tmp_path / subdir), dimension=dimension)
+        stores.append(store)
+        return store
+
+    yield _make
+    for s in stores:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+class TestBM25Search:
+    """Тесты BM25-поиска через sparse-векторы Qdrant."""
 
     def test_import(self):
-        """Модуль импортируется без ошибок."""
-        from src.bm25_index import BM25Index
-        assert BM25Index is not None
+        from src.vector_store import QdrantVectorStore
 
-    def test_init_empty(self):
-        """Пустой индекс создаётся без ошибок."""
-        from src.bm25_index import BM25Index
-        index = BM25Index()
-        assert index is not None
+        assert hasattr(QdrantVectorStore, "bm25_search")
 
-    def test_add_and_search(self):
-        """После добавления документа поиск возвращает его."""
-        from src.bm25_index import BM25Index
+    def test_add_and_search(self, make_store):
+        """После добавления документа поиск по его токену возвращает его."""
+        store = make_store()
+        store.add("doc1", "python programming language", unit(0))
 
-        index = BM25Index()
-        index.add_document("doc1", "python programming language")
-        results = index.search("python", k=1)
-
+        results = store.bm25_search("python", k=1)
         assert len(results) == 1
-        assert results[0][0] == "doc1"
-        assert "python" in results[0][1].lower()
+        assert results[0]["doc_id"] == "doc1"
+        assert results[0]["score"] > 0
 
-    def test_search_returns_sorted(self):
-        """Результаты поиска отсортированы по убыванию релевантности."""
-        from src.bm25_index import BM25Index
+    def test_exact_token_match_only(self, make_store):
+        """Совпадение по точным токенам: отсутствующий токен не находит ничего."""
+        store = make_store()
+        store.add("doc1", "python programming", unit(0))
+        store.add("doc2", "java programming", unit(1))
 
-        index = BM25Index()
-        index.add_document("doc1", "python programming")
-        index.add_document("doc2", "java programming")
-        index.add_document("doc3", "python python python")
+        results = store.bm25_search("golang", k=5)
+        assert results == []
 
-        results = index.search("python", k=3)
-        scores = [r[2] for r in results]
+        # А по существующему токену — находит только нужный документ
+        results = store.bm25_search("java", k=5)
+        assert [r["doc_id"] for r in results] == ["doc2"]
+
+    def test_search_returns_sorted(self, make_store):
+        """Результаты отсортированы по убыванию score."""
+        store = make_store()
+        store.add("doc1", "python programming", unit(0))
+        store.add("doc2", "java programming", unit(1))
+        store.add("doc3", "python python python", unit(2))
+
+        results = store.bm25_search("python", k=3)
+        scores = [r["score"] for r in results]
         for i in range(len(scores) - 1):
             assert scores[i] >= scores[i + 1], "Оценки должны убывать"
 
-    def test_top_k_limit(self):
+    def test_ranking_tf_and_length(self, make_store):
+        """Документ с бОльшим числом вхождений запроса и меньшей длиной — выше."""
+        store = make_store()
+        store.add("dense_doc", "python python python", unit(0))
+        store.add("sparse_doc", "python appears once in this considerably longer document text", unit(1))
+
+        results = store.bm25_search("python", k=2)
+        assert len(results) == 2
+        assert results[0]["doc_id"] == "dense_doc"
+        assert results[0]["score"] > results[1]["score"]
+
+    def test_ranking_idf(self, make_store):
+        """IDF: слово, встречающееся во всех документах, даёт меньший вклад,
+        чем редкое (при равной длине документов)."""
+        store = make_store()
+        # 'shared' — во всех документах, 'rareword' — только в одном
+        store.add("common1", "shared", unit(0))
+        store.add("common2", "shared", unit(1))
+        store.add("common3", "shared", unit(2))
+        store.add("rare_doc", "rareword", unit(3))
+
+        results = store.bm25_search("shared rareword", k=4)
+        assert len(results) == 4
+        # Документ с редким словом ранжируется выше документов с частым
+        assert results[0]["doc_id"] == "rare_doc"
+        common_scores = [r["score"] for r in results if r["doc_id"] != "rare_doc"]
+        assert all(results[0]["score"] > s for s in common_scores)
+
+    def test_top_k_limit(self, make_store):
         """Параметр k ограничивает количество результатов."""
-        from src.bm25_index import BM25Index
-
-        index = BM25Index()
+        store = make_store()
         for i in range(10):
-            index.add_document(f"doc{i}", f"text number {i} python")
+            store.add(f"doc{i}", f"text number token{i} python", unit(i))
 
-        results = index.search("python", k=3)
+        results = store.bm25_search("python", k=3)
         assert len(results) == 3
 
-    def test_search_empty_index(self):
-        """Поиск в пустом индексе возвращает пустой список."""
-        from src.bm25_index import BM25Index
+    def test_search_empty_store(self, make_store):
+        """Поиск в пустой коллекции возвращает пустой список."""
+        store = make_store()
+        assert store.bm25_search("anything", k=5) == []
 
-        index = BM25Index()
-        results = index.search("anything", k=5)
-        assert results == []
+    def test_empty_query_returns_empty(self, make_store):
+        """Запрос без токенов (пунктуация/пробелы) — пустой результат."""
+        store = make_store()
+        store.add("doc1", "python programming", unit(0))
 
-    def test_clear(self):
-        """Очистка индекса удаляет все документы."""
-        from src.bm25_index import BM25Index
+        assert store.bm25_search("", k=5) == []
+        assert store.bm25_search("!!! --- ...", k=5) == []
 
-        index = BM25Index()
-        index.add_document("doc1", "some text")
-        index.clear()
-        results = index.search("text", k=5)
-        assert results == []
+    def test_clear(self, make_store):
+        """Очистка стора удаляет BM25-индекс."""
+        store = make_store()
+        store.add("doc1", "some text", unit(0))
+        store.clear()
 
-    def test_stats(self):
-        """stats() возвращает корректную статистику."""
-        from src.bm25_index import BM25Index
+        assert store.bm25_search("text", k=5) == []
 
-        index = BM25Index()
-        assert index.stats()["total_documents"] == 0
+    def test_remove_document(self, make_store):
+        """Удалённый документ не участвует в BM25-поиске."""
+        store = make_store()
+        store.add("doc1", "python programming", unit(0))
+        store.add("doc2", "java programming", unit(1))
 
-        index.add_document("doc1", "hello world")
-        stats = index.stats()
-        assert stats["total_documents"] == 1
-        assert stats["total_tokens"] > 0
-
-        index.add_document("doc2", "another document with more text")
-        stats = index.stats()
-        assert stats["total_documents"] == 2
-
-    def test_add_documents_batch(self):
-        """add_documents принимает словарь и метаданные."""
-        from src.bm25_index import BM25Index
-
-        index = BM25Index()
-        docs = {
-            "doc1": "python is great",
-            "doc2": "java python is also good",
-        }
-        meta = {
-            "doc1": {"lang": "python"},
-            "doc2": {"lang": "java"},
-        }
-        index.add_documents(docs, meta)
-
-        results = index.search("python", k=5)
-        assert len(results) == 2
-
-        # Проверяем метаданные
-        for doc_id, text, score, metadata in results:
-            assert "lang" in metadata
-
-    def test_remove_document(self):
-        """Удаление документа из индекса."""
-        from src.bm25_index import BM25Index
-
-        index = BM25Index()
-        index.add_document("doc1", "python programming")
-        index.add_document("doc2", "java programming")
-
-        index.remove("doc1")
-        results = index.search("python", k=5)
-        # doc1 должен быть удалён, doc2 может быть в результатах (содержит "programming")
-        # но doc1 точно не должен быть
-        doc_ids = [r[0] for r in results]
+        store.remove("doc1")
+        results = store.bm25_search("python programming", k=5)
+        doc_ids = [r["doc_id"] for r in results]
         assert "doc1" not in doc_ids
 
-        # java всё ещё есть
-        results = index.search("java", k=5)
+        results = store.bm25_search("java", k=5)
+        assert [r["doc_id"] for r in results] == ["doc2"]
+
+    def test_metadata_preserved(self, make_store):
+        """Метаданные возвращаются в результатах BM25-поиска."""
+        store = make_store()
+        store.add("doc1", "python text", unit(0), metadata={"source": "test", "page": 1})
+
+        results = store.bm25_search("python", k=1)
         assert len(results) == 1
-        assert results[0][0] == "doc2"
-
-    def test_metadata_preserved(self):
-        """Метаданные возвращаются при поиске."""
-        from src.bm25_index import BM25Index
-
-        index = BM25Index()
-        index.add_document("doc1", "python text", metadata={"source": "test", "page": 1})
-        results = index.search("python", k=1)
-
-        assert len(results) == 1
-        doc_id, text, score, meta = results[0]
+        meta = results[0]["metadata"]
         assert meta["source"] == "test"
         assert meta["page"] == 1
 
-    # ── D9: Stop words filtering ────────────────────────────────────────
+    def test_metadata_filter(self, make_store):
+        """metadata_filter применяется нативно и в BM25-поиске."""
+        store = make_store()
+        store.add("doc1", "python guide", unit(0), metadata={"lang": "python"})
+        store.add("doc2", "python and java compared", unit(1), metadata={"lang": "java"})
 
-    def test_stop_words_filtered_from_query(self):
-        """D9: Стоп-слова отфильтровываются из запроса — поиск по 'the' не даёт
-        результатов, если все токены — стоп-слова."""
-        from src.bm25_index import BM25Index
+        results = store.bm25_search("python", k=5, metadata_filter={"lang": "java"})
+        assert [r["doc_id"] for r in results] == ["doc2"]
 
-        index = BM25Index()
-        index.add_document("doc1", "python programming language")
-        index.add_document("doc2", "java programming language")
+        results = store.bm25_search("python", k=5, metadata_filter={"lang": ["python", "java"]})
+        assert {r["doc_id"] for r in results} == {"doc1", "doc2"}
 
-        # 'the' — стоп-слово, после фильтрации токенов нет → пустой результат
-        results = index.search("the", k=5)
-        assert results == [], "Поиск только по стоп-словам должен возвращать пустой результат"
+    def test_case_insensitive(self, make_store):
+        """Поиск нечувствителен к регистру."""
+        store = make_store()
+        store.add("doc1", "Python Programming Language", unit(0))
 
-    def test_stop_words_filtered_from_documents(self):
-        """D9: Стоп-слова не индексируются — частое слово 'the' не влияет на ранжирование."""
-        from src.bm25_index import BM25Index
+        results_lower = store.bm25_search("python", k=5)
+        results_upper = store.bm25_search("PYTHON", k=5)
 
-        index = BM25Index()
-        # doc1 содержит 3 значимых слова + стоп-слова
-        index.add_document("doc1", "the the the python the the")
-        # doc2 содержит только значимые
-        index.add_document("doc2", "python java")
+        assert len(results_lower) == 1
+        assert len(results_upper) == 1
+        assert results_lower[0]["doc_id"] == "doc1"
+        assert results_upper[0]["doc_id"] == "doc1"
 
-        # Оба документа содержат 'python' — оба должны найтись
-        results = index.search("python java", k=2)
-        assert len(results) >= 2
+    def test_cyrillic_tokens(self, make_store):
+        """Токенизатор поддерживает кириллицу."""
+        store = make_store()
+        store.add("ru_doc", "Python — мощный язык программирования!", unit(0))
+        store.add("en_doc", "python is a powerful language", unit(1))
 
-    def test_stop_words_disabled(self):
-        """D9: Если remove_stopwords=False, стоп-слова НЕ фильтруются."""
-        from src.bm25_index import BM25Index
+        results = store.bm25_search("язык", k=5)
+        assert [r["doc_id"] for r in results] == ["ru_doc"]
 
-        index = BM25Index()
-        # 'to' — стоп-слово, но с add_document оно фильтруется (default True)
-        # для поиска используем слова, которых нет в документе как стоп-слова
-        index.add_document("doc1", "python programming language")
-        index.add_document("doc2", "java programming language")
+        results = store.bm25_search("ЯЗЫК ПРОГРАММИРОВАНИЯ", k=5)
+        assert [r["doc_id"] for r in results] == ["ru_doc"]
 
-        # Проверяем, что _tokenize принимает параметр remove_stopwords
-        tokens_without = index._tokenize("the python", remove_stopwords=False)
-        assert "the" in tokens_without
-        assert "python" in tokens_without
+    def test_digits_and_underscore_tokens(self, make_store):
+        """Токенизатор поддерживает цифры и underscore."""
+        store = make_store()
+        store.add("doc1", "variable my_var_1 equals 42", unit(0))
+        store.add("doc2", "another document entirely", unit(1))
 
-        tokens_with = index._tokenize("the python", remove_stopwords=True)
-        assert "the" not in tokens_with
-        assert "python" in tokens_with
+        results = store.bm25_search("my_var_1", k=5)
+        assert [r["doc_id"] for r in results] == ["doc1"]
 
-    def test_stop_words_contains_russian(self):
-        """D9: Стоп-слова включают русские."""
-        from src.bm25_index import STOP_WORDS
+        results = store.bm25_search("42", k=5)
+        assert [r["doc_id"] for r in results] == ["doc1"]
 
-        assert "и" in STOP_WORDS
-        assert "в" in STOP_WORDS
-        assert "не" in STOP_WORDS
-        assert "что" in STOP_WORDS
+
+class TestBM25ModuleFunctions:
+    """Тесты модульных функций BM25 (без Qdrant-клиента)."""
+
+    def test_hash_token_stable_and_positive(self):
+        from src.vector_store import hash_token
+
+        assert hash_token("python") == hash_token("python")
+        assert hash_token("python") >= 0
+        assert hash_token("python") != hash_token("java")
+        # Кириллица хэшируется без ошибок
+        assert hash_token("язык") >= 0
+
+    def test_bm25_sparse_vector_document(self):
+        from src.vector_store import bm25_sparse_vector, hash_token
+
+        vec = bm25_sparse_vector("python python java")
+        assert len(vec.indices) == 2
+        assert set(vec.indices) == {hash_token("python"), hash_token("java")}
+        weights = dict(zip(vec.indices, vec.values))
+        # TF-сатурация: больше вхождений — больше вес, но все веса > 0
+        assert weights[hash_token("python")] > weights[hash_token("java")] > 0
+
+    def test_bm25_sparse_vector_query_weights_are_one(self):
+        from src.vector_store import bm25_sparse_vector
+
+        vec = bm25_sparse_vector("python python java", is_query=True)
+        assert len(vec.indices) == 2
+        assert all(v == 1.0 for v in vec.values)
+
+    def test_bm25_sparse_vector_empty_text(self):
+        from src.vector_store import bm25_sparse_vector
+
+        for text in ("", "   ", "!!! ---"):
+            vec = bm25_sparse_vector(text)
+            assert vec.indices == []
+            assert vec.values == []
+
+    def test_bm25_sparse_vector_tf_saturation(self):
+        """TF растёт с числом вхождений, но с насыщением (вклад убывает)."""
+        from src.vector_store import bm25_sparse_vector
+
+        w1 = bm25_sparse_vector("python").values[0]
+        w3 = bm25_sparse_vector("python python python").values[0]
+        w9 = bm25_sparse_vector(" ".join(["python"] * 9)).values[0]
+        assert w1 < w3 < w9
+        assert (w3 - w1) > (w9 - w3) / 3  # прирост замедляется
+
+    def test_to_qdrant_filter_none_and_empty(self):
+        from src.vector_store import to_qdrant_filter
+
+        assert to_qdrant_filter(None) is None
+        assert to_qdrant_filter({}) is None
+
+    def test_to_qdrant_filter_scalar_and_list(self):
+        from qdrant_client import models
+
+        from src.vector_store import to_qdrant_filter
+
+        filt = to_qdrant_filter({"category": "a", "tags": ["x", "y"]})
+        assert isinstance(filt, models.Filter)
+        assert len(filt.must) == 2
+        by_key = {c.key: c for c in filt.must}
+        assert by_key["metadata.category"].match == models.MatchValue(value="a")
+        assert by_key["metadata.tags"].match == models.MatchAny(any=["x", "y"])

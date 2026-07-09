@@ -8,22 +8,36 @@ class TestRAGConfig:
 
     def test_defaults(self):
         cfg = RAGConfig()
-        assert cfg.embedding_provider == "ollama"
+        assert cfg.embedding_provider == "bge-m3"
+        assert cfg.bge_model_name == "BAAI/bge-m3"
+        assert cfg.embedding_dim == 1024
+        assert cfg.embedding_device == "cpu"
         assert cfg.ollama_base_url == "http://localhost:11434"
         assert cfg.ollama_model == "qwen3-embedding:8b"
         assert cfg.ollama_dimension == 4096
         assert cfg.openrouter_api_key is None
         assert cfg.openrouter_model == "openai/text-embedding-3-small"
         assert cfg.store_path == "./rag_data"
+        assert cfg.qdrant_url == ""
+        assert cfg.database_url == ""
 
     def test_from_env_defaults(self, monkeypatch):
-        for key in ["EMBEDDING_PROVIDER", "OLLAMA_BASE_URL", "OLLAMA_MODEL",
-                     "OLLAMA_DIMENSION", "OPENROUTER_API_KEY", "OPENROUTER_MODEL", "STORE_PATH"]:
+        for key in ["EMBEDDING_MODEL", "EMBEDDING_PROVIDER", "OLLAMA_BASE_URL", "OLLAMA_MODEL",
+                     "OLLAMA_DIMENSION", "OPENROUTER_API_KEY", "OPENROUTER_MODEL", "STORE_PATH",
+                     "QDRANT_URL", "DATABASE_URL"]:
             monkeypatch.delenv(key, raising=False)
 
         cfg = RAGConfig.from_env()
-        assert cfg.embedding_provider == "ollama"
+        assert cfg.embedding_provider == "bge-m3"
         assert cfg.ollama_base_url == "http://localhost:11434"
+
+    def test_resolve_storage_locations(self):
+        cfg = RAGConfig(store_path="./data")
+        assert cfg.resolve_qdrant_location() == "./data/qdrant"
+        assert cfg.resolve_database_url() == "./data/store.db"
+        cfg_prod = RAGConfig(qdrant_url="http://q:6333", database_url="postgresql://u@h/db")
+        assert cfg_prod.resolve_qdrant_location() == "http://q:6333"
+        assert cfg_prod.resolve_database_url() == "postgresql://u@h/db"
 
     def test_from_env_custom(self, monkeypatch):
         monkeypatch.setenv("EMBEDDING_PROVIDER", "openrouter")
@@ -60,5 +74,5 @@ class TestRAGConfig:
     def test_to_env_preview(self):
         cfg = RAGConfig()
         preview = cfg.to_env_preview()
-        assert "EMBEDDING_PROVIDER=ollama" in preview
+        assert "EMBEDDING_MODEL=bge-m3" in preview
         assert "OLLAMA_BASE_URL=http://localhost:11434" in preview

@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Optional
 
-from src.graph_store import GraphKnowledgeBase
+from src.graph_store import GraphStore
 from src.rag import RAGSystem
 
 RELATION_COLORS = [
@@ -54,7 +54,7 @@ def _make_label(text: str, max_chars: int = 35) -> str:
 
 
 def _build_subgraph(
-    graph: GraphKnowledgeBase,
+    graph: GraphStore,
     max_nodes: Optional[int] = None,
     relation_type: Optional[list[str]] = None,
     focus_node: Optional[str] = None,
@@ -91,7 +91,7 @@ def _build_subgraph(
 
 
 def _render_html(
-    graph: GraphKnowledgeBase, output_path: str,
+    graph: GraphStore, output_path: str,
     included: set[str], edges: list[dict], layout: str,
     api_base_url: str = "",
 ) -> None:
@@ -687,7 +687,7 @@ function closeSidepanel() {{
 
 
 def _render_dot(
-    graph: GraphKnowledgeBase, output_path: str,
+    graph: GraphStore, output_path: str,
     included: set[str], edges: list[dict], layout: str,
 ) -> None:
     lines = ["digraph KnowledgeGraph {"]
@@ -717,7 +717,7 @@ def _render_dot(
 
 
 def _render_json(
-    graph: GraphKnowledgeBase, output_path: str,
+    graph: GraphStore, output_path: str,
     included: set[str], edges: list[dict], layout: str,
 ) -> None:
     data = {
@@ -735,7 +735,7 @@ def _render_json(
 
 
 def _render_ascii(
-    graph: GraphKnowledgeBase, output_path: str,
+    graph: GraphStore, output_path: str,
     included: set[str], edges: list[dict], layout: str,
 ) -> None:
     lines = [f"Knowledge Graph: {len(included)} nodes, {len(edges)} edges"]
@@ -777,7 +777,7 @@ def _render_ascii(
 
 
 def render_graph_viz(
-    graph: GraphKnowledgeBase,
+    graph: GraphStore,
     output_path: str = "graph_viz.html",
     output_format: str = "html",
     max_nodes: Optional[int] = None,
@@ -808,7 +808,7 @@ def render_graph_viz(
 
 
 def serve_graph(
-    graph: GraphKnowledgeBase,
+    graph: GraphStore,
     rag: Optional[RAGSystem] = None,
     output_path: str = "graph_viz.html",
     port: int = 8090,
