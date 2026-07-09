@@ -18,3 +18,10 @@ rag_data/
 # OS
 .DS_Store
 Thumbs.db
+
+PROBLEMS.md
+.understand-anything/
+.coverage
+
+opencode.json
+*.db*
