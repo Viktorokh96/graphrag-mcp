@@ -11,6 +11,7 @@ BM25 (токены с TF-сатурацией; IDF считает Qdrant чер�
 payload содержит doc_id, metadata (для нативных фильтров) и text_preview.
 """
 
+import math
 import re
 import uuid
 from typing import Optional
@@ -23,10 +24,11 @@ COLLECTION = "rag_docs"
 # (например, SHA256-имя сущности из авто-извлечения графа).
 _POINT_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
-# BM25 TF-сатурация (IDF применяет Qdrant на своей стороне)
+# BM25 TF-сатурация
 _BM25_K1 = 1.2
 _BM25_B = 0.75
 _BM25_AVG_LEN = 256.0
+_BM25_EPS = 0.25  # сглаживание IDF: log((N - df + 0.5) / (df + 0.5))
 
 _TOKEN_RE = re.compile(r"[a-zа-яё0-9_]+", re.IGNORECASE)
 
@@ -77,8 +79,7 @@ def to_qdrant_filter(filt: Optional[dict]) -> Optional[models.Filter]:
     for key, expected in filt.items():
         field = f"metadata.{key}"
         if isinstance(expected, list):
-            cleaned = [v for v in expected if isinstance(v, (str, int, bool)) or v is None]
-            # MatchAny не принимает float/None — они сравниваются по одному через should
+            cleaned = [v for v in expected if isinstance(v, (str, int, bool))]
             if cleaned:
                 conditions.append(
                     models.FieldCondition(key=field, match=models.MatchAny(any=cleaned))
@@ -105,6 +106,8 @@ class QdrantVectorStore:
             self._client = QdrantClient(url=location)
         else:
             self._client = QdrantClient(path=location)
+        self._token_df: dict[int, int] = {}
+        self._did_load_token_df = False
         self._ensure_collection()
 
     # -- collection lifecycle -------------------------------------------------
@@ -130,7 +133,7 @@ class QdrantVectorStore:
                 "dense": models.VectorParams(size=self.dimension, distance=models.Distance.COSINE),
             },
             sparse_vectors_config={
-                "bm25": models.SparseVectorParams(modifier=models.Modifier.IDF),
+                "bm25": models.SparseVectorParams(),
             },
         )
 
@@ -138,6 +141,8 @@ class QdrantVectorStore:
         if self._client.collection_exists(COLLECTION):
             self._client.delete_collection(COLLECTION)
         self._create_collection()
+        self._token_df.clear()
+        self._did_load_token_df = True
 
     def get_dimension(self) -> int:
         """Размерность dense-векторов коллекции (из конфига коллекции)."""
@@ -149,6 +154,44 @@ class QdrantVectorStore:
         except Exception:
             pass
         return 0
+
+    def _load_token_df(self) -> None:
+        if self._did_load_token_df:
+            return
+        self._token_df.clear()
+        offset = None
+        while True:
+            points, offset = self._client.scroll(
+                COLLECTION, limit=1024, offset=offset,
+                with_payload=["text_hashes"], with_vectors=False,
+            )
+            for p in points:
+                hashes = p.payload.get("text_hashes") or []
+                for h in hashes:
+                    self._token_df[h] = self._token_df.get(h, 0) + 1
+            if offset is None:
+                break
+        self._did_load_token_df = True
+
+    def _update_token_df(self, text: str, delta: int) -> None:
+        tokens = set(_tokenize(text))
+        for tok in tokens:
+            h = hash_token(tok)
+            self._token_df[h] = max(0, self._token_df.get(h, 0) + delta)
+
+    def _idf_for_tokens(self, tokens: list[str]) -> dict[int, float]:
+        self._load_token_df()
+        n = max(self.count(), 1)
+        idf: dict[int, float] = {}
+        seen: set[int] = set()
+        for tok in tokens:
+            h = hash_token(tok)
+            if h in seen:
+                continue
+            seen.add(h)
+            df = self._token_df.get(h, 0)
+            idf[h] = math.log((n - df + 0.5) / (df + 0.5) + 1.0)
+        return idf
 
     # -- CRUD -----------------------------------------------------------------
 
@@ -166,13 +209,23 @@ class QdrantVectorStore:
                         "doc_id": doc_id,
                         "metadata": metadata or {},
                         "text_preview": text[:200],
+                        "text_hashes": list(set(hash_token(t) for t in _tokenize(text))),
                     },
                 )
             ],
         )
+        self._update_token_df(text, delta=1)
         return doc_id
 
     def remove(self, doc_id: str) -> None:
+        points = self._client.retrieve(
+            COLLECTION, ids=[_point_id(doc_id)],
+            with_payload=["text_hashes"], with_vectors=False,
+        )
+        if points:
+            hashes = points[0].payload.get("text_hashes") or []
+            for h in hashes:
+                self._token_df[h] = max(0, self._token_df.get(h, 0) - 1)
         self._client.delete(
             collection_name=COLLECTION,
             points_selector=models.PointIdsList(points=[_point_id(doc_id)]),
@@ -239,7 +292,14 @@ class QdrantVectorStore:
         """Sparse BM25-поиск. Возвращает [{doc_id, score, metadata}]."""
         if self.count() == 0:
             return []
-        sparse = bm25_sparse_vector(query, is_query=True)
+        query_tokens = _tokenize(query)
+        if not query_tokens:
+            return []
+        idf = self._idf_for_tokens(query_tokens)
+        sparse = models.SparseVector(
+            indices=list(idf.keys()),
+            values=list(idf.values()),
+        )
         if not sparse.indices:
             return []
         hits = self._client.query_points(

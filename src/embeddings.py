@@ -174,7 +174,8 @@ class OpenRouterEmbeddingGenerator:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "openai/text-embedding-3-small"
+        model: str = "openai/text-embedding-3-small",
+        dimension: int = 1536,
     ):
         """
         Инициализация генератора эмбеддингов.
@@ -182,14 +183,13 @@ class OpenRouterEmbeddingGenerator:
         Args:
             api_key: OpenRouter API ключ (из аргумента или env OPENROUTER_API_KEY)
             model: Модель для эмбеддингов (по умолчанию openai/text-embedding-3-small)
+            dimension: Размерность эмбеддингов модели (по умолчанию 1536 для text-embedding-3-small)
         """
         self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
         self.model = model
         self._cache: dict[str, list[float]] = {}
-        # Размерность fallback эмбеддингов.
-        # openai/text-embedding-3-small выдаёт 1536, поэтому fallback должен совпадать,
-        # иначе ChromaDB коллекция сломается при смене источника.
-        self._fallback_dimension = 1536
+        self._client = httpx.Client(timeout=30.0)
+        self._fallback_dimension = dimension
 
     def get_embedding(self, text: str) -> list[float]:
         """
@@ -247,6 +247,10 @@ class OpenRouterEmbeddingGenerator:
         """Очистить кеш эмбеддингов."""
         self._cache.clear()
 
+    def close(self):
+        """Закрыть HTTP-соединение (connection pool)."""
+        self._client.close()
+
     def _call_api(self, text: str) -> list[float]:
         """
         Вызов OpenRouter API для получения эмбеддинга.
@@ -270,12 +274,11 @@ class OpenRouterEmbeddingGenerator:
             "input": text
         }
 
-        with httpx.Client() as client:
-            response = client.post(url, headers=headers, json=payload, timeout=30.0)
-            response.raise_for_status()
-            data = response.json()
-            embedding = data["data"][0]["embedding"]
-            return embedding
+        response = self._client.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        embedding = data["data"][0]["embedding"]
+        return embedding
 
     def _fallback_embedding(self, text: str) -> list[float]:
         """
@@ -329,6 +332,7 @@ class OllamaEmbeddingGenerator:
         self.model = model
         self._dimension = dimension
         self._cache: dict[str, list[float]] = {}
+        self._client = httpx.Client(timeout=120.0)
 
     def get_embedding(self, text: str) -> list[float]:
         if text in self._cache:
@@ -344,10 +348,20 @@ class OllamaEmbeddingGenerator:
             return embedding
 
     def get_embeddings(self, texts: list[str]) -> list[list[float]]:
-        results = []
-        for text in texts:
-            results.append(self.get_embedding(text))
-        return results
+        missing = [t for t in texts if t not in self._cache]
+        if missing:
+            try:
+                url = f"{self.base_url}/api/embed"
+                payload = {"model": self.model, "input": missing}
+                response = self._client.post(url, json=payload, timeout=120.0)
+                response.raise_for_status()
+                data = response.json()
+                for text, vec in zip(missing, data["embeddings"]):
+                    self._cache[text] = vec
+            except Exception:
+                for text in missing:
+                    self._cache[text] = self._fallback_embedding(text)
+        return [self._cache[t] for t in texts]
 
     def get_dimension(self) -> int:
         for emb in self._cache.values():
@@ -357,6 +371,9 @@ class OllamaEmbeddingGenerator:
     def clear_cache(self):
         self._cache.clear()
 
+    def close(self):
+        self._client.close()
+
     def _call_api(self, text: str) -> list[float]:
         url = f"{self.base_url}/api/embed"
         payload = {
@@ -364,12 +381,11 @@ class OllamaEmbeddingGenerator:
             "input": text,
         }
 
-        with httpx.Client() as client:
-            response = client.post(url, json=payload, timeout=120.0)
-            response.raise_for_status()
-            data = response.json()
-            embedding = data["embeddings"][0]
-            return embedding
+        response = self._client.post(url, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        embedding = data["embeddings"][0]
+        return embedding
 
     def _fallback_embedding(self, text: str) -> list[float]:
         import hashlib

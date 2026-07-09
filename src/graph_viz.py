@@ -134,20 +134,22 @@ def _render_html(
         fs = 12 + min(d * 0.5, 8)
 
         meta_str = json.dumps(node.get("metadata", {}), ensure_ascii=False)
+        nid_esc = nid.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        meta_esc = meta_str.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         if api_base_url:
             preview = ""
             title = (
-                f"<b>ID:</b> {nid}<br>"
+                f"<b>ID:</b> {nid_esc}<br>"
                 f"<b>Degree:</b> {d}<br>"
-                f"<b>Metadata:</b> {meta_str}"
+                f"<b>Metadata:</b> {meta_esc}"
             )
         else:
             preview = node["text"][:300].replace("<", "&lt;").replace(">", "&gt;")
             title = (
-                f"<b>ID:</b> {nid}<br>"
+                f"<b>ID:</b> {nid_esc}<br>"
                 f"<b>Preview:</b> {preview}<br>"
                 f"<b>Degree:</b> {d}<br>"
-                f"<b>Metadata:</b> {meta_str}"
+                f"<b>Metadata:</b> {meta_esc}"
             )
 
         node_entry = {

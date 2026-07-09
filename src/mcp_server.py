@@ -83,6 +83,11 @@ TOOL_DEFS = [
                     ),
                     "default": None,
                 },
+                "extract_graph": {
+                    "type": "boolean",
+                    "description": "If true, extract entity-relation graph via LLM.",
+                    "default": False,
+                },
             },
             "required": ["filepath"],
         },
@@ -569,7 +574,7 @@ def _parse_meta(value):
         try:
             parsed = json.loads(value)
             return parsed if isinstance(parsed, dict) else {"_raw": value}
-        except Exception:
+        except (json.JSONDecodeError, TypeError):
             return {"_raw": value}
     return {"_raw": value}
 
@@ -598,10 +603,10 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
     def _add_file_handler(p):
         filepath = p["filepath"]
         meta = _parse_meta(p.get("meta"))
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, "r", encoding="utf-8-sig") as f:
             text = f.read()
         existing = rag.is_duplicate(text)
-        doc_id = rag.add_file(filepath, meta)
+        doc_id = rag.add_document(text, meta, extract_graph=p.get("extract_graph", False))
         return {"doc_id": doc_id, "duplicate": existing is not None}
 
     def _enrich(p, docs):

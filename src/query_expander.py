@@ -31,7 +31,7 @@ class QueryExpander:
     def _ensure_client(self):
         if self._client is None:
             from ollama import Client
-            self._client = Client(host=self.base_url)
+            self._client = Client(host=self.base_url, timeout=120.0)
         return self._client
 
     def expand(self, query: str, count: Optional[int] = None) -> list[str]:

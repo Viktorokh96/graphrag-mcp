@@ -74,6 +74,26 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser_hybrid.add_argument("--relations-load-type-filter", type=str, default=None, help='Comma-separated relation types')
     parser_hybrid.add_argument("--relations-load-meta-filter", type=str, default=None, help='Neighbour metadata filter JSON')
 
+    # add-structured
+    parser_add_structured = subparsers.add_parser("add-structured", help="Index structured code (repomix JSON)")
+    parser_add_structured.add_argument("--content", type=str, required=True, help="JSON string in repomix format")
+    parser_add_structured.add_argument("--extract-graph", action="store_true", help="Extract entity-relation graph from files")
+
+    # list-documents
+    parser_list = subparsers.add_parser("list-documents", help="List documents with pagination")
+    parser_list.add_argument("--limit", type=int, default=20, help="Max documents to return (default: 20)")
+    parser_list.add_argument("--offset", type=int, default=0, help="Start offset (default: 0)")
+    parser_list.add_argument("--max-chars", type=int, default=None, help="Truncate text to N chars")
+    parser_list.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
+    parser_list.add_argument("--relations-load-depth", type=int, default=1, help="BFS depth for graph relations")
+
+    # get-document
+    parser_get = subparsers.add_parser("get-document", help="Get document by ID")
+    parser_get.add_argument("--doc-id", type=str, required=True, help="Document UUID")
+    parser_get.add_argument("--offset", type=int, default=0, help="Character offset (default: 0)")
+    parser_get.add_argument("--limit", type=int, default=None, help="Max characters to return")
+    parser_get.add_argument("--relations-load-depth", type=int, default=1, help="BFS depth for graph relations")
+
     # stats
     subparsers.add_parser("stats", help="Show statistics")
 
@@ -205,6 +225,28 @@ def main(argv: Optional[list[str]] = None) -> int:
             docs = [{"doc_id": r[0], "text": r[1], "score": r[2], "metadata": r[3]} for r in results]
             rag._enrich_with_links(docs, relations_load_depth=args.relations_load_depth, relations_load_type_filter=rtype, relations_load_meta_filter=rmeta)
             _print_dict_results("Гибридный поиск", docs)
+            return 0
+
+        elif args.command == "add-structured":
+            result = rag.index_structured(args.content, extract_graph=args.extract_graph)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+
+        elif args.command == "list-documents":
+            meta_filter = json.loads(args.meta_filter) if args.meta_filter else None
+            result = rag.list_documents(
+                limit=args.limit, offset=args.offset, max_chars=args.max_chars,
+                metadata_filter=meta_filter, relations_load_depth=args.relations_load_depth,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+            return 0
+
+        elif args.command == "get-document":
+            doc = rag.get_document(args.doc_id, offset=args.offset, limit=args.limit, relations_load_depth=args.relations_load_depth)
+            if doc is None:
+                print(f"❌ Document not found: {args.doc_id}")
+                return 1
+            print(json.dumps(doc, ensure_ascii=False, indent=2, default=str))
             return 0
 
         elif args.command == "stats":

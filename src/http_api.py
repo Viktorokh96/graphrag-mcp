@@ -28,6 +28,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from mcp.server.sse import SseServerTransport
@@ -124,6 +125,14 @@ app = FastAPI(
     description="Production-grade RAG MCP server with hybrid search, knowledge graph, and HTTP API",
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # -- helpers -----------------------------------------------------------------
 
@@ -166,19 +175,19 @@ async def health():
 
 
 @app.get("/stats")
-async def stats():
+def stats():
     s = _rag().stats()
     return {"total_documents": s["total_documents"], "store_path": s["store_path"], "dimension": s["dimension"]}
 
 
 @app.get("/graph/stats")
-async def graph_stats():
+def graph_stats():
     s = _rag().stats()
     return {"total_nodes": s["total_nodes"], "total_edges": s["total_edges"], "relation_types": s["relation_types"]}
 
 
 @app.post("/search")
-async def search(req: SearchRequest):
+def search(req: SearchRequest):
     rag = _rag()
     mode = req.mode or "hybrid"
     mf = normalize_metadata_filter(req.metadata_filter)
@@ -196,7 +205,7 @@ async def search(req: SearchRequest):
 
 
 @app.post("/documents")
-async def add_document(req: AddDocumentRequest):
+def add_document(req: AddDocumentRequest):
     rag = _rag()
     existing = rag.is_duplicate(req.text)
     from src.mcp_server import _parse_meta
@@ -206,7 +215,7 @@ async def add_document(req: AddDocumentRequest):
 
 
 @app.get("/documents")
-async def list_documents(
+def list_documents(
     limit: int = Query(20, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     max_chars: Optional[int] = Query(None),
@@ -228,7 +237,7 @@ async def list_documents(
 
 
 @app.get("/documents/{doc_id}")
-async def get_document(
+def get_document(
     doc_id: str,
     offset: int = Query(0, ge=0),
     limit: Optional[int] = Query(None, ge=1),
@@ -249,19 +258,19 @@ async def get_document(
 
 
 @app.delete("/documents/{doc_id}")
-async def delete_document(doc_id: str):
+def delete_document(doc_id: str):
     deleted = _rag().delete_document(doc_id)
     return {"status": "ok", "doc_id": doc_id, "deleted": deleted}
 
 
 @app.post("/relations")
-async def add_relation(req: AddRelationRequest):
+def add_relation(req: AddRelationRequest):
     _rag().add_relation(req.source_id, req.target_id, req.relation, req.weight)
     return {"status": "ok"}
 
 
 @app.get("/relations/{node_id}")
-async def get_related(
+def get_related(
     node_id: str,
     max_depth: int = Query(1, ge=1),
     metadata_filter: Optional[str] = Query(None),
@@ -277,19 +286,19 @@ async def get_related(
 
 
 @app.post("/clear")
-async def clear():
+def clear():
     _rag().clear()
     return {"status": "ok"}
 
 
-@app.get("/reindex")
-async def reindex():
+@app.post("/reindex")
+def reindex():
     count = _rag().reindex()
     return {"status": "ok", "reindexed": count}
 
 
 @app.post("/structured")
-async def add_structured(req: StructuredRequest):
+def add_structured(req: StructuredRequest):
     result = _rag().index_structured(req.content, extract_graph=req.extract_graph)
     return result
 

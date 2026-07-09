@@ -24,7 +24,7 @@ class GraphExtractor:
     def _ensure_client(self):
         if self._client is None:
             from ollama import Client
-            self._client = Client(host=self.base_url)
+            self._client = Client(host=self.base_url, timeout=120.0)
         return self._client
 
     def _entity_doc_id(self, name: str) -> str:
@@ -101,6 +101,7 @@ class GraphExtractor:
             name,
             metadata={"type": "entity", "auto_extracted": True, "name": name},
             doc_id=doc_id,
+            _skip_length_check=True,
         )
         return doc_id
 
@@ -111,7 +112,10 @@ class GraphExtractor:
             return [{"error": "spaCy not installed, run: pip install spacy && python -m spacy download en_core_web_sm"}]
 
         import spacy
-        nlp_en = spacy.load("en_core_web_sm")
+        try:
+            nlp_en = spacy.load("en_core_web_sm")
+        except OSError:
+            return [{"error": "spaCy model 'en_core_web_sm' not downloaded. Run: python -m spacy download en_core_web_sm"}]
         doc = nlp_en(text[:10000])
         results = []
         seen = set()

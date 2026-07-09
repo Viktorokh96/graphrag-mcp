@@ -53,11 +53,14 @@ class RAGSystem:
         if embedding_generator is not None:
             self.embedding_generator = embedding_generator
         elif api_key is not None:
-            self.embedding_generator = OpenRouterEmbeddingGenerator(api_key=api_key)
+            self.embedding_generator = OpenRouterEmbeddingGenerator(
+                api_key=api_key, dimension=cfg.openrouter_dimension,
+            )
         elif cfg.embedding_provider == "openrouter" and cfg.openrouter_api_key:
             self.embedding_generator = OpenRouterEmbeddingGenerator(
                 api_key=cfg.openrouter_api_key,
                 model=cfg.openrouter_model,
+                dimension=cfg.openrouter_dimension,
             )
         elif cfg.embedding_provider == "ollama":
             self.embedding_generator = OllamaEmbeddingGenerator(
@@ -65,12 +68,16 @@ class RAGSystem:
                 model=cfg.ollama_model,
                 dimension=cfg.ollama_dimension,
             )
-        else:
-            # bge-m3 — дефолт: локальная мультиязычная модель, lazy load
+        elif cfg.embedding_provider == "bge-m3":
             self.embedding_generator = BgeM3EmbeddingGenerator(
                 model_name=cfg.bge_model_name,
                 device=cfg.embedding_device,
                 dimension=cfg.embedding_dim,
+            )
+        else:
+            raise ValueError(
+                f"Unknown embedding provider: {cfg.embedding_provider!r}. "
+                f"Supported: bge-m3, ollama, openrouter."
             )
 
         self.db = Database(cfg.resolve_database_url())
@@ -137,6 +144,7 @@ class RAGSystem:
         doc_id: Optional[str] = None,
         extract_graph: bool = False,
         extract_graph_mode: str = "llm",
+        _skip_length_check: bool = False,
     ) -> str:
         """
         Добавить документ в систему.
@@ -148,6 +156,8 @@ class RAGSystem:
                     старых id); по умолчанию генерируется uuid4
             extract_graph: извлечь граф (entity-relation triples) через LLM
             extract_graph_mode: "llm" (Qwen3-4B) или "ner" (spaCy)
+            _skip_length_check: внутренний — пропустить проверку MIN_CONTENT_LENGTH
+                                (для документов-сущностей из GraphExtractor)
 
         Returns:
             doc_id (или существующий id при дубликате)
@@ -155,7 +165,7 @@ class RAGSystem:
         Raises:
             ValueError: если текст короче MIN_CONTENT_LENGTH
         """
-        if len(text.strip()) < self.MIN_CONTENT_LENGTH:
+        if not _skip_length_check and len(text.strip()) < self.MIN_CONTENT_LENGTH:
             raise ValueError(
                 f"Document too short ({len(text.strip())} chars). "
                 f"Minimum content length is {self.MIN_CONTENT_LENGTH} characters."
@@ -189,10 +199,13 @@ class RAGSystem:
             doc_ids.append(self.add_document(text, meta))
         return doc_ids
 
-    def add_file(self, filepath: str, metadata: Optional[dict] = None) -> str:
-        with open(filepath, "r", encoding="utf-8") as f:
+    def add_file(
+        self, filepath: str, metadata: Optional[dict] = None,
+        extract_graph: bool = False, extract_graph_mode: str = "llm",
+    ) -> str:
+        with open(filepath, "r", encoding="utf-8-sig") as f:
             text = f.read()
-        return self.add_document(text, metadata)
+        return self.add_document(text, metadata, extract_graph=extract_graph, extract_graph_mode=extract_graph_mode)
 
     # -- search -----------------------------------------------------------------
 
@@ -370,11 +383,13 @@ class RAGSystem:
 
         do_rerank = rerank if rerank is not None else self._reranker_enabled
         if do_rerank and len(merged) > 1:
+            top_k = k
+            candidate_k = min(len(merged), k * self._reranker_top_k_multiplier)
             candidates = [
                 {"doc_id": doc_id, "text": text, "score": score, "metadata": meta}
-                for doc_id, text, score, meta in merged
+                for doc_id, text, score, meta in merged[:candidate_k]
             ]
-            reranked = self._get_reranker().rerank(query, candidates, top_k=k)
+            reranked = self._get_reranker().rerank(query, candidates, top_k=top_k)
             merged = [
                 (d["doc_id"], d["text"], d["rerank_score"], d["metadata"])
                 for d in reranked
@@ -577,4 +592,9 @@ class RAGSystem:
         try:
             self.vector_store.close()
         finally:
-            self.db.close()
+            try:
+                close_gen = getattr(self.embedding_generator, "close", None)
+                if close_gen:
+                    close_gen()
+            finally:
+                self.db.close()

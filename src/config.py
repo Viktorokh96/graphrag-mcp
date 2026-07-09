@@ -3,6 +3,20 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+def _env_int(key: str, default: str) -> int:
+    val = os.environ.get(key)
+    if val is None or val.strip() == "":
+        return int(default)
+    return int(val)
+
+
+def _env_float(key: str, default: str) -> float:
+    val = os.environ.get(key)
+    if val is None or val.strip() == "":
+        return float(default)
+    return float(val)
+
+
 @dataclass
 class RAGConfig:
     # Провайдер эмбеддингов: bge-m3 (локально, дефолт) | ollama | openrouter.
@@ -17,6 +31,7 @@ class RAGConfig:
     ollama_dimension: int = 4096
     openrouter_api_key: Optional[str] = None
     openrouter_model: str = "openai/text-embedding-3-small"
+    openrouter_dimension: int = 1536
     store_path: str = "./rag_data"
     # Хранилища (Фаза 2). Пустые значения → embedded-режим внутри store_path:
     #   qdrant_url:   URL Qdrant-сервера (prod) | "" → embedded {store_path}/qdrant
@@ -64,28 +79,32 @@ class RAGConfig:
                 "EMBEDDING_MODEL", os.environ.get("EMBEDDING_PROVIDER", "bge-m3")
             ),
             bge_model_name=os.environ.get("BGE_MODEL_NAME", "BAAI/bge-m3"),
-            embedding_dim=int(os.environ.get("EMBEDDING_DIM", "1024")),
+            embedding_dim=_env_int("EMBEDDING_DIM", "1024"),
             embedding_device=os.environ.get("EMBEDDING_DEVICE", "cpu"),
             ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
             ollama_model=os.environ.get("OLLAMA_MODEL", "qwen3-embedding:8b"),
-            ollama_dimension=int(os.environ.get("OLLAMA_DIMENSION", "4096")),
+            ollama_dimension=_env_int("OLLAMA_DIMENSION", "4096"),
             openrouter_api_key=os.environ.get("OPENROUTER_API_KEY"),
             openrouter_model=os.environ.get("OPENROUTER_MODEL", "openai/text-embedding-3-small"),
+            openrouter_dimension=_env_int("OPENROUTER_DIMENSION", "1536"),
             store_path=os.environ.get("STORE_PATH", "./rag_data"),
             qdrant_url=os.environ.get("QDRANT_URL", ""),
             database_url=os.environ.get("DATABASE_URL", ""),
-            default_alpha=float(os.environ.get("RAG_DEFAULT_ALPHA", "0.5")),
-            cyrillic_alpha=float(os.environ.get("RAG_CYRILLIC_ALPHA", "0.85")),
-            hybrid_expand=int(os.environ.get("RAG_HYBRID_EXPAND", "3")),
-            hybrid_min_candidates=int(os.environ.get("RAG_HYBRID_MIN_CANDIDATES", "20")),
+            default_alpha=_env_float("RAG_DEFAULT_ALPHA", "0.5"),
+            cyrillic_alpha=_env_float("RAG_CYRILLIC_ALPHA", "0.85"),
+            hybrid_expand=_env_int("RAG_HYBRID_EXPAND", "3"),
+            hybrid_min_candidates=_env_int("RAG_HYBRID_MIN_CANDIDATES", "20"),
             rerank_enabled=os.environ.get("RERANK_ENABLED", "").lower() in ("1", "true", "yes"),
             rerank_model=os.environ.get("RERANK_MODEL", "BAAI/bge-reranker-v2-m3"),
             rerank_device=os.environ.get("RERANK_DEVICE", "cpu"),
-            rerank_top_k_multiplier=int(os.environ.get("RERANK_TOP_K_MULTIPLIER", "2")),
+            rerank_top_k_multiplier=_env_int("RERANK_TOP_K_MULTIPLIER", "2"),
             query_expansion_enabled=os.environ.get("QUERY_EXPANSION_ENABLED", "").lower() in ("1", "true", "yes"),
             query_expansion_model=os.environ.get("QUERY_EXPANSION_MODEL", "qwen3:1.8b"),
-            query_expansion_count=int(os.environ.get("QUERY_EXPANSION_COUNT", "3")),
-            query_expansion_ollama_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
+            query_expansion_count=_env_int("QUERY_EXPANSION_COUNT", "3"),
+            query_expansion_ollama_url=os.environ.get(
+                "QUERY_EXPANSION_OLLAMA_URL",
+                os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
+            ),
         )
 
     def resolve_qdrant_location(self) -> str:
@@ -113,6 +132,7 @@ class RAGConfig:
             "# OpenRouter настройки (нужен API ключ)",
             f"OPENROUTER_API_KEY={self.openrouter_api_key or ''}",
             f"OPENROUTER_MODEL={self.openrouter_model}",
+            f"OPENROUTER_DIMENSION={self.openrouter_dimension}",
             "",
             "# Путь к хранилищу (embedded-режим: qdrant/ и store.db внутри)",
             f"STORE_PATH={self.store_path}",
