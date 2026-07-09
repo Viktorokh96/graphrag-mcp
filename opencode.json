@@ -7,8 +7,7 @@
     "task": "allow"
   },
   "instructions": [
-    "AGENTS.md",
-    "specifications/rag-audit-fixes.md"
+    "AGENTS.md"
   ],
   "references": {
     "specs": {
@@ -26,12 +25,11 @@
   "mcp": {
     "rag-server": {
       "type": "local",
-      "command": ["python3", "-m", "src.mcp_server"],
+      "command": ["/home/viktorokh96/Work/graphrag/.venv/bin/python3", "-m", "src.mcp_server"],
+      "cwd": "/home/viktorokh96/Work/graphrag",
       "enabled": true,
-      "env": {
-        "EMBEDDING_PROVIDER": "ollama",
-        "OLLAMA_BASE_URL": "http://localhost:11434",
-        "OLLAMA_MODEL": "qwen3-embedding:8b",
+      "environment": {
+        "EMBEDDING_MODEL": "bge-m3",
         "STORE_PATH": "./rag_data"
       }
     }
@@ -55,7 +53,7 @@
     },
     "start": {
       "description": "Start the RAG MCP server (stdio mode)",
-      "template": "EMBEDDING_PROVIDER=ollama python3 -m src.mcp_server"
+      "template": "EMBEDDING_MODEL=bge-m3 /home/viktorokh96/Work/graphrag/.venv/bin/python3 -m src.mcp_server"
     },
     "add": {
       "description": "Add a text document to the knowledge base. Usage: /add <text>",
