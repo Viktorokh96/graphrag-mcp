@@ -23,5 +23,6 @@ PROBLEMS.md
 .understand-anything/
 .coverage
 
-opencode.json
+# Build / test artifacts
+qdrant/
 *.db*
