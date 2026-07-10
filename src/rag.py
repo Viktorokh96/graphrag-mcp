@@ -7,6 +7,7 @@
 """
 
 import hashlib
+import logging
 import re
 import unicodedata
 import uuid
@@ -21,6 +22,8 @@ from src.embeddings import (
 )
 from src.graph_store import GraphStore
 from src.vector_store import QdrantVectorStore
+
+logger = logging.getLogger(__name__)
 
 
 class RAGSystem:
@@ -215,7 +218,7 @@ class RAGSystem:
                 if self._chunker.needs_chunking(text):
                     chunks = self._chunker.chunk(text, doc_id=doc_id, metadata=metadata)
             except Exception as e:
-                print(f"[chunk] tokenizer unavailable, indexing whole doc: {e}")
+                logger.warning("Tokenizer unavailable, indexing whole doc: %s", e)
                 chunks = None
 
         if not chunks or len(chunks) == 1:
@@ -578,9 +581,9 @@ class RAGSystem:
 
             phantom_count = len(vector_ids - doc_ids)
             if phantom_count or missing:
-                print(f"[sync] Removed {phantom_count} phantom vectors, reindexed {len(missing)} docs")
+                logger.info("Removed %d phantom vectors, reindexed %d docs", phantom_count, len(missing))
         except Exception as e:
-            print(f"[sync] Warning: store sync failed: {e}")
+            logger.warning("Store sync failed: %s", e)
 
     def reindex(self) -> int:
         """Пересчитать эмбеддинги всех документов (смена провайдера/модели)."""

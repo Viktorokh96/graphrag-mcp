@@ -1,8 +1,11 @@
 """MCP Server for RAG system using MCP Python SDK."""
 
 import json
+import logging
 import os
 import sys
+
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -700,11 +703,11 @@ def main():
 
     config = RAGConfig.from_env()
     if has_old_data(config.store_path):
-        print(
-            f"WARNING: Found old data in {config.store_path} (chroma.sqlite3 / graph_index.json).\n"
-            "These are NOT compatible with the new store (Qdrant + SQLite).\n"
+        logger.warning(
+            "Found old data in %s (chroma.sqlite3 / graph_index.json). "
+            "These are NOT compatible with the new store (Qdrant + SQLite). "
             "Run `rag-server migrate` to re-index them, or delete them manually.",
-            file=sys.stderr,
+            config.store_path,
         )
     rag = RAGSystem(config=config)
     server = Server("rag-knowledge-base")
