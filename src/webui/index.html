@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>graphrag — WebUI</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js"></script>
+<script src="vis.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#0a0a1a;height:100vh;overflow:hidden;color:#e0e0e0}
@@ -242,6 +242,7 @@ let edges = null;
 let graphBuilt = false;
 let currentFilter = null;
 let confirmCallback = null;
+let expandedNodeId = null;
 
 /* ── helpers ──────────────────────────────────────── */
 
@@ -345,8 +346,8 @@ function buildGraph(docs){
   const options={
     physics:{
       solver:'forceAtlas2Based',
-      forceAtlas2Based:{gravitationalConstant:-120,centralGravity:0.001,springLength:180,springConstant:0.015,damping:0.5},
-      stabilization:{iterations:300,updateInterval:20},
+      forceAtlas2Based:{gravitationalConstant:-80,centralGravity:0.005,springLength:200,springConstant:0.02,damping:0.6},
+      stabilization:{iterations:100,updateInterval:50},
       adaptiveTimestep:true,
     },
     layout:{improvedLayout:true,randomSeed:42},
@@ -373,7 +374,13 @@ function buildGraph(docs){
   network=new vis.Network(container,visData,options);
 
   network.on('click',function(params){
-    if(params.nodes.length){showNodeInfo(params.nodes[0])}else{closeInfo()}
+    if(params.nodes.length){
+      expandNode(params.nodes[0]);
+      showNodeInfo(params.nodes[0]);
+    }else{
+      restoreExpandedNode();
+      closeInfo();
+    }
     updateDeleteButton();
   });
 
@@ -394,6 +401,27 @@ function fitGraph(){
   if(network)network.fit({animation:{duration:400,easingFunction:'easeInOutQuad'}});
 }
 
+function expandNode(id){
+  if(expandedNodeId===id){
+    const n=nodes.get(id);
+    if(!n||n._origSize===undefined)expandedNodeId=null;else return;
+  }
+  restoreExpandedNode();
+  const n=nodes.get(id);
+  if(!n)return;
+  if(n._origSize===undefined)n._origSize=n.size;
+  n.size=Math.round(n._origSize*3);
+  nodes.update(n);
+  expandedNodeId=id;
+}
+
+function restoreExpandedNode(){
+  if(!expandedNodeId)return;
+  const n=nodes.get(expandedNodeId);
+  if(n&&n._origSize!==undefined){n.size=n._origSize;delete n._origSize;nodes.update(n)}
+  expandedNodeId=null;
+}
+
 /* ── sidebar ──────────────────────────────────────── */
 
 function toggleSidebar(){
@@ -409,6 +437,7 @@ function focusSearch(){
 }
 
 let searchTimer=null;
+let searchSeq=0;
 function debouncedSearch(){
   clearTimeout(searchTimer);
   const q=qs('#search-query').value.trim();
@@ -416,14 +445,8 @@ function debouncedSearch(){
   searchTimer=setTimeout(doSearch,300);
 }
 
-document.addEventListener('keydown',function(e){
-  if((e.ctrlKey||e.metaKey)&&e.key==='f'){e.preventDefault();focusSearch()}
-  if(e.key==='Escape'){closeInfo()}
-});
-
-/* ── API search ───────────────────────────────────── */
-
 async function doSearch(){
+  const seq=++searchSeq;
   const query=qs('#search-query').value.trim();
   if(!query){toast('Enter a search query');return}
   const mode=qs('#search-mode').value;
@@ -434,17 +457,21 @@ async function doSearch(){
   if(currentFilter)body.metadata_filter=currentFilter;
   try{
     const data=await api('POST','/search',body);
+    if(seq!==searchSeq)return;
     displaySearchResults(data.results||[]);
   }catch(e){toast('Search error: '+e.message,4000)}
 }
+
+document.addEventListener('keydown',function(e){
+  if((e.ctrlKey||e.metaKey)&&e.key==='f'){e.preventDefault();focusSearch()}
+  if(e.key==='Escape'){closeInfo()}
+});
 
 function displaySearchResults(results){
   const el=document.getElementById('search-results');
   clearSearchHighlights();
   if(!results.length){el.innerHTML='<div class="empty">No results</div>';return}
   const maxScore=Math.max(...results.map(r=>r.score),1);
-  const scoreMap={};
-  for(const r of results)scoreMap[r.doc_id]=r.score;
   let html='';
   for(const r of results){
     html+='<div class="sr" data-id="'+esc(r.doc_id)+'"><span class="srl">'+esc(makeLabel(r.text))+'</span><span class="srs">'+r.score.toFixed(3)+'</span></div>';
@@ -453,19 +480,26 @@ function displaySearchResults(results){
   el.querySelectorAll('.sr').forEach(el2=>{el2.addEventListener('click',function(){goToNode(this.dataset.id)})});
 
   if(!graphBuilt||!nodes)return;
-  for(const id of nodes.getIds()){
+  const updates=[];
+  for(const r of results){
+    const id=r.doc_id;
     const n=nodes.get(id);
     if(!n)continue;
-    if(scoreMap[id]!==undefined){
-      if(!n._origBorder){n._origBorder=n.color.border}
-      const ratio=scoreMap[id]/maxScore;
-      if(!n._origLabel){n._origLabel=n.label}
-      if(!n._origFontSize){n._origFontSize=(n.font&&n.font.size)||11}
-      n.font=n.font||{};n.font.size=Math.round(10+ratio*16);
-      n.label=n._origLabel+'\n'+scoreMap[id].toFixed(3);
-      n.color.border='#fbbf24';
-      nodes.update(n);
-    }
+    if(n._origSize===undefined)n._origSize=n.size;
+    n.size=Math.round(n._origSize*3);
+    if(!n._origBorder){n._origBorder=n.color.border}
+    const ratio=r.score/maxScore;
+    if(!n._origLabel){n._origLabel=n.label}
+    if(!n._origFontSize){n._origFontSize=(n.font&&n.font.size)||11}
+    n.font=n.font||{};n.font.size=Math.round(10+ratio*16);
+    n.label=n._origLabel+'\n'+r.score.toFixed(3);
+    n.color.border='#fbbf24';
+    updates.push(n);
+  }
+  if(updates.length){
+    network.setOptions({physics:{enabled:false}});
+    nodes.update(updates);
+    network.setOptions({physics:{enabled:true}});
   }
   if(results.length)fitGraph();
 }
@@ -479,18 +513,29 @@ function clearSearch(){
 
 function clearSearchHighlights(){
   if(!graphBuilt||!nodes)return;
-  for(const id of nodes.getIds()){
-    const n=nodes.get(id);
+  const ids=nodes.getIds();
+  const updates=[];
+  for(let i=0;i<ids.length;i++){
+    const n=nodes.get(ids[i]);
     if(!n)continue;
-    if(n._origBorder){n.color.border=n._origBorder;delete n._origBorder}
-    if(n._origLabel){n.label=n._origLabel;delete n._origLabel}
-    if(n._origFontSize){n.font=n.font||{};n.font.size=n._origFontSize;delete n._origFontSize}
-    nodes.update(n);
+    let ch=false;
+    if(n._origSize!==undefined){n.size=n._origSize;delete n._origSize;ch=true}
+    if(n._origBorder){n.color.border=n._origBorder;delete n._origBorder;ch=true}
+    if(n._origLabel){n.label=n._origLabel;delete n._origLabel;ch=true}
+    if(n._origFontSize){n.font=n.font||{};n.font.size=n._origFontSize;delete n._origFontSize;ch=true}
+    if(ch)updates.push(n);
   }
+  if(updates.length){
+    network.setOptions({physics:{enabled:false}});
+    nodes.update(updates);
+    network.setOptions({physics:{enabled:true}});
+  }
+  expandedNodeId=null;
 }
 
 function goToNode(id){
   if(!nodes||!nodes.get(id)){toast('Node not in current view');return}
+  expandNode(id);
   network.focus(id,{scale:1.8,animation:{duration:400,easingFunction:'easeInOutQuad'}});
   network.selectNodes([id]);
   showNodeInfo(id);
@@ -529,7 +574,10 @@ async function showNodeInfo(docId){
   }catch(e){itext.textContent='Error: '+e.message}
 }
 
-function closeInfo(){qs('#infopanel').classList.remove('open')}
+function closeInfo(){
+  restoreExpandedNode();
+  qs('#infopanel').classList.remove('open');
+}
 
 /* ── CRUD ─────────────────────────────────────────── */
 
