@@ -8,6 +8,7 @@
 
 import hashlib
 import re
+import unicodedata
 import uuid
 from typing import Optional
 
@@ -92,6 +93,12 @@ class RAGSystem:
         self._cyrillic_alpha = cfg.cyrillic_alpha
         self._hybrid_expand = cfg.hybrid_expand
         self._hybrid_min_candidates = cfg.hybrid_min_candidates
+        # Чанкование: Chunker дёшев в конструкторе (tiktoken грузится лениво).
+        # Порог в символах отсекает маленькие документы от токенизатора вообще —
+        # ~4 символа на токен, поэтому chunk_size*4 char'ов надёжно короче лимита.
+        from src.chunker import Chunker
+        self._chunker = Chunker(chunk_size=cfg.chunk_size, chunk_overlap=cfg.chunk_overlap)
+        self._chunk_char_threshold = cfg.chunk_size * 4
         self._reranker_enabled = cfg.rerank_enabled
         self._reranker_model = cfg.rerank_model
         self._reranker_device = cfg.rerank_device
@@ -107,7 +114,13 @@ class RAGSystem:
     # -- text utils -----------------------------------------------------------
 
     def _normalize_text(self, text: str) -> str:
-        """Normalize text for dedup: lowercase, strip, collapse whitespace."""
+        """Normalize text for dedup: Unicode NFC, lowercase, collapse whitespace.
+
+        NFC-нормализация обязательна: один и тот же текст в NFC и NFD (например,
+        «é» одним кодпоинтом против «e» + комбинирующий акцент, частое отличие
+        macOS/Linux) иначе даёт разные хэши и не дедуплицируется.
+        """
+        text = unicodedata.normalize("NFC", text)
         return re.sub(r"\s+", " ", text.lower().strip())
 
     def _compute_hash(self, text: str) -> str:
@@ -177,9 +190,10 @@ class RAGSystem:
             return existing
 
         doc_id = doc_id or str(uuid.uuid4())
-        embedding = self.embedding_generator.get_embedding(text)
+        # DocumentStore хранит документ целиком (источник правды), а в Qdrant он
+        # может быть проиндексирован несколькими chunk-точками под тем же doc_id.
         self.doc_store.add(doc_id, text, metadata, content_hash=content_hash)
-        self.vector_store.add(doc_id=doc_id, text=text, embedding=embedding, metadata=metadata)
+        self._index_vector(doc_id, text, metadata)
 
         if extract_graph:
             from src.graph_extractor import GraphExtractor
@@ -187,6 +201,30 @@ class RAGSystem:
             extractor.extract_and_link(doc_id, text, mode=extract_graph_mode)
 
         return doc_id
+
+    def _index_vector(self, doc_id: str, text: str, metadata: Optional[dict]) -> None:
+        """Проиндексировать текст в Qdrant: одна точка либо несколько chunk-точек.
+
+        Малые документы (короче char-порога) идут одно-точечным путём без загрузки
+        токенизатора. Крупные — режутся Chunker'ом; при недоступности токенизатора
+        безопасно откатываемся к одиночному эмбеддингу полного текста.
+        """
+        chunks = None
+        if len(text) >= self._chunk_char_threshold:
+            try:
+                if self._chunker.needs_chunking(text):
+                    chunks = self._chunker.chunk(text, doc_id=doc_id, metadata=metadata)
+            except Exception as e:
+                print(f"[chunk] tokenizer unavailable, indexing whole doc: {e}")
+                chunks = None
+
+        if not chunks or len(chunks) == 1:
+            embedding = self.embedding_generator.get_embedding(text)
+            self.vector_store.add(doc_id=doc_id, text=text, embedding=embedding, metadata=metadata)
+        else:
+            texts = [c["text"] for c in chunks]
+            embeddings = self.embedding_generator.get_embeddings(texts)
+            self.vector_store.add_chunks(doc_id, list(zip(texts, embeddings)), metadata)
 
     def is_duplicate(self, text: str) -> Optional[str]:
         """Вернуть doc_id существующего документа с тем же content hash, иначе None."""
@@ -536,11 +574,7 @@ class RAGSystem:
                 record = self.doc_store.get(doc_id)
                 if record is None:
                     continue
-                embedding = self.embedding_generator.get_embedding(record["text"])
-                self.vector_store.add(
-                    doc_id=doc_id, text=record["text"],
-                    embedding=embedding, metadata=record["metadata"],
-                )
+                self._index_vector(doc_id, record["text"], record["metadata"])
 
             phantom_count = len(vector_ids - doc_ids)
             if phantom_count or missing:
@@ -555,25 +589,17 @@ class RAGSystem:
             return 0
 
         self.embedding_generator.clear_cache()
-        first = items[0]
-        first_embedding = self.embedding_generator.get_embedding(first["text"])
+        # Определяем новую размерность по первому документу, пересоздаём коллекцию
+        # при её изменении, затем переиндексируем все документы (с чанкованием).
+        first_embedding = self.embedding_generator.get_embedding(items[0]["text"])
         new_dim = len(first_embedding)
         old_dim = self.vector_store.get_dimension()
-
         if old_dim and old_dim != new_dim:
             self.vector_store.dimension = new_dim
             self.vector_store.recreate_collection()
 
-        self.vector_store.add(
-            doc_id=first["doc_id"], text=first["text"],
-            embedding=first_embedding, metadata=first["metadata"],
-        )
-        for record in items[1:]:
-            embedding = self.embedding_generator.get_embedding(record["text"])
-            self.vector_store.add(
-                doc_id=record["doc_id"], text=record["text"],
-                embedding=embedding, metadata=record["metadata"],
-            )
+        for record in items:
+            self._index_vector(record["doc_id"], record["text"], record["metadata"])
         return len(items)
 
     def stats(self) -> dict:

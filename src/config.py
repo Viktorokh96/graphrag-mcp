@@ -63,6 +63,12 @@ class RAGConfig:
     # max(k * hybrid_expand, hybrid_min_candidates) кандидатов перед fusion.
     hybrid_expand: int = 3
     hybrid_min_candidates: int = 20
+    # Чанкование больших документов: текст длиннее chunk_size токенов режется на
+    # чанки (paragraph→sentence→token) и индексируется несколькими точками в
+    # Qdrant под общим doc_id. Решает обрезку хвоста длинных документов эмбеддером
+    # (BGE-M3 max ~8192 токенов). Документ в DocumentStore остаётся цельным.
+    chunk_size: int = 512
+    chunk_overlap: int = 64
     rerank_enabled: bool = False
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
     rerank_device: str = "cpu"
@@ -94,6 +100,8 @@ class RAGConfig:
             cyrillic_alpha=_env_float("RAG_CYRILLIC_ALPHA", "0.85"),
             hybrid_expand=_env_int("RAG_HYBRID_EXPAND", "3"),
             hybrid_min_candidates=_env_int("RAG_HYBRID_MIN_CANDIDATES", "20"),
+            chunk_size=_env_int("CHUNK_SIZE", "512"),
+            chunk_overlap=_env_int("CHUNK_OVERLAP", "64"),
             rerank_enabled=os.environ.get("RERANK_ENABLED", "").lower() in ("1", "true", "yes"),
             rerank_model=os.environ.get("RERANK_MODEL", "BAAI/bge-reranker-v2-m3"),
             rerank_device=os.environ.get("RERANK_DEVICE", "cpu"),
@@ -146,6 +154,10 @@ class RAGConfig:
             f"RAG_CYRILLIC_ALPHA={self.cyrillic_alpha}",
             f"RAG_HYBRID_EXPAND={self.hybrid_expand}",
             f"RAG_HYBRID_MIN_CANDIDATES={self.hybrid_min_candidates}",
+            "",
+            "# Чанкование больших документов (в токенах)",
+            f"CHUNK_SIZE={self.chunk_size}",
+            f"CHUNK_OVERLAP={self.chunk_overlap}",
             "",
             "# Reranker (Cross-encoder, ~1GB)",
             f"RERANK_ENABLED={'true' if self.rerank_enabled else 'false'}",

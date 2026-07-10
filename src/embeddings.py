@@ -348,15 +348,22 @@ class OllamaEmbeddingGenerator:
             return embedding
 
     def get_embeddings(self, texts: list[str]) -> list[list[float]]:
-        missing = [t for t in texts if t not in self._cache]
+        # Дедуплицируем missing, сохраняя порядок: батч в Ollama возвращает по
+        # одному эмбеддингу на каждый элемент input, поэтому дубликаты сместили бы
+        # соответствие text↔embedding.
+        missing = list(dict.fromkeys(t for t in texts if t not in self._cache))
         if missing:
             try:
                 url = f"{self.base_url}/api/embed"
                 payload = {"model": self.model, "input": missing}
                 response = self._client.post(url, json=payload, timeout=120.0)
                 response.raise_for_status()
-                data = response.json()
-                for text, vec in zip(missing, data["embeddings"]):
+                embeddings = response.json().get("embeddings", [])
+                if len(embeddings) != len(missing):
+                    raise ValueError(
+                        f"Ollama returned {len(embeddings)} embeddings for {len(missing)} inputs"
+                    )
+                for text, vec in zip(missing, embeddings):
                     self._cache[text] = vec
             except Exception:
                 for text in missing:

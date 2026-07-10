@@ -127,6 +127,19 @@ class TestRAGSystem:
         doc_id2 = rag.add_document(text)
         assert doc_id1 == doc_id2, "Duplicate documents should return the same doc_id"
 
+    def test_dedup_unicode_nfc_nfd(self, rag):
+        """Один и тот же текст в NFC и NFD должен дедуплицироваться (NFC-нормализация)."""
+        import unicodedata
+
+        base = "Café details for the naïve résumé of Zoë — long enough to pass min length."
+        nfc = unicodedata.normalize("NFC", base)
+        nfd = unicodedata.normalize("NFD", base)
+        assert nfc != nfd, "тестовые строки должны различаться на уровне байт"
+        doc_id1 = rag.add_document(nfc)
+        doc_id2 = rag.add_document(nfd)
+        assert doc_id1 == doc_id2, "NFC и NFD варианты одного текста должны совпадать"
+        assert rag.stats()["total_documents"] == 1
+
     def test_store_sync_on_init(self, make_rag):
         """D1: _sync_stores() при инициализации: DocumentStore — источник правды.
 

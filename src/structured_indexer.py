@@ -90,12 +90,17 @@ class StructuredIndexer:
         structure = data.get("structure", [])
         files = data.get("files", {})
 
-        # 1. Структура дерева — один документ
+        # 1. Структура дерева — один документ. Для крошечных репозиториев дерево
+        # может быть короче MIN_CONTENT_LENGTH — тогда пропускаем его, а не роняем
+        # всю индексацию (структуру всё равно можно восстановить из file-документов).
         tree_text = f"Repository: {repo}\n\nStructure:\n" + "\n".join(structure)
-        tree_doc_id = self.rag.add_document(
-            tree_text,
-            metadata={"source": repo, "type": "structure"},
-        )
+        try:
+            tree_doc_id = self.rag.add_document(
+                tree_text,
+                metadata={"source": repo, "type": "structure"},
+            )
+        except ValueError:
+            tree_doc_id = None
 
         # 2. Каждый файл → документ
         file_doc_ids: dict[str, str] = {}

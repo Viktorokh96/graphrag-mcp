@@ -37,8 +37,9 @@ def _tokenize(text: str) -> list[str]:
     return _TOKEN_RE.findall(text.lower())
 
 
-def _point_id(doc_id: str) -> str:
-    return str(uuid.uuid5(_POINT_NS, doc_id))
+def _point_id(doc_id: str, chunk_index: Optional[int] = None) -> str:
+    key = doc_id if chunk_index is None else f"{doc_id}#{chunk_index}"
+    return str(uuid.uuid5(_POINT_NS, key))
 
 
 def bm25_sparse_vector(text: str, is_query: bool = False) -> models.SparseVector:
@@ -102,13 +103,17 @@ class QdrantVectorStore:
     def __init__(self, location: str = "./rag_data/qdrant", dimension: int = 1024):
         self.location = location
         self.dimension = dimension
-        if location.startswith(("http://", "https://")):
-            self._client = QdrantClient(url=location)
-        else:
-            self._client = QdrantClient(path=location)
+        self._is_remote = location.startswith(("http://", "https://"))
+        self._connect()
         self._token_df: dict[int, int] = {}
         self._did_load_token_df = False
         self._ensure_collection()
+
+    def _connect(self) -> None:
+        if self._is_remote:
+            self._client = QdrantClient(url=self.location)
+        else:
+            self._client = QdrantClient(path=self.location)
 
     # -- collection lifecycle -------------------------------------------------
 
@@ -138,9 +143,28 @@ class QdrantVectorStore:
         )
 
     def recreate_collection(self) -> None:
-        if self._client.collection_exists(COLLECTION):
-            self._client.delete_collection(COLLECTION)
-        self._create_collection()
+        """Полностью пересоздать коллекцию (например, при смене размерности).
+
+        В embedded (local) режиме qdrant-client содержит баг: delete_collection +
+        create_collection с тем же именем не сбрасывает персистентное хранилище на
+        диске — старые точки и размерность остаются. Поэтому для local-режима
+        физически удаляем директорию хранилища и переоткрываем клиент. Для
+        remote-сервера обычного delete + create достаточно.
+        """
+        if self._is_remote:
+            if self._client.collection_exists(COLLECTION):
+                self._client.delete_collection(COLLECTION)
+            self._create_collection()
+        else:
+            import shutil
+            from pathlib import Path
+
+            self._client.close()
+            path = Path(self.location)
+            if path.exists():
+                shutil.rmtree(path, ignore_errors=True)
+            self._connect()
+            self._create_collection()
         self._token_df.clear()
         self._did_load_token_df = True
 
@@ -195,44 +219,84 @@ class QdrantVectorStore:
 
     # -- CRUD -----------------------------------------------------------------
 
-    def add(self, doc_id: str, text: str, embedding: list[float], metadata: Optional[dict] = None) -> str:
-        self._client.upsert(
-            collection_name=COLLECTION,
-            points=[
-                models.PointStruct(
-                    id=_point_id(doc_id),
-                    vector={
-                        "dense": embedding,
-                        "bm25": bm25_sparse_vector(text),
-                    },
-                    payload={
-                        "doc_id": doc_id,
-                        "metadata": metadata or {},
-                        "text_preview": text[:200],
-                        "text_hashes": list(set(hash_token(t) for t in _tokenize(text))),
-                    },
-                )
-            ],
+    def _point(self, doc_id: str, text: str, embedding: list[float],
+               metadata: Optional[dict], chunk_index: Optional[int] = None) -> models.PointStruct:
+        payload = {
+            "doc_id": doc_id,
+            "metadata": metadata or {},
+            "text_preview": text[:200],
+            "text_hashes": list(set(hash_token(t) for t in _tokenize(text))),
+        }
+        if chunk_index is not None:
+            payload["chunk_index"] = chunk_index
+        return models.PointStruct(
+            id=_point_id(doc_id, chunk_index),
+            vector={"dense": embedding, "bm25": bm25_sparse_vector(text)},
+            payload=payload,
         )
+
+    def add(self, doc_id: str, text: str, embedding: list[float], metadata: Optional[dict] = None) -> str:
+        self._client.upsert(collection_name=COLLECTION, points=[self._point(doc_id, text, embedding, metadata)])
         self._update_token_df(text, delta=1)
         return doc_id
 
+    def add_chunks(
+        self,
+        doc_id: str,
+        chunks: list[tuple[str, list[float]]],
+        metadata: Optional[dict] = None,
+    ) -> str:
+        """Индексировать документ как несколько chunk-точек с общим payload.doc_id.
+
+        Каждый чанк — отдельная точка Qdrant (id = uuid5(doc_id#i)), но поиск
+        схлопывает их обратно в один doc_id (см. _dedup_hits). Один чанк идёт
+        обычным одно-точечным путём (обратная совместимость, id = uuid5(doc_id)).
+        """
+        if len(chunks) == 1:
+            return self.add(doc_id, chunks[0][0], chunks[0][1], metadata)
+        points = [
+            self._point(doc_id, text, emb, metadata, chunk_index=i)
+            for i, (text, emb) in enumerate(chunks)
+        ]
+        self._client.upsert(collection_name=COLLECTION, points=points)
+        for text, _emb in chunks:
+            self._update_token_df(text, delta=1)
+        return doc_id
+
     def remove(self, doc_id: str) -> None:
-        points = self._client.retrieve(
-            COLLECTION, ids=[_point_id(doc_id)],
-            with_payload=["text_hashes"], with_vectors=False,
+        # Документ может быть представлен несколькими chunk-точками — удаляем все
+        # по payload.doc_id, попутно уменьшая token_df на каждую.
+        selector = models.Filter(
+            must=[models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id))]
         )
-        if points:
-            hashes = points[0].payload.get("text_hashes") or []
-            for h in hashes:
-                self._token_df[h] = max(0, self._token_df.get(h, 0) - 1)
+        offset = None
+        while True:
+            points, offset = self._client.scroll(
+                COLLECTION, scroll_filter=selector, limit=256, offset=offset,
+                with_payload=["text_hashes"], with_vectors=False,
+            )
+            for p in points:
+                for h in (p.payload.get("text_hashes") or []):
+                    self._token_df[h] = max(0, self._token_df.get(h, 0) - 1)
+            if offset is None:
+                break
         self._client.delete(
             collection_name=COLLECTION,
-            points_selector=models.PointIdsList(points=[_point_id(doc_id)]),
+            points_selector=models.FilterSelector(filter=selector),
         )
 
     def clear(self) -> None:
-        self.recreate_collection()
+        """Удалить все точки, сохранив конфигурацию коллекции.
+
+        Удаление точек по пустому фильтру работает одинаково в local и remote
+        режимах (в отличие от recreate_collection, который меняет и структуру).
+        """
+        self._client.delete(
+            collection_name=COLLECTION,
+            points_selector=models.FilterSelector(filter=models.Filter()),
+        )
+        self._token_df.clear()
+        self._did_load_token_df = True
 
     def count(self) -> int:
         return self._client.count(COLLECTION, exact=True).count
@@ -249,7 +313,40 @@ class QdrantVectorStore:
                 return ids
 
     def has(self, doc_id: str) -> bool:
-        return bool(self._client.retrieve(COLLECTION, ids=[_point_id(doc_id)], with_payload=False))
+        # Ищем по payload.doc_id (документ может быть набором chunk-точек).
+        count = self._client.count(
+            COLLECTION,
+            count_filter=models.Filter(
+                must=[models.FieldCondition(key="doc_id", match=models.MatchValue(value=doc_id))]
+            ),
+            exact=True,
+        ).count
+        return count > 0
+
+    @staticmethod
+    def _dedup_hits(hits: list, k: int, clip: bool = False) -> list[dict]:
+        """Схлопнуть chunk-точки одного документа в один результат (макс. score).
+
+        hits уже отсортированы Qdrant по убыванию score, поэтому первый
+        встреченный chunk документа несёт максимальный score. Берём первые k
+        уникальных документов.
+        """
+        best: dict[str, dict] = {}
+        for h in hits:
+            doc_id = h.payload["doc_id"]
+            if doc_id in best:
+                continue
+            score = float(h.score)
+            if clip:
+                score = max(0.0, min(1.0, score))
+            best[doc_id] = {
+                "doc_id": doc_id,
+                "score": score,
+                "metadata": h.payload.get("metadata") or {},
+            }
+            if len(best) >= k:
+                break
+        return list(best.values())
 
     def update_embedding(self, doc_id: str, embedding: list[float]) -> None:
         self._client.update_vectors(
@@ -271,22 +368,17 @@ class QdrantVectorStore:
         """
         if self.count() == 0:
             return []
+        # Запрашиваем с запасом: несколько chunk-точек одного документа схлопнутся
+        # в _dedup_hits, поэтому нужно больше кандидатов, чтобы добрать k уникальных.
         hits = self._client.query_points(
             collection_name=COLLECTION,
             query=query_embedding,
             using="dense",
-            limit=k,
+            limit=max(k * 4, k),
             query_filter=to_qdrant_filter(metadata_filter),
             with_payload=True,
         ).points
-        return [
-            {
-                "doc_id": h.payload["doc_id"],
-                "score": max(0.0, min(1.0, float(h.score))),
-                "metadata": h.payload.get("metadata") or {},
-            }
-            for h in hits
-        ]
+        return self._dedup_hits(hits, k, clip=True)
 
     def bm25_search(self, query: str, k: int = 5, metadata_filter: Optional[dict] = None) -> list[dict]:
         """Sparse BM25-поиск. Возвращает [{doc_id, score, metadata}]."""
@@ -306,19 +398,12 @@ class QdrantVectorStore:
             collection_name=COLLECTION,
             query=sparse,
             using="bm25",
-            limit=k,
+            limit=max(k * 4, k),
             query_filter=to_qdrant_filter(metadata_filter),
             with_payload=True,
         ).points
-        return [
-            {
-                "doc_id": h.payload["doc_id"],
-                "score": float(h.score),
-                "metadata": h.payload.get("metadata") or {},
-            }
-            for h in hits
-            if h.score > 0
-        ]
+        positive = [h for h in hits if h.score > 0]
+        return self._dedup_hits(positive, k)
 
     def stats(self) -> dict:
         return {

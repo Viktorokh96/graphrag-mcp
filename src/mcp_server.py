@@ -36,7 +36,11 @@ TOOL_DEFS = [
             "properties": {
                 "text": {
                     "type": "string",
-                    "description": "Text content to index. Stored verbatim; not chunked or transformed.",
+                    "description": (
+                        "Text content to index. Stored verbatim in the document store; large "
+                        "documents are additionally split into overlapping chunks for vector "
+                        "indexing (retrieval still returns the whole document by its doc_id)."
+                    ),
                 },
                 "meta": {
                     "description": (
@@ -732,7 +736,15 @@ def main():
                 ),
             )
 
-    asyncio.run(_run())
+    # Graceful shutdown: закрываем Qdrant (файловые locks) и SQLite (WAL) при
+    # выходе — иначе при перезапуске возможны locked-ошибки. KeyboardInterrupt
+    # (Ctrl+C) и штатное завершение обрабатываются одинаково.
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        rag.close()
 
 
 if __name__ == "__main__":

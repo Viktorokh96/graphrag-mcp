@@ -5,7 +5,9 @@ WORKDIR /app
 COPY pyproject.toml .
 COPY src/ src/
 
-RUN pip install --no-cache-dir -e .
+# Ставим с extra [postgres]: docker-compose использует Postgres backend
+# (DATABASE_URL=postgresql://...), которому нужен psycopg.
+RUN pip install --no-cache-dir -e ".[postgres]"
 
 EXPOSE 8765
 

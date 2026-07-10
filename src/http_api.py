@@ -130,7 +130,10 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    # allow_credentials=False: по CORS-спецификации wildcard-origin несовместим с
+    # credentials (браузер отбрасывает такой ответ). API не использует куки/сессии,
+    # поэтому отключаем credentials и оставляем открытый origin.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

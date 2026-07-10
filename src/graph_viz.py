@@ -29,6 +29,45 @@ SHAPE_CYCLE = ["box", "diamond", "ellipse", "hexagon", "star", "square",
                "triangle", "triangleDown", "circle", "database"]
 
 
+class _VizGraph:
+    """Адаптер GraphStore → структуры, ожидаемые рендерерами визуализации.
+
+    Новый GraphStore хранит рёбра в SQL + NetworkX-кеше, а тексты/метаданные
+    узлов — в DocumentStore, тогда как рендереры графа написаны под старый
+    интерфейс (``graph._nodes`` — dict node_id→{text, metadata}; ``graph._edges``
+    — dict edge_key→{source, target, relation, weight}). Этот адаптер один раз
+    собирает обе структуры из GraphStore + DocumentStore, а всё остальное
+    (get_related, get_edges_batch, stats, …) делегирует обёрнутому стору.
+
+    Снимок строится в конструкторе — визуализация read-only, поэтому кеш
+    не устаревает в пределах рендера.
+    """
+
+    def __init__(self, store: "GraphStore"):
+        self._store = store
+        docs, _ = store._docs.list(limit=max(store._docs.count(), 1), offset=0)
+        self._nodes: dict[str, dict] = {
+            d["doc_id"]: {"text": d["text"], "metadata": d["metadata"]} for d in docs
+        }
+        self._edges: dict[str, dict] = {}
+        for source, target, relation, weight in store.get_all_edges():
+            self._edges[f"{source}::{relation}::{target}"] = {
+                "source": source,
+                "target": target,
+                "relation": relation,
+                "weight": weight,
+            }
+
+    def __getattr__(self, name):
+        # Делегируем методы обёрнутого стора (get_related, get_edges_batch, ...)
+        return getattr(self._store, name)
+
+
+def _as_viz(graph) -> _VizGraph:
+    """Обернуть GraphStore в адаптер (идемпотентно)."""
+    return graph if isinstance(graph, _VizGraph) else _VizGraph(graph)
+
+
 def _get_relation_color(relation: str, color_map: dict[str, str]) -> str:
     if relation not in color_map:
         color_map[relation] = RELATION_COLORS[len(color_map) % len(RELATION_COLORS)]
@@ -789,6 +828,7 @@ def render_graph_viz(
     layout: str = "kamada_kawai",
     api_base_url: str = "",
 ) -> None:
+    graph = _as_viz(graph)
     included, edges = _build_subgraph(graph, max_nodes, relation_type, focus_node, max_depth)
 
     if not included:
@@ -827,6 +867,7 @@ def serve_graph(
     so clicking a node fetches document text from ``/api/document/<id>``
     instead of embedding it in the HTML.
     """
+    graph = _as_viz(graph)
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
 

@@ -10,7 +10,7 @@ __pycache__/
 rag_data/
 *.bak
 *.html
-!src/webui/index.html
+!lib/**/*.html
 
 # uv
 # uv.lock коммитим — воспроизводимость окружения
@@ -18,14 +18,3 @@ rag_data/
 # OS
 .DS_Store
 Thumbs.db
-
-PROBLEMS.md
-.understand-anything/
-.coverage
-
-# Build / test artifacts
-lib/
-qdrant/
-*.db*
-
-opencode.json

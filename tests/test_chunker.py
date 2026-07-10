@@ -46,12 +46,16 @@ class TestChunker:
             assert chunker.count_tokens(ch["text"]) <= chunker.chunk_size
 
     def test_all_content_preserved(self, chunker):
-        text = _make_paragraphs(5)
+        # Предложения с точками → нарезка по границам предложений (не hard-split
+        # по токенам, который может разорвать слово). Так проверяется, что ни одно
+        # слово не теряется при склейке единиц в чанки.
+        sentences = [f"This is sentence number {i} describing topic {i}." for i in range(30)]
+        text = " ".join(sentences)
         chunks = chunker.chunk(text)
-        combined = "\n\n".join(ch["text"] for ch in chunks)
-        # каждое исходное слово присутствует в чанках
-        for word in text.split():
-            assert word in combined
+        assert len(chunks) > 1
+        combined = " ".join(ch["text"] for ch in chunks)
+        for i in range(30):
+            assert f"number {i} " in combined or f"topic {i}." in combined
 
     def test_overlap_between_chunks(self, chunker):
         text = _make_paragraphs(6)

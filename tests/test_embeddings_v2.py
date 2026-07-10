@@ -222,17 +222,19 @@ class TestOllamaEmbeddingGenerator:
     def test_get_embeddings_batch(self, mock_httpx):
         from src.embeddings import OllamaEmbeddingGenerator
 
+        vecs = {"hello": [0.1, 0.2, 0.3], "world": [0.4, 0.5, 0.6]}
+
         def mock_post_side_effect(url, *args, **kwargs):
             mock_resp = MagicMock()
             mock_resp.status_code = 200
             data = kwargs.get("json", {})
-            text = data.get("input", "")
-            if text == "hello":
-                mock_resp.json.return_value = {"embeddings": [[0.1, 0.2, 0.3]]}
-            elif text == "world":
-                mock_resp.json.return_value = {"embeddings": [[0.4, 0.5, 0.6]]}
-            else:
-                mock_resp.json.return_value = {"embeddings": [[0.0, 0.0, 0.0]]}
+            # Ollama /api/embed принимает `input` как строку или список строк
+            # (batch) и возвращает по одному эмбеддингу на каждый вход.
+            inp = data.get("input", "")
+            texts = inp if isinstance(inp, list) else [inp]
+            mock_resp.json.return_value = {
+                "embeddings": [vecs.get(t, [0.0, 0.0, 0.0]) for t in texts]
+            }
             return mock_resp
 
         mock_client = MagicMock()
