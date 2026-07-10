@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>graphrag — WebUI</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#0a0a1a;height:100vh;overflow:hidden;color:#e0e0e0}
+#mynetwork{position:fixed;top:0;left:0;width:100%;height:100%;background:#0a0a1a;z-index:0}
+#mynetwork.loading:after{content:"";position:absolute;top:50%;left:50%;width:40px;height:40px;margin:-20px 0 0 -20px;border:3px solid rgba(255,255,255,0.05);border-top-color:#3b82f6;border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* sidebar */
+#sidebar{position:fixed;top:0;left:-400px;width:380px;height:100vh;z-index:100;background:rgba(10,10,26,0.97);border-right:1px solid rgba(255,255,255,0.06);backdrop-filter:blur(16px);transition:left .28s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;box-shadow:4px 0 40px rgba(0,0,0,.6)}
+#sidebar.open{left:0}
+#sidebar .shead{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid rgba(255,255,255,0.06)}
+#sidebar .shead h2{font-size:16px;font-weight:700;color:#fff;letter-spacing:.3px;background:linear-gradient(135deg,#60a5fa,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+#sidebar .shead .close-btn{background:none;border:none;color:#666;font-size:22px;cursor:pointer;padding:0 4px;line-height:1;transition:color .15s}
+#sidebar .shead .close-btn:hover{color:#fff}
+#sidebar .sbody{flex:1;overflow-y:auto;padding:16px 20px 24px;scrollbar-width:thin}
+#sidebar .sbody section{margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid rgba(255,255,255,0.04)}
+#sidebar .sbody section:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
+#sidebar .sbody section h3{font-size:11px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px}
+#sidebar label{display:block;font-size:11px;color:#888;margin-bottom:3px;margin-top:8px}
+#sidebar label:first-of-type{margin-top:0}
+#sidebar input[type=text],#sidebar input[type=number],#sidebar textarea,#sidebar select{width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);color:#e0e0e0;padding:7px 10px;border-radius:6px;font-size:12px;font-family:inherit;outline:none;transition:border-color .15s}
+#sidebar input:focus,#sidebar textarea:focus,#sidebar select:focus{border-color:rgba(96,165,250,.5);background:rgba(255,255,255,0.07)}
+#sidebar textarea{resize:vertical;min-height:52px}
+#sidebar select option{background:#1a1a30;color:#e0e0e0}
+#sidebar .row{display:flex;gap:8px;align-items:center}
+#sidebar .row>*{flex:1}
+#sidebar .hint{font-size:10px;color:#444;margin-top:3px}
+.btn{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:#d0d0d0;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px;font-family:inherit;transition:all .15s;user-select:none}
+.btn:hover{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.18);color:#fff}
+.btn-primary{background:linear-gradient(135deg,#2563eb,#3b82f6);border-color:#3b82f6;color:#fff}
+.btn-primary:hover{background:linear-gradient(135deg,#3b82f6,#60a5fa);border-color:#60a5fa}
+.btn-danger{background:linear-gradient(135deg,#dc2626,#ef4444);border-color:#ef4444;color:#fff}
+.btn-danger:hover{background:linear-gradient(135deg,#ef4444,#f87171);border-color:#f87171}
+.btn-sm{padding:4px 12px;font-size:11px}
+.btn-block{width:100%;display:block;text-align:center;margin-top:6px}
+.btn-group{display:flex;gap:6px;flex-wrap:wrap}
+.mt-2{margin-top:6px}
+.mb-2{margin-bottom:6px}
+.flex{display:flex}
+.items-center{align-items:center}
+.gap-2{gap:6px}
+.w-full{width:100%}
+.tag{display:inline-block;background:rgba(96,165,250,.15);color:#93bbfc;font-size:10px;padding:1px 8px;border-radius:10px;margin-left:6px;font-weight:600}
+
+/* stats */
+#stat-display{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.stat-card{background:rgba(255,255,255,0.03);border-radius:8px;padding:10px;text-align:center;border:1px solid rgba(255,255,255,0.04)}
+.stat-card .val{font-size:20px;font-weight:700;color:#fff;line-height:1.2}
+.stat-card .lbl{font-size:10px;color:#666;margin-top:2px;text-transform:uppercase;letter-spacing:.4px}
+
+/* search results */
+#search-results{max-height:200px;overflow-y:auto;margin-top:6px;border-radius:6px;background:rgba(0,0,0,.15)}
+#search-results .sr{display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:11px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.03);transition:background .1s}
+#search-results .sr:last-child{border-bottom:none}
+#search-results .sr:hover{background:rgba(96,165,250,.1)}
+#search-results .sr .srl{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#ccc}
+#search-results .sr .srs{color:#555;font-size:10px;white-space:nowrap;font-variant-numeric:tabular-nums}
+#search-results .empty{padding:16px;text-align:center;color:#444;font-size:11px}
+
+/* info panel */
+#infopanel{position:fixed;top:0;right:-440px;width:420px;height:100vh;z-index:99;background:rgba(8,8,24,0.97);border-left:1px solid rgba(255,255,255,0.06);backdrop-filter:blur(16px);transition:right .28s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;box-shadow:-4px 0 40px rgba(0,0,0,.6)}
+#infopanel.open{right:0}
+#infopanel .ihead{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid rgba(255,255,255,0.06)}
+#infopanel .ihead h3{font-size:14px;font-weight:600;color:#fff}
+#infopanel .ihead .close-btn{background:none;border:none;color:#666;font-size:22px;cursor:pointer;padding:0 4px;line-height:1}
+#infopanel .ihead .close-btn:hover{color:#fff}
+#infopanel .ibody{flex:1;overflow-y:auto;padding:16px 20px;font-size:13px;line-height:1.6;word-break:break-word;scrollbar-width:thin}
+#infopanel .ibody .iid{font-size:10px;color:#444;margin-bottom:12px;word-break:break-all;font-family:monospace;background:rgba(255,255,255,0.03);padding:6px 10px;border-radius:4px}
+#infopanel .ibody .imeta{background:rgba(255,255,255,0.03);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:11px;color:#999;white-space:pre-wrap;font-family:monospace;border:1px solid rgba(255,255,255,0.04)}
+#infopanel .ibody .itext{white-space:pre-wrap;color:#bbb;font-size:12px;margin-bottom:12px;max-height:260px;overflow-y:auto;background:rgba(0,0,0,.25);border-radius:6px;padding:10px 12px;border:1px solid rgba(255,255,255,0.04);line-height:1.5;scrollbar-width:thin}
+#infopanel .ibody .ilinks{margin-top:4px}
+#infopanel .ibody .ilinks .ilh{font-size:10px;color:#555;margin-bottom:6px;font-weight:600;letter-spacing:.5px;text-transform:uppercase}
+#infopanel .ibody .ilinks .ilr{display:flex;align-items:center;gap:8px;padding:5px 8px;cursor:pointer;border-radius:4px;font-size:11px;margin:0 -8px;transition:background .1s;border-bottom:1px solid rgba(255,255,255,0.02)}
+#infopanel .ibody .ilinks .ilr:hover{background:rgba(96,165,250,.08)}
+#infopanel .ibody .ilinks .ilr .arrow{color:#555;font-family:monospace;font-size:13px}
+#infopanel .ibody .ilinks .ilr .rlabel{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#bbb}
+#infopanel .ibody .ilinks .ilr .rtype{color:#555;font-size:10px}
+#infopanel .ibody .ilinks .ilr .rweight{color:#444;font-size:10px;font-variant-numeric:tabular-nums}
+
+/* toolbar */
+#toolbar{position:fixed;top:16px;right:16px;z-index:50;display:flex;gap:8px;align-items:center}
+#toolbar button{background:rgba(10,10,26,0.85);border:1px solid rgba(255,255,255,0.08);color:#ccc;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-family:inherit;backdrop-filter:blur(8px);transition:all .15s}
+#toolbar button:hover{background:rgba(255,255,255,0.1);border-color:rgba(255,255,255,0.16);color:#fff}
+#toolbar .active-btn{border-color:rgba(96,165,250,.5);background:rgba(37,99,235,.2)}
+#toolbar .badge-btn{position:relative}
+#toolbar .badge-btn .badge{position:absolute;top:-4px;right:-4px;background:#3b82f6;color:#fff;font-size:9px;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700}
+
+/* floating search */
+#search-input-wrapper{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:50;display:none;animation:fadeIn .15s ease}
+#search-input-wrapper.show{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateX(-50%) translateY(-4px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+#search-input-wrapper input{width:340px;background:rgba(10,10,26,0.94);border:1px solid rgba(255,255,255,0.1);color:#e0e0e0;padding:9px 16px;border-radius:24px;font-size:13px;font-family:inherit;outline:none;backdrop-filter:blur(8px);box-shadow:0 4px 20px rgba(0,0,0,.4);transition:border-color .15s}
+#search-input-wrapper input:focus{border-color:rgba(96,165,250,.4);background:rgba(10,10,26,0.97)}
+
+/* toast */
+#toast{position:fixed;bottom:32px;left:50%;transform:translateX(-50%);z-index:200;background:rgba(10,10,26,0.94);color:#e0e0e0;padding:10px 24px;border-radius:12px;font-size:13px;border:1px solid rgba(255,255,255,0.06);backdrop-filter:blur(12px);opacity:0;transition:opacity .25s;pointer-events:none;box-shadow:0 8px 32px rgba(0,0,0,.5)}
+#toast.show{opacity:1}
+
+/* scrollbars */
+::-webkit-scrollbar{width:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.06);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.1)}
+
+/* confirm */
+#confirm-overlay{position:fixed;top:0;left:0;width:100%;height:100%;z-index:300;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+#confirm-overlay.show{display:flex}
+#confirm-box{background:rgba(16,16,38,0.98);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:24px 28px;max-width:380px;width:90%;backdrop-filter:blur(12px);box-shadow:0 16px 48px rgba(0,0,0,.6)}
+#confirm-box .msg{font-size:14px;margin-bottom:18px;line-height:1.5;color:#d0d0d0}
+#confirm-box .actions{display:flex;gap:10px;justify-content:flex-end}
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <div class="shead">
+    <h2>graphrag</h2>
+    <button class="close-btn" onclick="toggleSidebar()">&times;</button>
+  </div>
+  <div class="sbody">
+
+    <section>
+      <h3>Search</h3>
+      <div class="row">
+        <input type="text" id="search-query" placeholder="Search query…" onkeydown="if(event.key==='Enter')doSearch()">
+      </div>
+      <div class="row mt-2">
+        <select id="search-mode">
+          <option value="hybrid">hybrid</option>
+          <option value="semantic">semantic</option>
+          <option value="bm25">bm25</option>
+        </select>
+        <input type="number" id="search-alpha" placeholder="α auto" step="0.05" min="0" max="1" value="">
+        <input type="number" id="search-k" value="10" min="1" max="100" step="1">
+      </div>
+      <div class="btn-group mt-2">
+        <button class="btn btn-primary btn-sm w-full" onclick="doSearch()">Search</button>
+        <button class="btn btn-sm" onclick="clearSearch()" style="flex:0.3">Clear</button>
+      </div>
+      <div id="search-results"></div>
+    </section>
+
+    <section>
+      <h3>Create Document</h3>
+      <textarea id="new-doc-text" placeholder="Document text…" rows="3"></textarea>
+      <label>Metadata (JSON)</label>
+      <input type="text" id="new-doc-meta" placeholder='{"source": "manual"}'>
+      <div class="flex items-center gap-2 mt-2">
+        <label class="flex items-center gap-2" style="margin:0;cursor:pointer">
+          <input type="checkbox" id="new-doc-extract" style="width:auto">
+          Extract graph
+        </label>
+        <button class="btn btn-primary btn-sm" onclick="addDocument()" style="margin-left:auto">Add</button>
+      </div>
+    </section>
+
+    <section>
+      <h3>Create Relation</h3>
+      <input type="text" id="rel-source" placeholder="Source doc_id…">
+      <input type="text" id="rel-target" placeholder="Target doc_id…" class="mt-2">
+      <div class="row mt-2">
+        <input type="text" id="rel-type" placeholder="relation" value="related_to">
+        <input type="number" id="rel-weight" value="1.0" min="0" max="10" step="0.1">
+      </div>
+      <button class="btn btn-primary btn-block" onclick="addRelation()">Create Link</button>
+    </section>
+
+    <section>
+      <h3>Filters</h3>
+      <input type="text" id="filter-meta" placeholder='{"key": "value"}'>
+      <div class="btn-group mt-2">
+        <button class="btn btn-sm" onclick="applyFilter()">Apply</button>
+        <button class="btn btn-sm" onclick="clearFilter()">Clear</button>
+      </div>
+    </section>
+
+    <section>
+      <h3>Statistics</h3>
+      <div id="stat-display">
+        <div class="stat-card"><div class="val" id="stat-docs">-</div><div class="lbl">Documents</div></div>
+        <div class="stat-card"><div class="val" id="stat-nodes">-</div><div class="lbl">Graph nodes</div></div>
+        <div class="stat-card"><div class="val" id="stat-edges">-</div><div class="lbl">Edges</div></div>
+        <div class="stat-card"><div class="val" id="stat-dim">-</div><div class="lbl">Embed dim</div></div>
+      </div>
+      <button class="btn btn-sm btn-block mt-2" onclick="updateStats()">Refresh</button>
+    </section>
+
+    <section>
+      <h3>Actions</h3>
+      <div class="btn-group">
+        <button class="btn btn-sm" onclick="resetView()">Reset view</button>
+        <button class="btn btn-sm" onclick="deleteSelected()" id="btn-delete-selected" disabled>Delete selected</button>
+      </div>
+      <button class="btn btn-sm btn-block mt-2" onclick="reindex()">Reindex</button>
+      <button class="btn btn-danger btn-block mt-2" onclick="confirmClear()">Clear all data</button>
+    </section>
+
+  </div>
+</div>
+
+<div id="mynetwork" class="loading"></div>
+
+<div id="search-input-wrapper">
+  <input type="text" id="global-search" placeholder="Search by label or text (Ctrl+F)" oninput="onGlobalSearch(this.value)">
+</div>
+
+<div id="toolbar">
+  <button onclick="toggleSidebar()" id="btn-sidebar" class="active-btn">☰ Menu</button>
+  <button onclick="toggleGlobalSearch()" id="btn-search" title="Search in graph (Ctrl+F)">🔍</button>
+  <button onclick="fitGraph()" title="Fit graph to screen">⊞ Fit</button>
+  <button onclick="resetView()" title="Reset everything">⟳ Reset</button>
+</div>
+
+<div id="infopanel">
+  <div class="ihead">
+    <h3>Node Details</h3>
+    <button class="close-btn" onclick="closeInfo()">&times;</button>
+  </div>
+  <div class="ibody">
+    <div class="iid" id="info-id"></div>
+    <div class="imeta" id="info-meta"></div>
+    <div class="ilh">Text</div>
+    <div class="itext" id="info-text"></div>
+    <div class="ilinks" id="info-links"></div>
+  </div>
+</div>
+
+<div id="confirm-overlay">
+  <div id="confirm-box">
+    <div class="msg" id="confirm-msg"></div>
+    <div class="actions">
+      <button class="btn" onclick="closeConfirm()">Cancel</button>
+      <button class="btn btn-danger" id="confirm-ok">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+let network = null;
+let nodes = null;
+let edges = null;
+let graphBuilt = false;
+let currentFilter = null;
+let confirmCallback = null;
+
+/* ── helpers ──────────────────────────────────────── */
+
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+function toast(msg,dur){
+  const el=document.getElementById('toast');
+  el.textContent=msg;el.classList.add('show');
+  clearTimeout(el._t);
+  el._t=setTimeout(()=>el.classList.remove('show'),dur||2500);
+}
+
+function qs(s){return document.querySelector(s)}
+function qsa(s){return document.querySelectorAll(s)}
+
+function hashCode(str){
+  let h=0;
+  for(let i=0;i<str.length;i++){h=((h<<5)-h)+str.charCodeAt(i);h|=0}
+  return Math.abs(h);
+}
+
+function docColor(doc){
+  const meta=doc.metadata;
+  const hasMeta=meta!==null&&meta!==undefined&&typeof meta==='object'&&Object.keys(meta).length>0;
+  const src=hasMeta?JSON.stringify(meta):(doc.text||'').slice(0,30);
+  const h=hashCode(src)%360;
+  return {background:'hsl('+h+',50%,28%)',border:'hsl('+h+',55%,50%)',highlight:{background:'hsl('+h+',55%,34%)',border:'hsl('+h+',70%,58%)'},hover:{background:'hsl('+h+',50%,32%)',border:'hsl('+h+',60%,52%)'}};
+}
+
+function makeLabel(text){
+  if(!text)return '(empty)';
+  let l=text.split('\n')[0].trim();
+  if(l.length>46)l=l.slice(0,43)+'…';
+  if(l.length>18){const m=Math.floor(l.length/2),sp=l.lastIndexOf(' ',m+6);if(sp>3)l=l.slice(0,sp)+'\n'+l.slice(sp+1)}
+  return l;
+}
+
+async function api(method,path,body){
+  const opts={method,headers:{}};
+  if(body!==undefined){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body)}
+  const r=await fetch(path,opts);
+  if(!r.ok){let t;try{t=await r.text()}catch(e){t=r.statusText}throw new Error(r.status+': '+(t||'').slice(0,300))}
+  return await r.json();
+}
+
+/* ── graph loading & building ─────────────────────── */
+
+async function loadGraph(){
+  const el=document.getElementById('mynetwork');el.classList.add('loading');
+  try{
+    let url='/documents?limit=1000&offset=0&relations_load_depth=1';
+    if(currentFilter)url+='&metadata_filter='+encodeURIComponent(JSON.stringify(currentFilter));
+    const data=await api('GET',url);
+    buildGraph(data.documents||[]);
+    updateStats();
+  }catch(e){toast('Error loading graph: '+e.message,4000)}
+  el.classList.remove('loading');
+}
+
+function buildGraph(docs){
+  graphBuilt=false;
+  const nodeIds=new Set();
+  const nodeArr=[];
+  const edgeArr=[];
+  const edgeSet=new Set();
+  const degree={};
+
+  for(const d of docs)nodeIds.add(d.doc_id);
+
+  for(const d of docs){
+    const links=d.links||{};
+    for(const targetId of Object.keys(links)){
+      if(!nodeIds.has(targetId))continue;
+      const rels=links[targetId];
+      for(const rel of(Array.isArray(rels)?rels:[rels])){
+        const ek=d.doc_id+'|'+targetId+'|'+rel.relation;
+        if(edgeSet.has(ek))continue;
+        edgeSet.add(ek);
+        edgeArr.push({from:d.doc_id,to:targetId,label:rel.relation,arrows:'to',color:{color:'rgba(255,255,255,0.08)',opacity:0.4},width:0.4+rel.weight*0.6,font:{size:7,color:'#555',strokeWidth:0,align:'middle',face:'Segoe UI'},smooth:{type:'curvedCW',roundness:0.12}});
+        degree[d.doc_id]=(degree[d.doc_id]||0)+1;
+        degree[targetId]=(degree[targetId]||0)+1;
+      }
+    }
+  }
+
+  for(const d of docs){
+    const label=makeLabel(d.text);
+    const color=docColor(d);
+    const deg=degree[d.doc_id]||0;
+    const sz=14+Math.min(deg*3,18);
+    const metaStr=esc(JSON.stringify(d.metadata||{}));
+    const title='<b>ID:</b> '+esc(d.doc_id)+'<br><b>Degree:</b> '+deg+'<br><b>Metadata:</b> '+metaStr;
+    nodeArr.push({id:d.doc_id,label,title,color,shape:'dot',size:sz,borderWidth:deg>0?2:1,font:{color:'#e0e0e0',size:11,face:'Segoe UI'},margin:{top:4,bottom:4,left:6,right:6}});
+  }
+
+  nodes=new vis.DataSet(nodeArr);
+  edges=new vis.DataSet(edgeArr);
+  const visData={nodes,edges};
+  const container=document.getElementById('mynetwork');
+
+  const options={
+    physics:{
+      solver:'forceAtlas2Based',
+      forceAtlas2Based:{gravitationalConstant:-120,centralGravity:0.001,springLength:180,springConstant:0.015,damping:0.5},
+      stabilization:{iterations:300,updateInterval:20},
+      adaptiveTimestep:true,
+    },
+    layout:{improvedLayout:true,randomSeed:42},
+    edges:{
+      font:{size:8,color:'#666',strokeWidth:0,align:'middle',face:'Segoe UI'},
+      width:1,smooth:{type:'curvedCW',roundness:0.12},
+      arrows:{to:{enabled:true,scaleFactor:0.5}},
+      selectionWidth:2,hoverWidth:0,
+    },
+    nodes:{
+      font:{color:'#e0e0e0',size:11,face:'Segoe UI'},
+      borderWidth:2,borderWidthSelected:3,
+      shadow:{enabled:true,size:6,x:0,y:2},
+      margin:{top:6,bottom:6,left:8,right:8},
+    },
+    interaction:{
+      hover:true,tooltipDelay:150,navigationButtons:true,
+      keyboard:{enabled:true,speed:{x:10,y:10,zoom:0.02}},
+      multiselect:true,
+    },
+  };
+
+  if(network)network.destroy();
+  network=new vis.Network(container,visData,options);
+
+  network.on('click',function(params){
+    if(params.nodes.length){showNodeInfo(params.nodes[0])}else{closeInfo()}
+    updateDeleteButton();
+  });
+
+  network.on('doubleClick',function(params){
+    if(params.nodes.length)network.focus(params.nodes[0],{scale:1.8,animation:{duration:400,easingFunction:'easeInOutQuad'}});
+  });
+
+  network.once('stabilizationIterationsDone',function(){
+    setTimeout(fitGraph,150);
+  });
+
+  network.on('select',function(){updateDeleteButton();});
+
+  graphBuilt=true;
+}
+
+function fitGraph(){
+  if(network)network.fit({animation:{duration:400,easingFunction:'easeInOutQuad'}});
+}
+
+/* ── sidebar ──────────────────────────────────────── */
+
+function toggleSidebar(){
+  qs('#sidebar').classList.toggle('open');
+  qs('#btn-sidebar').classList.toggle('active-btn');
+}
+
+/* ── global search (client-side, by label/title) ──── */
+
+function toggleGlobalSearch(){
+  const w=document.getElementById('search-input-wrapper');
+  w.classList.toggle('show');
+  if(w.classList.contains('show')){document.getElementById('global-search').focus()}
+  else{document.getElementById('global-search').value='';onGlobalSearch('')}
+}
+
+function onGlobalSearch(val){
+  const q=val.trim().toLowerCase();
+  if(!graphBuilt||!nodes)return;
+  for(const id of nodes.getIds()){
+    const n=nodes.get(id);
+    if(!n)continue;
+    const match=!q||(n.label||'').toLowerCase().includes(q)||(n.title||'').toLowerCase().includes(q);
+    n.hidden=!match;
+    if(match&&q&&!n._origBorder){n._origBorder=n.color.border;n.color.border='#fbbf24'}
+    else if(!q&&n._origBorder){n.color.border=n._origBorder;delete n._origBorder;if(n._origLabel){n.label=n._origLabel;delete n._origLabel}}
+    nodes.update(n);
+  }
+  if(!q&&network)network.setOptions({physics:{enabled:true}});
+  fitGraph();
+}
+
+document.addEventListener('keydown',function(e){
+  if((e.ctrlKey||e.metaKey)&&e.key==='f'){e.preventDefault();toggleGlobalSearch()}
+  if(e.key==='Escape'){
+    closeInfo();
+    const sw=document.getElementById('search-input-wrapper');
+    if(sw.classList.contains('show')){sw.classList.remove('show');document.getElementById('global-search').value='';onGlobalSearch('')}
+  }
+});
+
+/* ── API search ───────────────────────────────────── */
+
+async function doSearch(){
+  const query=qs('#search-query').value.trim();
+  if(!query){toast('Enter a search query');return}
+  const mode=qs('#search-mode').value;
+  const alphaRaw=qs('#search-alpha').value;
+  const k=parseInt(qs('#search-k').value)||10;
+  const body={query,k,mode};
+  if(alphaRaw)body.alpha=parseFloat(alphaRaw);
+  if(currentFilter)body.metadata_filter=currentFilter;
+  try{
+    const data=await api('POST','/search',body);
+    displaySearchResults(data.results||[]);
+  }catch(e){toast('Search error: '+e.message,4000)}
+}
+
+function displaySearchResults(results){
+  const el=document.getElementById('search-results');
+  if(!results.length){el.innerHTML='<div class="empty">No results</div>';clearSearchHighlights();return}
+  const maxScore=Math.max(...results.map(r=>r.score),1);
+  const scoreMap={};
+  for(const r of results)scoreMap[r.doc_id]=r.score;
+  let html='';
+  for(const r of results){
+    html+='<div class="sr" data-id="'+esc(r.doc_id)+'"><span class="srl">'+esc(makeLabel(r.text))+'</span><span class="srs">'+r.score.toFixed(3)+'</span></div>';
+  }
+  el.innerHTML=html;
+  el.querySelectorAll('.sr').forEach(el2=>{el2.addEventListener('click',function(){goToNode(this.dataset.id)})});
+
+  if(!graphBuilt||!nodes)return;
+  for(const id of nodes.getIds()){
+    const n=nodes.get(id);
+    if(!n)continue;
+    if(scoreMap[id]!==undefined){
+      n.hidden=false;
+      if(!n._origBorder){n._origBorder=n.color.border}
+      const ratio=scoreMap[id]/maxScore;
+      if(!n._origLabel){n._origLabel=n.label}
+      if(!n._origFontSize){n._origFontSize=(n.font&&n.font.size)||11}
+      n.font=n.font||{};n.font.size=Math.round(10+ratio*16);
+      n.label=n._origLabel+'\n'+scoreMap[id].toFixed(3);
+      n.color.border='#fbbf24';
+    }else{
+      n.hidden=true;
+    }
+    nodes.update(n);
+  }
+  fitGraph();
+}
+
+function clearSearch(){
+  qs('#search-query').value='';
+  qs('#search-results').innerHTML='';
+  clearSearchHighlights();
+  fitGraph();
+}
+
+function clearSearchHighlights(){
+  if(!graphBuilt||!nodes)return;
+  for(const id of nodes.getIds()){
+    const n=nodes.get(id);
+    if(!n)continue;
+    n.hidden=false;
+    if(n._origBorder){n.color.border=n._origBorder;delete n._origBorder}
+    if(n._origLabel){n.label=n._origLabel;delete n._origLabel}
+    if(n._origFontSize){n.font=n.font||{};n.font.size=n._origFontSize;delete n._origFontSize}
+    nodes.update(n);
+  }
+  if(network)network.setOptions({physics:{enabled:true}});
+}
+
+function goToNode(id){
+  if(!nodes||!nodes.get(id)){toast('Node not in current view');return}
+  network.focus(id,{scale:1.8,animation:{duration:400,easingFunction:'easeInOutQuad'}});
+  network.selectNodes([id]);
+  showNodeInfo(id);
+}
+
+/* ── info panel ───────────────────────────────────── */
+
+async function showNodeInfo(docId){
+  qs('#infopanel').classList.add('open');
+  const iid=document.getElementById('info-id');
+  const imeta=document.getElementById('info-meta');
+  const itext=document.getElementById('info-text');
+  const ilinks=document.getElementById('info-links');
+  iid.textContent='ID: '+docId;
+  imeta.textContent='';
+  itext.textContent='Loading…';
+  ilinks.innerHTML='';
+  try{
+    const data=await api('GET','/documents/'+encodeURIComponent(docId)+'?relations_load_depth=1');
+    itext.textContent=data.text||'(empty)';
+    imeta.textContent=data.metadata&&Object.keys(data.metadata).length?JSON.stringify(data.metadata,null,2):'(none)';
+    const links=data.links||{};
+    const entries=Object.entries(links);
+    if(entries.length){
+      let lhtml='<div class="ilh">Connections ('+entries.length+' neighbours)</div>';
+      for(const [nbrId, rels] of entries){
+        const nbr=nodes?nodes.get(nbrId):null;
+        const label=nbr?esc(nbr.label||nbrId):esc(nbrId);
+        for(const rel of (Array.isArray(rels)?rels:[rels])){
+          lhtml+='<div class="ilr" data-id="'+esc(nbrId)+'"><span class="arrow">'+(rel.direction==='out'?'→':'←')+'</span><span class="rlabel">'+label+'</span><span class="rtype">'+esc(rel.relation)+'</span><span class="rweight">'+rel.weight.toFixed(2)+'</span></div>';
+        }
+      }
+      ilinks.innerHTML=lhtml;
+      ilinks.querySelectorAll('.ilr').forEach(el2=>{el2.addEventListener('click',function(){goToNode(this.dataset.id)})});
+    }
+  }catch(e){itext.textContent='Error: '+e.message}
+}
+
+function closeInfo(){qs('#infopanel').classList.remove('open')}
+
+/* ── CRUD ─────────────────────────────────────────── */
+
+async function addDocument(){
+  const text=qs('#new-doc-text').value.trim();
+  if(!text){toast('Enter document text');return}
+  const metaRaw=qs('#new-doc-meta').value.trim();
+  let meta=null;
+  if(metaRaw){try{meta=JSON.parse(metaRaw)}catch(e){toast('Invalid metadata JSON');return}}
+  const extract=qs('#new-doc-extract').checked;
+  try{
+    const result=await api('POST','/documents',{text,meta,extract_graph:extract});
+    qs('#new-doc-text').value='';
+    qs('#new-doc-meta').value='';
+    toast('Created');
+    await loadGraph();
+  }catch(e){toast('Error: '+e.message,4000)}
+}
+
+async function addRelation(){
+  const src=qs('#rel-source').value.trim();
+  const tgt=qs('#rel-target').value.trim();
+  const rel=qs('#rel-type').value.trim()||'related_to';
+  const weight=parseFloat(qs('#rel-weight').value)||1.0;
+  if(!src||!tgt){toast('Enter source and target IDs');return}
+  try{
+    await api('POST','/relations',{source_id:src,target_id:tgt,relation:rel,weight});
+    qs('#rel-source').value='';
+    qs('#rel-target').value='';
+    toast('Relation created');
+    await loadGraph();
+  }catch(e){toast('Error: '+e.message,4000)}
+}
+
+/* ── delete ───────────────────────────────────────── */
+
+function updateDeleteButton(){
+  const btn=document.getElementById('btn-delete-selected');
+  if(!network){btn.disabled=true;return}
+  btn.disabled=network.getSelectedNodes().length===0;
+}
+
+async function deleteSelected(){
+  if(!network)return;
+  const sel=network.getSelectedNodes();
+  if(!sel.length){toast('No nodes selected');return}
+  confirmAction('Delete '+sel.length+' selected node'+(sel.length>1?'s':'')+'?',async()=>{
+    let ok=0,err=0;
+    for(const id of sel){
+      try{await api('DELETE','/documents/'+encodeURIComponent(id));ok++}
+      catch(e){err++}
+    }
+    toast('Deleted '+ok+', errors '+err);
+    await loadGraph();
+  });
+}
+
+/* ── filter ───────────────────────────────────────── */
+
+function applyFilter(){
+  const raw=qs('#filter-meta').value.trim();
+  if(!raw){currentFilter=null;toast('Filter cleared');loadGraph();return}
+  try{currentFilter=JSON.parse(raw);toast('Filter applied');loadGraph()}
+  catch(e){toast('Invalid JSON filter')}
+}
+
+function clearFilter(){
+  qs('#filter-meta').value='';
+  currentFilter=null;
+  loadGraph();
+  toast('Filter cleared');
+}
+
+/* ── reset ────────────────────────────────────────── */
+
+function resetView(){
+  qs('#search-query').value='';
+  qs('#search-alpha').value='';
+  qs('#search-k').value='10';
+  qs('#filter-meta').value='';
+  currentFilter=null;
+  document.getElementById('search-results').innerHTML='';
+  clearSearchHighlights();
+  if(network){network.setOptions({physics:{enabled:true}});network.stabilize()}
+  fitGraph();
+  closeInfo();
+  loadGraph();
+  toast('View reset');
+}
+
+/* ── maintenance ──────────────────────────────────── */
+
+async function reindex(){
+  try{
+    const r=await api('POST','/reindex');
+    toast('Reindexed: '+r.reindexed+' docs');
+    await loadGraph();
+  }catch(e){toast('Error: '+e.message,4000)}
+}
+
+async function updateStats(){
+  try{
+    const s=await api('GET','/stats');
+    qs('#stat-docs').textContent=s.total_documents;
+    qs('#stat-dim').textContent=s.dimension||'-';
+  }catch(e){}
+  try{
+    const gs=await api('GET','/graph/stats');
+    qs('#stat-nodes').textContent=gs.total_nodes;
+    qs('#stat-edges').textContent=gs.total_edges;
+  }catch(e){}
+}
+
+/* ── confirm dialog ───────────────────────────────── */
+
+function confirmAction(msg,callback){
+  document.getElementById('confirm-msg').textContent=msg;
+  document.getElementById('confirm-overlay').classList.add('show');
+  confirmCallback=callback;
+}
+
+function closeConfirm(){
+  document.getElementById('confirm-overlay').classList.remove('show');
+  confirmCallback=null;
+}
+
+document.getElementById('confirm-ok').addEventListener('click',function(){
+  if(confirmCallback)confirmCallback();
+  closeConfirm();
+});
+
+function confirmClear(){
+  confirmAction('Delete ALL documents, edges, and embeddings? This cannot be undone.',async()=>{
+    try{await api('POST','/clear');toast('All data cleared');await loadGraph()}catch(e){toast('Error: '+e.message,4000)}
+  });
+}
+
+/* ── init ─────────────────────────────────────────── */
+
+document.addEventListener('DOMContentLoaded',function(){
+  loadGraph();
+  updateStats();
+});
+</script>
+</body>
+</html>

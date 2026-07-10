@@ -28,7 +28,9 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from mcp.server.sse import SseServerTransport
@@ -133,6 +135,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.mount("/ui", StaticFiles(directory="src/webui", html=True), name="webui")
+
 
 # -- helpers -----------------------------------------------------------------
 
@@ -168,6 +172,10 @@ def _fmt(results, max_chars=None):
 
 # -- REST endpoints ----------------------------------------------------------
 
+
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/ui")
 
 @app.get("/health")
 async def health():

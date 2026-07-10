@@ -306,6 +306,88 @@ app = FastAPI(lifespan=lifespan, title="graphrag", version="0.2.0")
 
 ---
 
+## Фаза 3.5: WebUI — графический интерфейс
+
+**Статус:** ❌ Не реализовано
+
+Графический интерфейс пользователя, работающий через HTTP REST API системы.
+
+### Архитектура
+
+- SPA (Single Page Application) на чистом HTML/CSS/JS — Zero зависимостей (без npm/node)
+- Все запросы — к REST API (`/search`, `/documents`, `/stats`, `/graph/*`, `/health`)
+- Встраивается как статика в FastAPI (папка `src/webui/`)
+- Единый HTML-файл с inline CSS/JS для простоты деплоя
+
+### Функциональность
+
+| Раздел | Что показывает | REST эндпоинт |
+|--------|---------------|---------------|
+| **Поиск** | Поле ввода, выбор режима (semantic/BM25/hybrid), результаты с подсветкой | `POST /search` |
+| **Документы** | Список с пагинацией, поиск, удаление, добавление нового | `GET/POST/DELETE /documents` |
+| **Граф** | Визуализация графа (vis.js, интерактивно, панорамирование) | `GET /graph/viz` или `GET /graph/stats` + BFS |
+| **Статистика** | Количество документов, размерность, узлы/рёбра графа | `GET /stats`, `GET /graph/stats` |
+| **Health** | Пинг сервера, статус компонентов | `GET /health` |
+
+### Макет UI
+
+```html
+<!-- src/webui/index.html — единый файл -->
+┌──────────────────────────────────────┐
+│  🧠 graphrag · WebUI                 │
+│  ┌─[Search]──[Documents]──[Graph]──┐ │
+│  │  [статистика]                   │ │
+│  └─────────────────────────────────┘ │
+│                                      │
+│  ┌──────────────────────────────────┐│
+│  │ 🔍 [   поисковый запрос    ] [Go]││
+│  │ Mode: [semantic ▼] k: [5]        ││
+│  │ ┌──────────────────────────────┐ ││
+│  │ │ 📄 Результат 1 (score: 0.92) │ ││
+│  │ │   Текст результата...        │ ││
+│  │ │   metadata: {...}            │ ││
+│  │ └──────────────────────────────┘ ││
+│  └──────────────────────────────────┘│
+└──────────────────────────────────────┘
+```
+
+### Технологии
+
+- **Чистый HTML5 + CSS3** (Flexbox/Grid, CSS variables для темы)
+- **Vanilla JS** (ES6 modules) — без фреймворков
+- **vis.js** — уже есть в проекте (для графа)
+- **CSS Variables** — поддержка светлой и тёмной темы
+- **Fetch API** — все запросы через `fetch()` к REST API
+- **Адаптивность** — mobile-first, работает на телефонах
+
+### Реализация
+
+```python
+# src/http_api.py — добавить mount статики
+from fastapi.staticfiles import StaticFiles
+
+# В lifespan / в конце
+app.mount("/ui", StaticFiles(directory="src/webui", html=True), name="webui")
+# Редирект с / на /ui
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/ui")
+```
+
+### Запуск
+
+```bash
+rag-server --http        # REST API на :8765, WebUI на /ui
+rag-server --http --port 8765  # → http://localhost:8765/ui
+```
+
+### Без зависимостей
+
+**Zero npm/node_modules.** Всё в одном HTML-файле с inline стилями и скриптами.
+Это критично для простоты деплоя (особенно в Docker).
+
+---
+
 ## Фаза 4: Reranker
 
 **Модель:** `BAAI/bge-reranker-v2-m3` через `sentence-transformers` (`CrossEncoder`)
@@ -667,6 +749,7 @@ testpaths = ["tests"]
 | `src/graph_extractor.py` | **Новый** |
 | `src/query_expander.py` | **Новый** |
 | `src/http_api.py` | **Новый** — FastAPI |
+| `src/webui/index.html` | **Новый** — SPA WebUI (один HTML-файл) |
 | `src/graph_viz.py` | **Переписать** — новый стиль, HTTP API |
 | `src/mcp_server.py` | **Рефакторинг** — новый storage, убрать rag_add_file |
 | `src/rag.py` | **Рефакторинг** — новый storage, reranker, chunking |
@@ -701,6 +784,7 @@ testpaths = ["tests"]
 | **1** | BGE-M3 embedder | 0 |
 | **2** | Qdrant + SQLite storage | 1 |
 | **3** | HTTP REST API + MCP SSE | 2 |
+| **3.5** | WebUI (графический интерфейс) | 3 |
 | **4** | Reranker | 2 |
 | **5** | Chunking | 2 |
 | **6** | Repomix-style indexing | 2, 5 |

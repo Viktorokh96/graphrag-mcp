@@ -10,6 +10,7 @@ __pycache__/
 rag_data/
 *.bak
 *.html
+!src/webui/index.html
 
 # uv
 # uv.lock коммитим — воспроизводимость окружения
