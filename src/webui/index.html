@@ -92,12 +92,7 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#0a0a1
 #toolbar .badge-btn{position:relative}
 #toolbar .badge-btn .badge{position:absolute;top:-4px;right:-4px;background:#3b82f6;color:#fff;font-size:9px;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700}
 
-/* floating search */
-#search-input-wrapper{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:50;display:none;animation:fadeIn .15s ease}
-#search-input-wrapper.show{display:block}
-@keyframes fadeIn{from{opacity:0;transform:translateX(-50%) translateY(-4px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
-#search-input-wrapper input{width:340px;background:rgba(10,10,26,0.94);border:1px solid rgba(255,255,255,0.1);color:#e0e0e0;padding:9px 16px;border-radius:24px;font-size:13px;font-family:inherit;outline:none;backdrop-filter:blur(8px);box-shadow:0 4px 20px rgba(0,0,0,.4);transition:border-color .15s}
-#search-input-wrapper input:focus{border-color:rgba(96,165,250,.4);background:rgba(10,10,26,0.97)}
+/* no separate floating search — sidebar search only */
 
 /* toast */
 #toast{position:fixed;bottom:32px;left:50%;transform:translateX(-50%);z-index:200;background:rgba(10,10,26,0.94);color:#e0e0e0;padding:10px 24px;border-radius:12px;font-size:13px;border:1px solid rgba(255,255,255,0.06);backdrop-filter:blur(12px);opacity:0;transition:opacity .25s;pointer-events:none;box-shadow:0 8px 32px rgba(0,0,0,.5)}
@@ -129,7 +124,7 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#0a0a1
     <section>
       <h3>Search</h3>
       <div class="row">
-        <input type="text" id="search-query" placeholder="Search query…" onkeydown="if(event.key==='Enter')doSearch()">
+        <input type="text" id="search-query" placeholder="Search query…" oninput="debouncedSearch()" onkeydown="if(event.key==='Enter'){event.preventDefault();doSearch()}">
       </div>
       <div class="row mt-2">
         <select id="search-mode">
@@ -207,13 +202,9 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#0a0a1
 
 <div id="mynetwork" class="loading"></div>
 
-<div id="search-input-wrapper">
-  <input type="text" id="global-search" placeholder="Search by label or text (Ctrl+F)" oninput="onGlobalSearch(this.value)">
-</div>
-
 <div id="toolbar">
   <button onclick="toggleSidebar()" id="btn-sidebar" class="active-btn">☰ Menu</button>
-  <button onclick="toggleGlobalSearch()" id="btn-search" title="Search in graph (Ctrl+F)">🔍</button>
+  <button onclick="focusSearch()" id="btn-search" title="Search (Ctrl+F)">🔍</button>
   <button onclick="fitGraph()" title="Fit graph to screen">⊞ Fit</button>
   <button onclick="resetView()" title="Reset everything">⟳ Reset</button>
 </div>
@@ -410,38 +401,24 @@ function toggleSidebar(){
   qs('#btn-sidebar').classList.toggle('active-btn');
 }
 
-/* ── global search (client-side, by label/title) ──── */
+/* ── search helpers ───────────────────────────────────── */
 
-function toggleGlobalSearch(){
-  const w=document.getElementById('search-input-wrapper');
-  w.classList.toggle('show');
-  if(w.classList.contains('show')){document.getElementById('global-search').focus()}
-  else{document.getElementById('global-search').value='';onGlobalSearch('')}
+function focusSearch(){
+  toggleSidebar();
+  setTimeout(()=>qs('#search-query').focus(),300);
 }
 
-function onGlobalSearch(val){
-  const q=val.trim().toLowerCase();
-  if(!graphBuilt||!nodes)return;
-  for(const id of nodes.getIds()){
-    const n=nodes.get(id);
-    if(!n)continue;
-    const match=!q||(n.label||'').toLowerCase().includes(q)||(n.title||'').toLowerCase().includes(q);
-    n.hidden=!match;
-    if(match&&q&&!n._origBorder){n._origBorder=n.color.border;n.color.border='#fbbf24'}
-    else if(!q&&n._origBorder){n.color.border=n._origBorder;delete n._origBorder;if(n._origLabel){n.label=n._origLabel;delete n._origLabel}}
-    nodes.update(n);
-  }
-  if(!q&&network)network.setOptions({physics:{enabled:true}});
-  fitGraph();
+let searchTimer=null;
+function debouncedSearch(){
+  clearTimeout(searchTimer);
+  const q=qs('#search-query').value.trim();
+  if(!q){clearSearch();return}
+  searchTimer=setTimeout(doSearch,300);
 }
 
 document.addEventListener('keydown',function(e){
-  if((e.ctrlKey||e.metaKey)&&e.key==='f'){e.preventDefault();toggleGlobalSearch()}
-  if(e.key==='Escape'){
-    closeInfo();
-    const sw=document.getElementById('search-input-wrapper');
-    if(sw.classList.contains('show')){sw.classList.remove('show');document.getElementById('global-search').value='';onGlobalSearch('')}
-  }
+  if((e.ctrlKey||e.metaKey)&&e.key==='f'){e.preventDefault();focusSearch()}
+  if(e.key==='Escape'){closeInfo()}
 });
 
 /* ── API search ───────────────────────────────────── */
@@ -463,7 +440,8 @@ async function doSearch(){
 
 function displaySearchResults(results){
   const el=document.getElementById('search-results');
-  if(!results.length){el.innerHTML='<div class="empty">No results</div>';clearSearchHighlights();return}
+  clearSearchHighlights();
+  if(!results.length){el.innerHTML='<div class="empty">No results</div>';return}
   const maxScore=Math.max(...results.map(r=>r.score),1);
   const scoreMap={};
   for(const r of results)scoreMap[r.doc_id]=r.score;
@@ -479,7 +457,6 @@ function displaySearchResults(results){
     const n=nodes.get(id);
     if(!n)continue;
     if(scoreMap[id]!==undefined){
-      n.hidden=false;
       if(!n._origBorder){n._origBorder=n.color.border}
       const ratio=scoreMap[id]/maxScore;
       if(!n._origLabel){n._origLabel=n.label}
@@ -487,12 +464,10 @@ function displaySearchResults(results){
       n.font=n.font||{};n.font.size=Math.round(10+ratio*16);
       n.label=n._origLabel+'\n'+scoreMap[id].toFixed(3);
       n.color.border='#fbbf24';
-    }else{
-      n.hidden=true;
+      nodes.update(n);
     }
-    nodes.update(n);
   }
-  fitGraph();
+  if(results.length)fitGraph();
 }
 
 function clearSearch(){
@@ -507,13 +482,11 @@ function clearSearchHighlights(){
   for(const id of nodes.getIds()){
     const n=nodes.get(id);
     if(!n)continue;
-    n.hidden=false;
     if(n._origBorder){n.color.border=n._origBorder;delete n._origBorder}
     if(n._origLabel){n.label=n._origLabel;delete n._origLabel}
     if(n._origFontSize){n.font=n.font||{};n.font.size=n._origFontSize;delete n._origFontSize}
     nodes.update(n);
   }
-  if(network)network.setOptions({physics:{enabled:true}});
 }
 
 function goToNode(id){
@@ -640,8 +613,6 @@ function resetView(){
   currentFilter=null;
   document.getElementById('search-results').innerHTML='';
   clearSearchHighlights();
-  if(network){network.setOptions({physics:{enabled:true}});network.stabilize()}
-  fitGraph();
   closeInfo();
   loadGraph();
   toast('View reset');
