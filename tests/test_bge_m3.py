@@ -53,13 +53,13 @@ class TestBgeM3EmbeddingGenerator:
         st_class, _ = fake_st
         gen = BgeM3EmbeddingGenerator(device="cpu")
         gen.get_embedding("hello world")
-        st_class.assert_called_once_with("BAAI/bge-m3", device="cpu")
+        st_class.assert_called_once_with("BAAI/bge-m3", device="cpu", local_files_only=False)
 
     def test_custom_model_name_and_device(self, fake_st):
         st_class, _ = fake_st
         gen = BgeM3EmbeddingGenerator(model_name="BAAI/bge-m3-custom", device="cuda")
         gen.get_embedding("text")
-        st_class.assert_called_once_with("BAAI/bge-m3-custom", device="cuda")
+        st_class.assert_called_once_with("BAAI/bge-m3-custom", device="cuda", local_files_only=False)
 
     def test_default_dimension_before_load(self, fake_st):
         gen = BgeM3EmbeddingGenerator()

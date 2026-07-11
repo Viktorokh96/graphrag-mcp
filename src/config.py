@@ -77,6 +77,15 @@ class RAGConfig:
     query_expansion_model: str = "qwen3:1.8b"
     query_expansion_count: int = 3
     query_expansion_ollama_url: str = "http://localhost:11434"
+    # HuggingFace: не обращаться к Hub при загрузке моделей.
+    # Env: HF_HUB_OFFLINE=1 — загружать только из локального кеша.
+    hf_offline: bool = False
+    # Директория с локальными моделями (models/bge-m3, models/bge-reranker-v2-m3).
+    # Env: MODELS_DIR — если задана, модели грузятся отсюда, а не из HF Hub.
+    models_dir: str = ""
+    # Прелоад моделей при старте (embedding + reranker).
+    # Env: PRELOAD_MODELS=1 — загружать модели в __init__, не лениво.
+    preload_models: bool = False
 
     @classmethod
     def from_env(cls) -> "RAGConfig":
@@ -113,6 +122,9 @@ class RAGConfig:
                 "QUERY_EXPANSION_OLLAMA_URL",
                 os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
             ),
+            hf_offline=os.environ.get("HF_HUB_OFFLINE", "").lower() in ("1", "true", "yes"),
+            models_dir=os.environ.get("MODELS_DIR", ""),
+            preload_models=os.environ.get("PRELOAD_MODELS", "").lower() in ("1", "true", "yes"),
         )
 
     def resolve_qdrant_location(self) -> str:
@@ -122,6 +134,20 @@ class RAGConfig:
     def resolve_database_url(self) -> str:
         """DSN Postgres или путь к SQLite-файлу внутри store_path."""
         return self.database_url or f"{self.store_path}/store.db"
+
+    def resolve_model_path(self, model_name: str) -> str:
+        """Путь к модели: локальная директория (models/) или имя в HF Hub.
+
+        Если models_dir задан и внутри есть поддиректория с именем модели —
+        возвращает локальный путь. Иначе — оригинальное имя (HF Hub).
+        """
+        if self.models_dir:
+            # model_name может быть "BAAI/bge-m3" → берём последний компонент
+            short_name = model_name.rsplit("/", 1)[-1]
+            local = os.path.join(self.models_dir, short_name)
+            if os.path.isdir(local):
+                return local
+        return model_name
 
     def to_env_preview(self) -> str:
         lines = [
@@ -169,5 +195,14 @@ class RAGConfig:
             f"QUERY_EXPANSION_ENABLED={'true' if self.query_expansion_enabled else 'false'}",
             f"QUERY_EXPANSION_MODEL={self.query_expansion_model}",
             f"QUERY_EXPANSION_COUNT={self.query_expansion_count}",
+            "",
+            "# HuggingFace: не обращаться к Hub при загрузке моделей (только локальный кеш)",
+            f"HF_HUB_OFFLINE={'true' if self.hf_offline else 'false'}",
+            "",
+            "# Директория с локальными моделями (после scripts/setup_models.sh)",
+            f"MODELS_DIR={self.models_dir}",
+            "",
+            "# Прелоад моделей при старте (быстрый первый запрос, дольше стартап)",
+            f"PRELOAD_MODELS={'true' if self.preload_models else 'false'}",
         ]
         return "\n".join(lines)

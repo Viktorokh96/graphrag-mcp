@@ -5,10 +5,23 @@ MCP-сервер графовой базы знаний с гибридным п
 
 ## Quick Start
 
+### 1. Поднять Qdrant (рекомендуется)
+
+Embedded Qdrant не поддерживает параллельный доступ из нескольких процессов.
+Для concurrent-доступа (несколько MCP-клиентов, CLI, HTTP API одновременно):
+
 ```bash
 cd ~/Work/graphrag
+docker compose up -d qdrant
+export QDRANT_URL=http://localhost:6333
+```
 
-# Запуск MCP-сервера (stdio)
+> Без `QDRANT_URL` используется embedded (./rag_data/qdrant) — только один процесс.
+
+### 2. Запуск
+
+```bash
+# MCP-сервер (stdio)
 EMBEDDING_MODEL=bge-m3 python3 -m src.mcp_server
 
 # HTTP API (FastAPI)
@@ -70,6 +83,53 @@ export OLLAMA_MODEL=qwen3-embedding:8b
 export EMBEDDING_MODEL=openrouter
 export OPENROUTER_API_KEY=sk-or-v1-...
 ```
+
+### Offline-режим (без обращения к HuggingFace Hub)
+
+Модели BGE-M3 и CrossEncoder скачиваются из HuggingFace Hub при первом запуске
+и кешируются в `~/.cache/huggingface/hub/`. Если модель уже скачана — можно
+отключить обращения к Hub:
+
+```bash
+export HF_HUB_OFFLINE=1
+```
+
+Или через `.env`:
+```
+HF_HUB_OFFLINE=true
+```
+
+Это передаёт `local_files_only=True` в SentenceTransformer — загрузка идёт
+только из локального кеша, без сетевых запросов.
+
+### Локальные модели (рекомендуется)
+
+Скачайте модели скриптом — они хранятся в `./models/` и не зависят от HF Hub:
+
+```bash
+bash scripts/setup_models.sh   # ≈3 GB, один раз
+```
+
+Затем укажите в `.env`:
+```
+MODELS_DIR=./models
+HF_HUB_OFFLINE=true
+```
+
+Код автоматически находит `./models/bge-m3/` и `./models/bge-reranker-v2-m3/`
+и грузит их напрямую с диска.
+
+### Прелоад моделей
+
+По умолчанию модели грузятся лениво при первом запросе (~5-15 сек задержка).
+Чтобы стартовал сразу с горячими моделями:
+
+```
+PRELOAD_MODELS=true
+```
+
+Старт MCP-сервера станет дольше на время загрузки моделей (~10-30 сек),
+но первый запрос будет мгновенным.
 
 ## MCP инструменты
 
@@ -143,7 +203,11 @@ score = (1-alpha)/(K + rank_bm25 + 1)                                # bm25-only
 ## Docker
 
 ```bash
-docker compose up --build  # Qdrant + Postgres + RAG
+# Только Qdrant (для локальной разработки — MCP/CLI используют QDRANT_URL)
+docker compose up -d qdrant
+
+# Полный стек: Qdrant + Postgres + RAG HTTP API
+docker compose up --build
 # HTTP API: http://localhost:8765
 # OpenAPI docs: http://localhost:8765/docs
 ```

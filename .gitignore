@@ -8,9 +8,9 @@ __pycache__/
 
 # Data / runtime
 rag_data/
+models/
 *.bak
 *.html
-!lib/**/*.html
 
 # uv
 # uv.lock коммитим — воспроизводимость окружения
@@ -18,3 +18,15 @@ rag_data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Tooling / temp artifacts
+.understand-anything/
+.claude/
+.coverage
+store.db
+
+# Vector DB data (runtime)
+qdrant/
+
+# Vendored web libs (too large for repo)
+lib/

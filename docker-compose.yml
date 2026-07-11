@@ -1,6 +1,9 @@
 services:
   qdrant:
     image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"   # REST API — для MCP-сервера / CLI на хосте
+      - "6334:6334"   # gRPC (опционально)
     volumes:
       - rag_data_qdrant:/storage
     environment:

@@ -129,10 +129,12 @@ class BgeM3EmbeddingGenerator:
         model_name: str = "BAAI/bge-m3",
         device: str = "cpu",
         dimension: int = 1024,
+        local_files_only: bool = False,
     ):
         self.model_name = model_name
         self.device = device
         self._dimension = dimension
+        self._local_files_only = local_files_only
         self._model = None
         self._cache: dict[str, list[float]] = {}
 
@@ -141,7 +143,11 @@ class BgeM3EmbeddingGenerator:
             # Ленивая загрузка: sentence-transformers тянет torch (~секунды импорта),
             # а сама модель — ~2GB RAM. Не грузим, пока эмбеддинги реально не нужны.
             from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(self.model_name, device=self.device)
+            self._model = SentenceTransformer(
+                self.model_name,
+                device=self.device,
+                local_files_only=self._local_files_only,
+            )
         return self._model
 
     def get_embedding(self, text: str) -> list[float]:

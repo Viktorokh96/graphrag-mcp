@@ -55,6 +55,14 @@
       "description": "Start the RAG MCP server (stdio mode)",
       "template": "EMBEDDING_MODEL=bge-m3 /home/viktorokh96/Work/graphrag/.venv/bin/python3 -m src.mcp_server"
     },
+    "start-http": {
+      "description": "Start the RAG MCP server (HTTP SSE mode). Usage: /start-http [--port 8765] [--qdrant] [--preload]",
+      "template": "bash scripts/start_http_mcp.sh $ARGUMENTS"
+    },
+    "qdrant": {
+      "description": "Start/stop Qdrant. Usage: /qdrant [docker|local|--stop]",
+      "template": "bash scripts/start_qdrant_docker.sh $ARGUMENTS"
+    },
     "add": {
       "description": "Add a text document to the knowledge base. Usage: /add <text>",
       "template": "python3 -m src.cli add-document --text \"$ARGUMENTS\""

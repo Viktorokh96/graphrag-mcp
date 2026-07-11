@@ -74,9 +74,10 @@ class RAGSystem:
             )
         elif cfg.embedding_provider == "bge-m3":
             self.embedding_generator = BgeM3EmbeddingGenerator(
-                model_name=cfg.bge_model_name,
+                model_name=cfg.resolve_model_path(cfg.bge_model_name),
                 device=cfg.embedding_device,
                 dimension=cfg.embedding_dim,
+                local_files_only=cfg.hf_offline,
             )
         else:
             raise ValueError(
@@ -114,6 +115,11 @@ class RAGSystem:
         self._query_expander = None
         self._sync_stores()
 
+        # Прелоад моделей: загружаем в память сразу, чтобы первый запрос
+        # был быстрым (без задержки на lazy init ~5-15 сек).
+        if cfg.preload_models:
+            self._preload_models()
+
     # -- text utils -----------------------------------------------------------
 
     def _normalize_text(self, text: str) -> str:
@@ -135,7 +141,7 @@ class RAGSystem:
         if self._reranker is None:
             from src.reranker import Reranker
             self._reranker = Reranker(
-                model_name=self._reranker_model,
+                model_name=self.config.resolve_model_path(self._reranker_model),
                 device=self._reranker_device,
             )
         return self._reranker
@@ -150,6 +156,33 @@ class RAGSystem:
                 count=self._query_expansion_count,
             )
         return self._query_expander
+
+    def _preload_models(self):
+        """Eagerly load models into memory (skip lazy init delay).
+
+        Вызывается из __init__ при PRELOAD_MODELS=1. Грузит embedding-модель
+        и (опционально) reranker, чтобы первый запрос не тратил ~5-15 сек
+        на инициализацию.
+        """
+        import logging
+        log = logging.getLogger(__name__)
+
+        # Embedding model (BGE-M3 или аналог)
+        t0 = __import__("time").monotonic()
+        self.embedding_generator._ensure_model()
+        log.info(
+            "Preloaded embedding model in %.1fs",
+            __import__("time").monotonic() - t0,
+        )
+
+        # Reranker (если включён)
+        if self._reranker_enabled:
+            t0 = __import__("time").monotonic()
+            self._get_reranker()
+            log.info(
+                "Preloaded reranker in %.1fs",
+                __import__("time").monotonic() - t0,
+            )
 
     # -- indexing ---------------------------------------------------------------
 
