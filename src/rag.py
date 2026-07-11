@@ -78,6 +78,7 @@ class RAGSystem:
                 device=cfg.embedding_device,
                 dimension=cfg.embedding_dim,
                 local_files_only=cfg.hf_offline,
+                token=cfg.hf_token,
             )
         else:
             raise ValueError(

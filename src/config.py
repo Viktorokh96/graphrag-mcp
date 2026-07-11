@@ -80,6 +80,9 @@ class RAGConfig:
     # HuggingFace: не обращаться к Hub при загрузке моделей.
     # Env: HF_HUB_OFFLINE=1 — загружать только из локального кеша.
     hf_offline: bool = False
+    # HuggingFace токен (для приватных моделей / rate limits).
+    # Env: HF_TOKEN — передаётся в SentenceTransformer(token=...).
+    hf_token: str = ""
     # Директория с локальными моделями (models/bge-m3, models/bge-reranker-v2-m3).
     # Env: MODELS_DIR — если задана, модели грузятся отсюда, а не из HF Hub.
     models_dir: str = ""
@@ -123,6 +126,7 @@ class RAGConfig:
                 os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
             ),
             hf_offline=os.environ.get("HF_HUB_OFFLINE", "").lower() in ("1", "true", "yes"),
+            hf_token=os.environ.get("HF_TOKEN", ""),
             models_dir=os.environ.get("MODELS_DIR", ""),
             preload_models=os.environ.get("PRELOAD_MODELS", "").lower() in ("1", "true", "yes"),
         )
@@ -198,6 +202,9 @@ class RAGConfig:
             "",
             "# HuggingFace: не обращаться к Hub при загрузке моделей (только локальный кеш)",
             f"HF_HUB_OFFLINE={'true' if self.hf_offline else 'false'}",
+            "",
+            "# HuggingFace токен (для приватных моделей / rate limits)",
+            f"HF_TOKEN={self.hf_token}",
             "",
             "# Директория с локальными моделями (после scripts/setup_models.sh)",
             f"MODELS_DIR={self.models_dir}",
