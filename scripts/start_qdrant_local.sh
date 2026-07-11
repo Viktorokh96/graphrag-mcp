@@ -47,6 +47,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# ── Env fallback ─────────────────────────────────────────────────────
+if [[ "$DATA_DIR" == "./rag_data/qdrant_storage" && -n "${QDRANT_DATA_DIR:-}" ]]; then
+    DATA_DIR="$QDRANT_DATA_DIR"
+fi
+
 # ── Stop mode ─────────────────────────────────────────────────────────
 if [[ "$STOP" == "true" ]]; then
     if [[ -f "$PID_FILE" ]]; then

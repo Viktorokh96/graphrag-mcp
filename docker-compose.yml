@@ -5,7 +5,7 @@ services:
       - "6333:6333"   # REST API — для MCP-сервера / CLI на хосте
       - "6334:6334"   # gRPC (опционально)
     volumes:
-      - rag_data_qdrant:/storage
+      - ${QDRANT_DATA_DIR:-./rag_data/qdrant_storage}:/qdrant/storage
     environment:
       - QDRANT__LOG_LEVEL=INFO
     healthcheck:
@@ -46,6 +46,5 @@ services:
       - rag_data_models:/root/.cache
 
 volumes:
-  rag_data_qdrant:
   rag_data_pg:
   rag_data_models:
