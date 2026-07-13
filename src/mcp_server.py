@@ -31,7 +31,7 @@ TOOL_DEFS = [
             "plain string (wrapped as {'_raw': value}). Returns {doc_id: <uuid4 string>, "
             "duplicate: <bool>}. The `duplicate` flag is true when a document with the same "
             "normalized content hash already exists; in that case `doc_id` is the existing "
-            "document's id and no new entry is created. Documents shorter than 50 chars "
+            "document's id and no new entry is created. Documents shorter than 40 chars "
             "(after stripping) are rejected with a ValueError."
         ),
         inputSchema={
@@ -74,7 +74,7 @@ TOOL_DEFS = [
             "as rag_add_document (dict / null / empty / JSON string / plain string). Returns "
             "{doc_id: <uuid4 string>, duplicate: <bool>}; see rag_add_document for the "
             "duplicate semantics. Raises if the file cannot be read (missing path, "
-            "permissions, non-UTF-8) or if the content is shorter than 50 chars."
+            "permissions, non-UTF-8) or if the content is shorter than 40 chars."
         ),
         inputSchema={
             "type": "object",
@@ -541,6 +541,57 @@ TOOL_DEFS = [
             "required": ["content"],
         },
     ),
+    Tool(
+        name="rag_update_document",
+        description=(
+            "Update the text and/or metadata of an existing document. Preserves "
+            "the document's doc_id and all graph relations. When `text` is provided, "
+            "the content hash is recalculated and vectors are re-indexed in Qdrant "
+            "(dense + sparse). When only `meta` is provided, metadata is updated "
+            "without re-indexing vectors. At least one of `text` or `meta` must "
+            "be provided. Returns {doc_id, updated: true}."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "doc_id": {"type": "string", "description": "doc_id of the document to update."},
+                "text": {
+                    "type": "string",
+                    "description": (
+                        "New text content (optional). If provided, content_hash is "
+                        "recalculated and vectors are re-indexed in Qdrant."
+                    ),
+                },
+                "meta": {
+                    "description": (
+                        "New metadata (optional). Same conventions as rag_add_document.meta. "
+                        "Overwrites metadata completely. If text is also provided, "
+                        "the new metadata is used for vector re-indexing."
+                    ),
+                    "default": None,
+                },
+            },
+            "required": ["doc_id"],
+        },
+    ),
+    Tool(
+        name="rag_delete_relation",
+        description=(
+            "Delete a specific edge (relation) from the knowledge graph. "
+            "Removes the edge from both the SQL table and the in-memory "
+            "NetworkX cache. Idempotent — deleting a non-existent edge is safe. "
+            "Returns {status: 'ok', deleted: true}."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "source_id": {"type": "string", "description": "doc_id of the source node."},
+                "target_id": {"type": "string", "description": "doc_id of the target node."},
+                "relation": {"type": "string", "description": "Relation type label (the key field identifying this edge)."},
+            },
+            "required": ["source_id", "target_id", "relation"],
+        },
+    ),
 ]
 
 
@@ -688,6 +739,14 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
         ),
         "rag_add_structured": lambda p: rag.index_structured(
             p["content"], extract_graph=p.get("extract_graph", False),
+        ),
+        "rag_update_document": lambda p: rag.update_document(
+            p["doc_id"],
+            text=p.get("text"),
+            meta=_parse_meta(p.get("meta")),
+        ),
+        "rag_delete_relation": lambda p: rag.delete_relation(
+            p["source_id"], p["target_id"], p["relation"],
         ),
     }
     fn = handlers.get(name)

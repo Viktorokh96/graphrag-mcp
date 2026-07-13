@@ -102,7 +102,9 @@ python -m src.cli clear
 |-----------|----------|
 | `rag_get_document` | Полный текст с offset/limit пагинацией |
 | `rag_list_documents` | Список с фильтром и relations inline |
+| `rag_update_document` | Обновить текст/метаданные. doc_id и связи сохраняются |
 | `rag_delete_document` | Каскадное удаление (каналы + граф) |
+| `rag_delete_relation` | Удалить конкретное ребро графа |
 
 ### Граф
 | Инструмент | Описание |

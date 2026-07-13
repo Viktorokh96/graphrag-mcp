@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 class RAGSystem:
     """RAG система с гибридным поиском (семантический + BM25)."""
 
-    MIN_CONTENT_LENGTH = 50
+    MIN_CONTENT_LENGTH = 40
 
     def __init__(
         self,
@@ -195,6 +195,7 @@ class RAGSystem:
         extract_graph: bool = False,
         extract_graph_mode: str = "llm",
         _skip_length_check: bool = False,
+        meta: Optional[dict] = None,
     ) -> str:
         """
         Добавить документ в систему.
@@ -221,6 +222,7 @@ class RAGSystem:
                 f"Minimum content length is {self.MIN_CONTENT_LENGTH} characters."
             )
 
+        metadata = metadata if metadata is not None else meta
         content_hash = self._compute_hash(text)
         existing = self.doc_store.find_by_hash(content_hash)
         if existing is not None:
@@ -567,6 +569,58 @@ class RAGSystem:
 
     def add_relation(self, source_id: str, target_id: str, relation: str, weight: float = 1.0) -> None:
         self.graph_kb.add_edge(source_id, target_id, relation, weight)
+
+    def update_document(self, doc_id: str, text: Optional[str] = None, meta: Optional[dict] = None) -> dict:
+        """Обновить текст и/или метаданные документа. Сохраняет doc_id и все связи.
+
+        Args:
+            doc_id: идентификатор документа (обяз.)
+            text: новый текст (опционально). Если передан — content_hash пересчитывается
+                  и векторы реиндексируются в Qdrant.
+            meta: новые метаданные (опционально). Перезаписывает целиком.
+
+        Returns:
+            {doc_id, updated: True}
+
+        Raises:
+            ValueError: если doc_id не найден, или ни text ни meta не переданы,
+                        или текст слишком короткий.
+        """
+        if text is None and meta is None:
+            raise ValueError("at least one of 'text' or 'meta' must be provided")
+
+        record = self.doc_store.get(doc_id)
+        if record is None:
+            raise ValueError(f"Document not found: {doc_id}")
+
+        if text is not None:
+            if len(text.strip()) < self.MIN_CONTENT_LENGTH:
+                raise ValueError(f"Document too short ({len(text.strip())} chars)")
+            content_hash = self._compute_hash(text)
+            self.doc_store.update_text(doc_id, text, content_hash)
+            # Реиндексация в Qdrant: удалить старые точки (м.б. чанки) + переиндексировать
+            meta_final = meta if meta is not None else record["metadata"]
+            self.vector_store.remove(doc_id)
+            self._index_vector(doc_id, text, meta_final)
+
+        if meta is not None:
+            self.doc_store.update_metadata(doc_id, meta)
+
+        return {"doc_id": doc_id, "updated": True}
+
+    def delete_relation(self, source_id: str, target_id: str, relation: str) -> dict:
+        """Удалить конкретное ребро графа. Идемпотентен.
+
+        Args:
+            source_id: doc_id исходного узла
+            target_id: doc_id целевого узла
+            relation: тип отношения
+
+        Returns:
+            {status: "ok", deleted: True}
+        """
+        self.graph_kb.remove_edge(source_id, target_id, relation)
+        return {"status": "ok", "deleted": True}
 
     def get_related(
         self,

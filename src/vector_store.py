@@ -235,6 +235,11 @@ class QdrantVectorStore:
             payload=payload,
         )
 
+    def replace(self, doc_id: str, text: str, embedding: list[float], metadata: Optional[dict] = None) -> None:
+        """Полная замена точек документа: удалить старые + добавить новые."""
+        self.remove(doc_id)
+        self.add(doc_id, text, embedding, metadata)
+
     def add(self, doc_id: str, text: str, embedding: list[float], metadata: Optional[dict] = None) -> str:
         self._client.upsert(collection_name=COLLECTION, points=[self._point(doc_id, text, embedding, metadata)])
         self._update_token_df(text, delta=1)

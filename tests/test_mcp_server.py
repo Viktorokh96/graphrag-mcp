@@ -558,7 +558,7 @@ class TestMCPServerModuleImport:
         assert hasattr(mod, "handle_tool_call")
         assert hasattr(mod, "_parse_meta")
         assert hasattr(mod, "main")
-        assert len(mod.TOOL_DEFS) == 14
+        assert len(mod.TOOL_DEFS) == 16
 
     def test_main_callable(self):
         """main() должен быть вызываемым (но не вызываем — он запускает stdio)."""

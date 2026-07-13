@@ -12,8 +12,10 @@ REST эндпоинты:
     POST    /documents       {text, meta}
     GET     /documents       {limit, offset, metadata_filter}
     GET     /documents/{id}  {offset, limit, relations_load_depth}
+    PUT     /documents/{id}  {text?, meta?}
     DELETE  /documents/{id}
     POST    /relations       {source_id, target_id, relation, weight}
+    DELETE  /relations       {source_id, target_id, relation}
     GET     /relations/{id}  {max_depth, metadata_filter}
     POST    /clear
 
@@ -82,6 +84,17 @@ class ClearResponse(BaseModel):
 class StructuredRequest(BaseModel):
     content: str
     extract_graph: bool = False
+
+
+class UpdateDocumentRequest(BaseModel):
+    text: Optional[str] = None
+    meta: Any = None
+
+
+class DeleteRelationRequest(BaseModel):
+    source_id: str
+    target_id: str
+    relation: str
 
 
 # -- RAGSystem holder --------------------------------------------------------
@@ -311,6 +324,26 @@ def reindex():
 @app.post("/structured")
 def add_structured(req: StructuredRequest):
     result = _rag().index_structured(req.content, extract_graph=req.extract_graph)
+    return result
+
+
+@app.put("/documents/{doc_id}")
+def update_document(doc_id: str, req: UpdateDocumentRequest):
+    from src.mcp_server import _parse_meta
+    meta = _parse_meta(req.meta)
+    try:
+        result = _rag().update_document(doc_id, text=req.text, meta=meta)
+        return result
+    except ValueError as e:
+        msg = str(e)
+        if "not found" in msg.lower():
+            raise HTTPException(status_code=404, detail=msg)
+        raise HTTPException(status_code=400, detail=msg)
+
+
+@app.delete("/relations")
+def delete_relation(req: DeleteRelationRequest):
+    result = _rag().delete_relation(req.source_id, req.target_id, req.relation)
     return result
 
 

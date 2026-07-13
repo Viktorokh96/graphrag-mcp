@@ -74,7 +74,9 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#0a0a1
 #infopanel .ibody{flex:1;overflow-y:auto;padding:16px 20px;font-size:13px;line-height:1.6;word-break:break-word;scrollbar-width:thin}
 #infopanel .ibody .iid{font-size:10px;color:#444;margin-bottom:12px;word-break:break-all;font-family:monospace;background:rgba(255,255,255,0.03);padding:6px 10px;border-radius:4px}
 #infopanel .ibody .imeta{background:rgba(255,255,255,0.03);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:11px;color:#999;white-space:pre-wrap;font-family:monospace;border:1px solid rgba(255,255,255,0.04)}
-#infopanel .ibody .itext{white-space:pre-wrap;color:#bbb;font-size:12px;margin-bottom:12px;max-height:260px;overflow-y:auto;background:rgba(0,0,0,.25);border-radius:6px;padding:10px 12px;border:1px solid rgba(255,255,255,0.04);line-height:1.5;scrollbar-width:thin}
+#infopanel .ibody .itext{white-space:pre-wrap;color:#bbb;font-size:12px;margin-bottom:12px;max-height:260px;overflow-y:auto;background:rgba(0,0,0,.25);border-radius:6px;padding:10px 12px;border:1px solid rgba(255,255,255,0.04);line-height:1.5;scrollbar-width:thin;resize:vertical;width:100%;font-family:inherit;outline:none}
+#infopanel .ibody .itext[readonly]{cursor:default}
+#infopanel .ibody .itext:focus{border-color:rgba(96,165,250,.5);background:rgba(0,0,0,.35)}
 #infopanel .ibody .ilinks{margin-top:4px}
 #infopanel .ibody .ilinks .ilh{font-size:10px;color:#555;margin-bottom:6px;font-weight:600;letter-spacing:.5px;text-transform:uppercase}
 #infopanel .ibody .ilinks .ilr{display:flex;align-items:center;gap:8px;padding:5px 8px;cursor:pointer;border-radius:4px;font-size:11px;margin:0 -8px;transition:background .1s;border-bottom:1px solid rgba(255,255,255,0.02)}
@@ -169,8 +171,10 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#0a0a1
 
     <section>
       <h3>Filters</h3>
-      <input type="text" id="filter-meta" placeholder='{"key": "value"}'>
-      <div class="btn-group mt-2">
+      <textarea id="filter-meta" rows="2" placeholder='key: value (JSON or key:value)' style="min-height:36px;resize:none"></textarea>
+      <div class="btn-group mt-2" style="flex-wrap:wrap">
+        <button class="btn btn-sm" onclick="insertFilterTemplate('source')" title="Insert source template">source</button>
+        <button class="btn btn-sm" onclick="insertFilterTemplate('type')" title="Insert type template">type</button>
         <button class="btn btn-sm" onclick="applyFilter()">Apply</button>
         <button class="btn btn-sm" onclick="clearFilter()">Clear</button>
       </div>
@@ -212,13 +216,20 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#0a0a1
 <div id="infopanel">
   <div class="ihead">
     <h3>Node Details</h3>
-    <button class="close-btn" onclick="closeInfo()">&times;</button>
+    <div class="btn-group">
+      <button class="btn btn-sm" id="btn-edit-node" onclick="toggleEditMode()" style="display:none">Edit</button>
+      <button class="close-btn" onclick="closeInfo()">&times;</button>
+    </div>
   </div>
   <div class="ibody">
     <div class="iid" id="info-id"></div>
     <div class="imeta" id="info-meta"></div>
     <div class="ilh">Text</div>
-    <div class="itext" id="info-text"></div>
+    <textarea class="itext" id="info-text" rows="8" readonly></textarea>
+    <div class="btn-group mt-2" id="info-edit-btns" style="display:none">
+      <button class="btn btn-primary btn-sm" onclick="saveNodeEdit()">Save</button>
+      <button class="btn btn-sm" onclick="toggleEditMode()">Cancel</button>
+    </div>
     <div class="ilinks" id="info-links"></div>
   </div>
 </div>
@@ -243,6 +254,8 @@ let graphBuilt = false;
 let currentFilter = null;
 let confirmCallback = null;
 let expandedNodeId = null;
+let editMode = false;
+let editingDocId = null;
 
 /* ── helpers ──────────────────────────────────────── */
 
@@ -544,18 +557,23 @@ function goToNode(id){
 /* ── info panel ───────────────────────────────────── */
 
 async function showNodeInfo(docId){
+  // Reset edit mode when switching nodes
+  if(editMode)toggleEditMode();
+  editingDocId=docId;
   qs('#infopanel').classList.add('open');
+  qs('#btn-edit-node').style.display='';
+  qs('#info-edit-btns').style.display='none';
   const iid=document.getElementById('info-id');
   const imeta=document.getElementById('info-meta');
   const itext=document.getElementById('info-text');
   const ilinks=document.getElementById('info-links');
   iid.textContent='ID: '+docId;
   imeta.textContent='';
-  itext.textContent='Loading…';
+  itext.value='Loading…';
   ilinks.innerHTML='';
   try{
     const data=await api('GET','/documents/'+encodeURIComponent(docId)+'?relations_load_depth=1');
-    itext.textContent=data.text||'(empty)';
+    itext.value=data.text||'(empty)';
     imeta.textContent=data.metadata&&Object.keys(data.metadata).length?JSON.stringify(data.metadata,null,2):'(none)';
     const links=data.links||{};
     const entries=Object.entries(links);
@@ -571,7 +589,7 @@ async function showNodeInfo(docId){
       ilinks.innerHTML=lhtml;
       ilinks.querySelectorAll('.ilr').forEach(el2=>{el2.addEventListener('click',function(){goToNode(this.dataset.id)})});
     }
-  }catch(e){itext.textContent='Error: '+e.message}
+  }catch(e){itext.value='Error: '+e.message}
 }
 
 function closeInfo(){
@@ -640,8 +658,11 @@ async function deleteSelected(){
 function applyFilter(){
   const raw=qs('#filter-meta').value.trim();
   if(!raw){currentFilter=null;toast('Filter cleared');loadGraph();return}
-  try{currentFilter=JSON.parse(raw);toast('Filter applied');loadGraph()}
-  catch(e){toast('Invalid JSON filter')}
+  const parsed=parseFilterInput(raw);
+  if(!parsed){toast('Invalid filter format');return}
+  currentFilter=parsed;
+  toast('Filter applied');
+  loadGraph();
 }
 
 function clearFilter(){
@@ -711,6 +732,59 @@ function confirmClear(){
   confirmAction('Delete ALL documents, edges, and embeddings? This cannot be undone.',async()=>{
     try{await api('POST','/clear');toast('All data cleared');await loadGraph()}catch(e){toast('Error: '+e.message,4000)}
   });
+}
+
+/* ── edit mode (node text) ────────────────────────── */
+
+function toggleEditMode(){
+  editMode=!editMode;
+  const textarea=qs('#info-text');
+  const editBtn=qs('#btn-edit-node');
+  const editBtns=qs('#info-edit-btns');
+  textarea.readOnly=!editMode;
+  editBtn.style.display=editMode?'none':'';
+  editBtns.style.display=editMode?'':'none';
+  if(editMode){
+    textarea.style.height='auto';
+    textarea.style.height=textarea.scrollHeight+'px';
+    textarea.focus();
+  }
+}
+
+async function saveNodeEdit(){
+  if(!editingDocId)return;
+  const newText=qs('#info-text').value;
+  try{
+    await api('PUT','/documents/'+encodeURIComponent(editingDocId),{text:newText});
+    toast('Document updated');
+    editMode=false;
+    await showNodeInfo(editingDocId);
+    await loadGraph();
+  }catch(e){toast('Error: '+e.message,4000)}
+}
+
+/* ── filter helpers ────────────────────────────────── */
+
+function insertFilterTemplate(key){
+  const el=qs('#filter-meta');
+  el.value='{"'+key+'": ""}';
+  el.focus();
+  el.setSelectionRange(el.value.length-2,el.value.length-2);
+}
+
+function parseFilterInput(raw){
+  raw=raw.trim();
+  if(!raw)return null;
+  // Try JSON
+  try{return JSON.parse(raw)}catch(e){}
+  // Try key: value without braces → wrap in {}
+  const m=raw.match(/^(\w+)\s*:\s*(.+)$/);
+  if(m){
+    let val=m[2].trim();
+    try{val=JSON.parse(val)}catch(e){}
+    return{[m[1]]:val};
+  }
+  return null;
 }
 
 /* ── init ─────────────────────────────────────────── */

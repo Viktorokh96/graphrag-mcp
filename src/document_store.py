@@ -174,6 +174,25 @@ class DocumentStore:
         self._db.execute("DELETE FROM documents WHERE doc_id = ?", (doc_id,))
         return existed
 
+    def update_text(self, doc_id: str, text: str, content_hash: Optional[str] = None) -> bool:
+        """Обновить текст и content_hash документа. Возвращает True если документ существовал."""
+        existed = self.get(doc_id) is not None
+        self._db.execute(
+            "UPDATE documents SET text = ?, content_hash = ? WHERE doc_id = ?",
+            (text, content_hash, doc_id),
+        )
+        return existed
+
+    def update_metadata(self, doc_id: str, metadata: dict) -> bool:
+        """Обновить метаданные документа. Возвращает True если документ существовал."""
+        existed = self.get(doc_id) is not None
+        meta_json = json.dumps(metadata, ensure_ascii=False)
+        self._db.execute(
+            "UPDATE documents SET metadata = ? WHERE doc_id = ?",
+            (meta_json, doc_id),
+        )
+        return existed
+
     def find_by_hash(self, content_hash: str) -> Optional[str]:
         rows = self._db.execute(
             "SELECT doc_id FROM documents WHERE content_hash = ? LIMIT 1",

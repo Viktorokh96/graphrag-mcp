@@ -164,7 +164,9 @@ PRELOAD_MODELS=true
 |-----------|-----------|----------|
 | `rag_list_documents` | `limit=20`, `offset=0`, `max_chars`, `metadata_filter`, relations params | Пагинация |
 | `rag_get_document` | `doc_id`, `offset=0`, `limit=null`, relations params | Полный текст |
+| `rag_update_document` | `doc_id`, `text?`, `meta?` | Обновить текст/метаданные. doc_id и связи сохраняются |
 | `rag_delete_document` | `doc_id` | Каскадное удаление. Идемпотентен |
+| `rag_delete_relation` | `source_id`, `target_id`, `relation` | Удалить конкретное ребро графа |
 | `rag_clear` | — | ⚠️ Удалить ВСЕ данные |
 
 ### Граф / Статистика
@@ -220,8 +222,10 @@ python3 -m src.cli --http
 # POST /search (mode: hybrid/bm25/semantic)
 # POST /documents, /file, /structured
 # GET  /documents, /document/{doc_id}
+# PUT  /documents/{doc_id}      ← NEW: update document text/meta
 # DELETE /documents/{doc_id}
 # POST /relations
+# DELETE /relations             ← NEW: delete specific edge
 # GET  /related/{node_id}, /graph-stats
 # GET  /stats
 # DELETE /clear

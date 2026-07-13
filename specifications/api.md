@@ -68,6 +68,18 @@ Repomix JSON индексация кода.
 
 ### Управление
 
+#### `rag_update_document`
+Обновление текста и/или метаданных документа. Сохраняет doc_id и все связи.
+- `doc_id` (str, обяз.)
+- `text` (str, opt.) — новый текст (content_hash пересчитывается, векторы реиндексируются)
+- `meta` (dict/null/JSON-string/string, opt.) — новые метаданные (перезаписывает целиком)
+- Returns `{doc_id, updated: true}`
+
+#### `rag_delete_relation`
+Удаление конкретного ребра графа. Идемпотентен.
+- `source_id`, `target_id`, `relation` (str, обяз.)
+- Returns `{status, deleted: bool}`
+
 #### `rag_delete_document`
 Каскадное удаление из всех сторов. Идемпотентен.
 - `doc_id` (str, обяз.)
@@ -105,7 +117,9 @@ BFS обход графа от узла.
 | GET | `/documents` | `limit, offset, max_chars, metadata_filter` | Список документов |
 | GET | `/documents/{id}` | `offset, limit, relations_load_*` | Документ по ID |
 | DELETE | `/documents/{id}` | — | Удалить документ |
+| PUT | `/documents/{id}` | `{text?, meta?}` | Обновить документ |
 | POST | `/relations` | `{source_id, target_id, relation, weight}` | Добавить ребро |
+| DELETE | `/relations` | `{source_id, target_id, relation}` | Удалить ребро |
 | GET | `/relations/{id}` | `max_depth, metadata_filter` | BFS от узла |
 | POST | `/clear` | — | Очистить всё |
 | POST | `/reindex` | — | Пересчитать эмбеддинги |
