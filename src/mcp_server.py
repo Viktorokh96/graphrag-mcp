@@ -544,29 +544,45 @@ TOOL_DEFS = [
     Tool(
         name="rag_update_document",
         description=(
-            "Update the text and/or metadata of an existing document. Preserves "
-            "the document's doc_id and all graph relations. When `text` is provided, "
-            "the content hash is recalculated and vectors are re-indexed in Qdrant "
-            "(dense + sparse). When only `meta` is provided, metadata is updated "
-            "without re-indexing vectors. At least one of `text` or `meta` must "
-            "be provided. Returns {doc_id, updated: true}."
+            "Update the text and/or metadata of an existing document by its ID. "
+            "Unlike delete + re-add, this preserves the document's `doc_id` and all "
+            "existing graph relations — making it safe for documents that are linked "
+            "to other nodes. When `text` is provided, the content hash is "
+            "recalculated, old vector points (including any chunks) are removed, "
+            "and new vectors are indexed in Qdrant (dense + sparse BM25). Large "
+            "documents are split into overlapping chunks just like during initial "
+            "addition. When only `meta` is provided, metadata is updated in the "
+            "document store without touching vectors. At least one of `text` or "
+            "`meta` must be provided. `meta` follows the same flexible conventions "
+            "as rag_add_document.meta (dict / null / empty string / JSON string / "
+            "plain string) and overwrites the previous value completely. Returns "
+            "{doc_id: <string>, updated: true}. Raises ValueError if the doc_id is "
+            "not found, if neither `text` nor `meta` is provided, or if `text` is "
+            "shorter than 40 chars (after stripping)."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "doc_id": {"type": "string", "description": "doc_id of the document to update."},
+                "doc_id": {
+                    "type": "string",
+                    "description": "doc_id (UUID4) of the document to update. Must already exist.",
+                },
                 "text": {
                     "type": "string",
                     "description": (
-                        "New text content (optional). If provided, content_hash is "
-                        "recalculated and vectors are re-indexed in Qdrant."
+                        "New text content (optional). If provided, the old content hash and "
+                        "vector points are replaced: content_hash is recalculated, old Qdrant "
+                        "points (all chunks) are removed, and new vectors are indexed. Large "
+                        "documents are chunked for vector indexing just like with rag_add_document."
                     ),
                 },
                 "meta": {
                     "description": (
-                        "New metadata (optional). Same conventions as rag_add_document.meta. "
-                        "Overwrites metadata completely. If text is also provided, "
-                        "the new metadata is used for vector re-indexing."
+                        "New metadata (optional). Accepts: a dict (passed through), null/empty "
+                        "string (stored as None), a JSON-encoded string (parsed to dict), or any "
+                        "plain string (wrapped as {'_raw': value}). Overwrites the previous "
+                        "metadata completely. If `text` is also provided, the new metadata is "
+                        "used for vector re-indexing."
                     ),
                     "default": None,
                 },
@@ -577,17 +593,36 @@ TOOL_DEFS = [
     Tool(
         name="rag_delete_relation",
         description=(
-            "Delete a specific edge (relation) from the knowledge graph. "
-            "Removes the edge from both the SQL table and the in-memory "
-            "NetworkX cache. Idempotent — deleting a non-existent edge is safe. "
-            "Returns {status: 'ok', deleted: true}."
+            "Delete a specific directed edge (relation) from the knowledge graph. "
+            "Unlike rag_delete_document which removes an entire node and all its "
+            "edges, this tool targets a single edge identified by the triple "
+            "(source_id, target_id, relation). The edge is removed from both the "
+            "SQL table (graph_edges) and the in-memory NetworkX cache. Use this to "
+            "prune stale or incorrect links without affecting the documents "
+            "themselves. Idempotent — deleting a non-existent edge is safe and "
+            "returns deleted=true. Returns {status: 'ok', deleted: <bool>} where "
+            "`deleted` is always true."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "source_id": {"type": "string", "description": "doc_id of the source node."},
-                "target_id": {"type": "string", "description": "doc_id of the target node."},
-                "relation": {"type": "string", "description": "Relation type label (the key field identifying this edge)."},
+                "source_id": {
+                    "type": "string",
+                    "description": "doc_id of the source node (the edge's origin).",
+                },
+                "target_id": {
+                    "type": "string",
+                    "description": "doc_id of the target node (the edge's destination).",
+                },
+                "relation": {
+                    "type": "string",
+                    "description": (
+                        "Relation type label — the key field that, together with source_id "
+                        "and target_id, uniquely identifies this edge. Multiple edges between "
+                        "the same pair of nodes are allowed as long as their relation types "
+                        "differ."
+                    ),
+                },
             },
             "required": ["source_id", "target_id", "relation"],
         },
