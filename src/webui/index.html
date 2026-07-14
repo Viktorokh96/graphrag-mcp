@@ -378,11 +378,11 @@ function buildGraph(docs){
   const options={
     physics:{
       solver:'forceAtlas2Based',
-      forceAtlas2Based:{gravitationalConstant:-80,centralGravity:0.005,springLength:200,springConstant:0.02,damping:0.6},
+      forceAtlas2Based:{gravitationalConstant:-80,centralGravity:0.02,springLength:200,springConstant:0.02,damping:0.6},
       stabilization:{iterations:100,updateInterval:50},
       adaptiveTimestep:true,
     },
-    layout:{improvedLayout:true,randomSeed:42},
+    layout:{improvedLayout:false,randomSeed:42},
     edges:{
       font:{size:8,color:'#666',strokeWidth:0,align:'middle',face:'Segoe UI'},
       width:1,smooth:{type:'curvedCW',roundness:0.12},
