@@ -630,22 +630,26 @@ TOOL_DEFS = [
     Tool(
         name="rag_find_communities",
         description=(
-            "Detect semantic communities in the knowledge graph using Leiden algorithm. "
-            "Builds a k-NN graph from document embeddings, merges with explicit relations, "
-            "and runs Leiden clustering. External caller reads documents and assigns "
-            "names via set_community_names."
+            "Detect semantic communities in the knowledge graph using the Leiden algorithm. "
+            "Builds a k-NN graph from document embeddings (cosine similarity), merges it with "
+            "explicit graph relations, and runs Leiden clustering (igraph, "
+            "RBConfigurationVertexPartition). The result is cached and can be retrieved via "
+            "get_communities. To assign human-readable names, read each community's member "
+            "documents and call set_community_names with a {id: name} mapping. "
+            "Cache is automatically invalidated when documents are added/updated/deleted. "
+            "Returns {communities: [{id, size, members}], total_communities, total_nodes}."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "resolution": {
                     "type": "number",
-                    "description": "Leiden resolution parameter (higher = more, smaller communities)",
+                    "description": "Leiden resolution parameter. Higher values produce more, smaller communities. Lower values produce fewer, larger communities. Default 1.0.",
                     "default": 1.0,
                 },
                 "k_nn": {
                     "type": "integer",
-                    "description": "Number of nearest neighbors for k-NN graph construction",
+                    "description": "Number of nearest neighbors for k-NN graph construction from embeddings. Higher values create denser similarity graphs. Default 15.",
                     "default": 15,
                 },
             },
@@ -655,14 +659,19 @@ TOOL_DEFS = [
         name="rag_set_community_names",
         description=(
             "Assign human-readable names to communities found by find_communities. "
-            "The names mapping is {community_id: name}."
+            "Typical workflow: call find_communities, read the member documents of each "
+            "community to understand its topic, then call this tool with a mapping like "
+            '{"0": "Authentication Flow", "1": "Database Layer"}. '
+            "Keys are community IDs (passed as strings, converted to int internally). "
+            "Names persist across restarts (stored in community_cache.json). "
+            "Returns {status: 'ok', updated: N} where N is the number of names set."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "names": {
                     "type": "object",
-                    "description": "{community_id: name} mapping. Keys are community IDs (as strings).",
+                    "description": "{community_id: name} mapping. Keys are community IDs as strings (e.g. {'0': 'My Community'}). Values are human-readable name strings.",
                 },
             },
             "required": ["names"],
@@ -672,7 +681,10 @@ TOOL_DEFS = [
         name="rag_get_communities",
         description=(
             "Return cached communities from the last find_communities call, with "
-            "assigned names. Empty list if find_communities has not been called yet."
+            "assigned names (from set_community_names). Each community has {id, name, "
+            "size, members} where members is a list of doc_ids. Returns an empty list "
+            "if find_communities has not been called yet. Communities and names persist "
+            "across MCP server restarts via community_cache.json."
         ),
         inputSchema={"type": "object", "properties": {}},
     ),
