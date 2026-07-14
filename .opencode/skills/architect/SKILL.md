@@ -62,3 +62,13 @@ description: Проектирование архитектуры, создани
 - `task` tool — делегировать разработчику
 - `@developer` — упомянуть разработчика
 - `glob`, `grep`, `read` — анализ кодабейза
+
+## Package manager: uv (ОБЯЗАТЕЛЬНО)
+
+Проект использует `uv`. **Никогда** не вызывай `pip`, `python3`, `pip install` напрямую.
+
+| Неправильно | Правильно |
+|-------------|-----------|
+| `pytest` | `uv run python3 -m pytest` |
+| `pip install foo` | `uv add foo` |
+| `python3 script.py` | `uv run python3 script.py` |

@@ -24,14 +24,9 @@
   },
   "mcp": {
     "rag-server": {
-      "type": "local",
-      "command": ["/home/viktorokh96/Work/graphrag/.venv/bin/python3", "-m", "src.mcp_server"],
-      "cwd": "/home/viktorokh96/Work/graphrag",
-      "enabled": true,
-      "environment": {
-        "EMBEDDING_MODEL": "bge-m3",
-        "STORE_PATH": "./rag_data"
-      }
+      "type": "remote",
+      "url": "http://localhost:8765/mcp",
+      "enabled": true
     }
   },
   "command": {

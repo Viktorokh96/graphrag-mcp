@@ -7,10 +7,12 @@
 """
 
 import hashlib
+import json
 import logging
 import re
 import unicodedata
 import uuid
+from pathlib import Path
 from typing import Optional
 
 from src.config import RAGConfig
@@ -114,6 +116,10 @@ class RAGSystem:
         self._query_expansion_count = cfg.query_expansion_count
         self._query_expansion_ollama_url = cfg.query_expansion_ollama_url
         self._query_expander = None
+        self._communities: list[dict] = []
+        self._community_names: dict[int, str] = {}
+        self._community_cache_path = Path(cfg.store_path) / "community_cache.json"
+        self._load_community_cache()
         self._sync_stores()
 
         # Прелоад моделей: загружаем в память сразу, чтобы первый запрос
@@ -481,6 +487,7 @@ class RAGSystem:
         existed = self.doc_store.delete(doc_id)  # FK CASCADE удаляет рёбра
         self.vector_store.remove(doc_id)
         self.graph_kb.delete_document(doc_id)
+        self._invalidate_community_cache()
         return existed
 
     def get_document(
@@ -566,6 +573,7 @@ class RAGSystem:
         self.doc_store.clear()
         self.vector_store.clear()
         self.embedding_generator.clear_cache()
+        self._invalidate_community_cache()
 
     def add_relation(self, source_id: str, target_id: str, relation: str, weight: float = 1.0) -> None:
         self.graph_kb.add_edge(source_id, target_id, relation, weight)
@@ -606,6 +614,7 @@ class RAGSystem:
         if meta is not None:
             self.doc_store.update_metadata(doc_id, meta)
 
+        self._invalidate_community_cache()
         return {"doc_id": doc_id, "updated": True}
 
     def delete_relation(self, source_id: str, target_id: str, relation: str) -> dict:
@@ -703,6 +712,169 @@ class RAGSystem:
             "total_edges": graph_stats["total_edges"],
             "relation_types": graph_stats["relation_types"],
         }
+
+    # -- communities -----------------------------------------------------------
+
+    def _invalidate_community_cache(self) -> None:
+        """Сбросить кеш сообществ (вызывается при изменении сторов)."""
+        self._communities = []
+        self._community_names = {}
+        self._community_cache_path.unlink(missing_ok=True)
+
+    def _load_community_cache(self) -> None:
+        """Загрузить кеш сообществ с диска (при старте RAGSystem)."""
+        if not self._community_cache_path.exists():
+            return
+        try:
+            data = json.loads(self._community_cache_path.read_text(encoding="utf-8"))
+            self._communities = data.get("communities", [])
+            # JSON хранит ключи как строки → конвертируем в int
+            self._community_names = {int(k): v for k, v in data.get("names", {}).items()}
+        except (json.JSONDecodeError, KeyError, ValueError):
+            logger.warning("Failed to load community cache, starting fresh")
+            self._communities = []
+            self._community_names = {}
+
+    def _save_community_cache(self) -> None:
+        """Сохранить кеш сообществ на диск."""
+        try:
+            self._community_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "communities": self._communities,
+                "names": {str(k): v for k, v in self._community_names.items()},
+            }
+            self._community_cache_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as e:
+            logger.warning("Failed to save community cache: %s", e)
+
+    def find_communities(self, resolution: float = 1.0, k_nn: int = 15) -> dict:
+        """Detect semantic communities via Leiden algorithm.
+
+        Builds a k-NN graph from document embeddings (cosine similarity),
+        merges with explicit graph relations, and runs Leiden clustering.
+
+        Args:
+            resolution: Leiden resolution parameter (higher = more, smaller communities)
+            k_nn: Number of nearest neighbors for k-NN graph construction
+
+        Returns:
+            {communities: [{id, size, members}], total_communities, total_nodes}
+        """
+        # Step 1: Collect embeddings grouped by doc_id
+        doc_embeddings = self.vector_store.get_all_doc_embeddings()
+
+        # Average embeddings per doc_id (multi-chunk)
+        doc_ids = sorted(doc_embeddings.keys())
+        if not doc_ids:
+            self._communities = []
+            return {"communities": [], "total_communities": 0, "total_nodes": 0}
+
+        import numpy as np
+        emb_matrix = np.array([
+            np.mean(doc_embeddings[did], axis=0) for did in doc_ids
+        ])
+
+        # Step 2: Build k-NN graph
+        import networkx as nx
+        G = nx.Graph()
+        G.add_nodes_from(doc_ids)
+
+        norms = np.linalg.norm(emb_matrix, axis=1, keepdims=True)
+        emb_norm = emb_matrix / (norms + 1e-10)
+        sim = emb_norm @ emb_norm.T
+
+        n = len(doc_ids)
+        actual_k = min(k_nn, n - 1) if n > 1 else 0
+        for i in range(n):
+            if actual_k == 0:
+                continue
+            top_k = np.argsort(sim[i])[-actual_k - 1:-1][::-1]
+            for j in top_k:
+                if i != j and sim[i][j] > 0:
+                    G.add_edge(doc_ids[i], doc_ids[j], weight=float(sim[i][j]))
+
+        # Step 3: Merge with existing graph edges
+        for source, target, relation, weight in self.graph_kb.get_all_edges():
+            if G.has_edge(source, target):
+                old = G[source][target]["weight"]
+                G[source][target]["weight"] = max(old, weight)
+            else:
+                G.add_edge(source, target, weight=weight)
+
+        # Step 4: Leiden community detection
+        import igraph as ig
+        import leidenalg
+
+        nx_nodes = list(G.nodes())
+        nx_to_ig = {n: i for i, n in enumerate(nx_nodes)}
+        ig_graph = ig.Graph(
+            n=len(nx_nodes),
+            edges=[(nx_to_ig[u], nx_to_ig[v]) for u, v in G.edges()],
+        )
+        ig_graph.vs["name"] = nx_nodes
+        for u, v, data in G.edges(data=True):
+            eid = ig_graph.get_eid(nx_to_ig[u], nx_to_ig[v])
+            ig_graph.es[eid]["weight"] = data.get("weight", 1.0)
+
+        part = leidenalg.find_partition(
+            ig_graph,
+            leidenalg.RBConfigurationVertexPartition,
+            weights="weight" if ig_graph.ecount() > 0 else None,
+            resolution_parameter=resolution,
+            seed=42,
+        )
+
+        # Step 5: Convert back and cache
+        communities = []
+        for idx, members_ig in enumerate(part):
+            communities.append({
+                "id": idx,
+                "size": len(members_ig),
+                "members": [nx_nodes[i] for i in members_ig],
+            })
+
+        self._communities = communities
+        self._save_community_cache()
+        return {
+            "communities": communities,
+            "total_communities": len(communities),
+            "total_nodes": len(nx_nodes),
+        }
+
+    def set_community_names(self, names: dict) -> dict:
+        """Assign human-readable names to communities.
+
+        Args:
+            names: {community_id: name} mapping (keys may be str from MCP)
+
+        Returns:
+            {status: "ok", updated: N}
+        """
+        converted = {}
+        for k, v in names.items():
+            converted[int(k)] = v
+        self._community_names.update(converted)
+        self._save_community_cache()
+        return {"status": "ok", "updated": len(converted)}
+
+    def get_communities(self) -> list[dict]:
+        """Return cached communities with assigned names.
+
+        Returns:
+            [{id, name, size, members}, ...]
+        """
+        result = []
+        for c in self._communities:
+            result.append({
+                "id": c["id"],
+                "name": self._community_names.get(c["id"], ""),
+                "size": c["size"],
+                "members": c["members"],
+            })
+        return result
 
     def close(self) -> None:
         """Освободить ресурсы (файловые локи Qdrant embedded и SQLite)."""

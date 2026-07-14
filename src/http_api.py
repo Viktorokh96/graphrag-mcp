@@ -97,6 +97,15 @@ class DeleteRelationRequest(BaseModel):
     relation: str
 
 
+class FindCommunitiesRequest(BaseModel):
+    resolution: float = 1.0
+    k_nn: int = 15
+
+
+class SetCommunityNamesRequest(BaseModel):
+    names: dict
+
+
 # -- RAGSystem holder --------------------------------------------------------
 
 
@@ -345,6 +354,24 @@ def update_document(doc_id: str, req: UpdateDocumentRequest):
 def delete_relation(req: DeleteRelationRequest):
     result = _rag().delete_relation(req.source_id, req.target_id, req.relation)
     return result
+
+
+@app.post("/communities")
+def find_communities(req: FindCommunitiesRequest):
+    return _rag().find_communities(
+        resolution=req.resolution,
+        k_nn=req.k_nn,
+    )
+
+
+@app.put("/communities/names")
+def set_community_names(req: SetCommunityNamesRequest):
+    return _rag().set_community_names(req.names)
+
+
+@app.get("/communities")
+async def get_communities():
+    return _rag().get_communities()
 
 
 # -- MCP SSE transport -------------------------------------------------------

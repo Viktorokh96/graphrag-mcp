@@ -3,6 +3,26 @@
 MCP-сервер графовой базы знаний с гибридным поиском (dense + sparse + граф).
 Стек: BGE-M3, Qdrant, SQLite, FastAPI, CrossEncoder, NetworkX.
 
+## Package manager: uv (ГЛОБАЛЬНОЕ ПРАВИЛО)
+
+Проект использует `uv` для управления зависимостями и virtualenv.
+**Никогда** не вызывай `pip`, `python3 -m pytest`, `pip install` напрямую.
+
+```bash
+# ❌ НЕПРАВИЛЬНО
+pytest
+pip install foo
+python3 script.py
+
+# ✅ ПРАВИЛЬНО
+uv run python3 -m pytest
+uv add foo
+uv run python3 script.py
+uv run ruff check src/
+```
+
+Это правило действует на **все** команды: тесты, линтер, запуск скриптов, установка пакетов.
+
 ## Quick Start
 
 ### 1. Поднять Qdrant (рекомендуется)
@@ -28,11 +48,11 @@ EMBEDDING_MODEL=bge-m3 python3 -m src.mcp_server
 python3 -m src.cli --http
 
 # Тесты
-python3 -m pytest tests/ -v
+uv run python3 -m pytest tests/ -v
 
 # CLI
-python3 -m src.cli --help
-python3 -m src.cli graph-viz -o rag_data/graph.html
+uv run python3 -m src.cli --help
+uv run python3 -m src.cli graph-viz -o rag_data/graph.html
 ```
 
 ## Структура
@@ -177,6 +197,24 @@ PRELOAD_MODELS=true
 | `rag_graph_stats` | — | `{total_nodes, total_edges, relation_types}` |
 | `rag_stats` | — | `{total_documents, store_path, dimension}` |
 
+### Сообщества / Communities
+
+| Инструмент | Параметры | Описание |
+|-----------|-----------|----------|
+| `rag_find_communities` | `resolution=1.0`, `k_nn=15` | Leiden по k-NN эмбеддингов + графу. Кеш в `_communities` |
+| `rag_set_community_names` | `names` (dict `{id: name}`) | Задать имена сообществ (извне) |
+| `rag_get_communities` | — | Кеш из последнего find + имена |
+
+**Как работают сообщества:**
+
+1. `find_communities` извлекает эмбеддинги из Qdrant (через `vector_store.get_all_doc_embeddings()`), строит k-NN граф (cosine similarity), объединяет с существующими рёбрами графа, запускает Leiden (igraph). Результат кешируется в `self._communities`.
+2. Внешний LLM-оркестратор читает документы каждого сообщества и задаёт имена через `set_community_names({id: name})`.
+3. `get_communities` возвращает список `{id, name, size, members}`.
+
+**Инвалидация кеша:** кеш автоматически сбрасывается при `clear()`, `delete_document()`, `update_document()`.
+
+**Персистентность:** кеш сохраняется в `{store_path}/community_cache.json`. При перезапуске RAGSystem кеш восстанавливается с диска.
+
 ### Замечания по параметрам
 
 - `meta`: dict/null/""/JSON-строка/строка → `_parse_meta()`
@@ -217,7 +255,7 @@ docker compose up --build
 ## HTTP API (FastAPI)
 
 ```bash
-python3 -m src.cli --http
+uv run python3 -m src.cli --http
 # GET  /health
 # POST /search (mode: hybrid/bm25/semantic)
 # POST /documents, /file, /structured
@@ -236,13 +274,13 @@ python3 -m src.cli --http
 ## Тестирование
 
 ```bash
-python3 -m pytest tests/ -v
-python3 -m pytest tests/test_mcp_server.py -v
-python3 -m pytest tests/test_search_quality.py -v
+uv run python3 -m pytest tests/ -v
+uv run python3 -m pytest tests/test_mcp_server.py -v
+uv run python3 -m pytest tests/test_search_quality.py -v
 ```
 
 ## Линтинг
 
 ```bash
-ruff check src/ tests/
+uv run ruff check src/ tests/
 ```

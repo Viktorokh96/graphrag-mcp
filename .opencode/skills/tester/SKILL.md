@@ -35,20 +35,32 @@ description: Написание и запуск тестов, проверка �
 ## Команды
 ```bash
 # Запуск всех тестов
-pytest
+uv run python3 -m pytest
 
 # Запуск одного файла
-pytest tests/test_feature.py
+uv run python3 -m pytest tests/test_feature.py
 
 # Запуск одного теста
-pytest tests/test_feature.py::test_something
+uv run python3 -m pytest tests/test_feature.py::test_something
 
 # С coverage
-pytest --cov=src --cov-report=term-missing
+uv run python3 -m pytest --cov=src --cov-report=term-missing
 
 # Линтер
-ruff check src/
+uv run ruff check src/
 ```
+
+## Package manager: uv (ОБЯЗАТЕЛЬНО)
+
+Проект использует `uv`. **Никогда** не вызывай `pip`, `python3`, `pip install` напрямую.
+
+| Неправильно | Правильно |
+|-------------|-----------|
+| `pytest` | `uv run python3 -m pytest` |
+| `pip install foo` | `uv add foo` |
+| `pip install -r` | `uv sync` |
+| `python3 script.py` | `uv run python3 script.py` |
+| `ruff check` | `uv run ruff check` |
 
 ## Отчёт о баге
 ```markdown

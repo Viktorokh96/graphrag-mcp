@@ -101,6 +101,31 @@ BFS обход графа от узла.
 - `metadata_filter` (dict, opt.)
 - Returns `{relations: [{source, target, relation, weight, direction}]}`
 
+### Сообщества
+
+#### `rag_find_communities`
+Поиск семантических сообществ через Leiden algorithm.
+- `resolution` (float, default 1.0) — параметр разрешения (больше → мельче сообщества)
+- `k_nn` (int, default 15) — количество ближайших соседей для k-NN графа
+- Returns `{communities: [{id, size, members}], total_communities, total_nodes}`
+
+**Алгоритм:**
+1. Извлечение эмбеддингов из Qdrant (группировка по doc_id, усреднение для multi-chunk)
+2. Построение k-NN графа (cosine similarity, numpy)
+3. Объединение с существующими рёбрами графа (max вес при конфликте)
+4. Leiden clustering (igraph, RBConfigurationVertexPartition)
+5. Результат кешируется для `set_community_names`
+
+#### `rag_set_community_names`
+Задать имена сообществ (внешний LLM читает документы и называет).
+- `names` (dict `{id: name}`, обяз.) — ключи как строки (конвертируются в int)
+- Returns `{status: "ok", updated: N}`
+
+#### `rag_get_communities`
+Получить кешированные сообщества с именами.
+- Returns `[{id, name, size, members}]`
+- Пустой список, если `find_communities` не вызывался
+
 ---
 
 ## HTTP REST API (FastAPI)
@@ -124,6 +149,9 @@ BFS обход графа от узла.
 | POST | `/clear` | — | Очистить всё |
 | POST | `/reindex` | — | Пересчитать эмбеддинги |
 | POST | `/structured` | `{content, extract_graph}` | Repomix индексация |
+| POST | `/communities` | `{resolution?, k_nn?}` | Найти сообщества (Leiden) |
+| PUT | `/communities/names` | `{names: {id: name}}` | Задать имена сообществ |
+| GET | `/communities` | — | Сообщества с именами |
 | GET | `/mcp` | — | MCP SSE handshake |
 | POST | `/mcp` | JSON-RPC | MCP сообщение |
 

@@ -328,6 +328,32 @@ class QdrantVectorStore:
         ).count
         return count > 0
 
+    def get_all_doc_embeddings(self) -> dict[str, list[list[float]]]:
+        """Вернуть все эмбеддинги, сгруппированные по doc_id.
+
+        Multi-chunk документы содержат несколько векторов (усредняются вызывающим
+        кодом при необходимости).
+        """
+        doc_embeddings: dict[str, list[list[float]]] = {}
+        offset = None
+        while True:
+            points, offset = self._client.scroll(
+                COLLECTION,
+                limit=1024,
+                offset=offset,
+                with_vectors=True,
+                with_payload=["doc_id"],
+            )
+            for p in points:
+                doc_id = p.payload.get("doc_id") if p.payload else None
+                if doc_id and p.vector is not None:
+                    vec = p.vector.get("dense") if isinstance(p.vector, dict) else p.vector
+                    if vec is not None:
+                        doc_embeddings.setdefault(doc_id, []).append(vec)
+            if offset is None:
+                break
+        return doc_embeddings
+
     @staticmethod
     def _dedup_hits(hits: list, k: int, clip: bool = False) -> list[dict]:
         """Схлопнуть chunk-точки одного документа в один результат (макс. score).

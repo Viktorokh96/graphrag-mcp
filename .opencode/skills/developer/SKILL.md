@@ -24,3 +24,17 @@ description: Реализация кода по задачам orchestrator-а. 
 ## Ограничения
 - Не пишет тесты и спецификации
 - Не меняет архитектуру без запроса
+
+## Package manager: uv (ОБЯЗАТЕЛЬНО)
+
+Проект использует `uv`. **Никогда** не вызывай `pip`, `python3`, `pip install` напрямую.
+
+| Неправильно | Правильно |
+|-------------|-----------|
+| `pytest` | `uv run python3 -m pytest` |
+| `pip install foo` | `uv add foo` |
+| `pip install -r` | `uv sync` |
+| `python3 script.py` | `uv run python3 script.py` |
+| `ruff check` | `uv run ruff check` |
+
+Все команды в bash всегда через `uv run`.

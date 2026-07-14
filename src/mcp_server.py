@@ -627,6 +627,55 @@ TOOL_DEFS = [
             "required": ["source_id", "target_id", "relation"],
         },
     ),
+    Tool(
+        name="rag_find_communities",
+        description=(
+            "Detect semantic communities in the knowledge graph using Leiden algorithm. "
+            "Builds a k-NN graph from document embeddings, merges with explicit relations, "
+            "and runs Leiden clustering. External caller reads documents and assigns "
+            "names via set_community_names."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "resolution": {
+                    "type": "number",
+                    "description": "Leiden resolution parameter (higher = more, smaller communities)",
+                    "default": 1.0,
+                },
+                "k_nn": {
+                    "type": "integer",
+                    "description": "Number of nearest neighbors for k-NN graph construction",
+                    "default": 15,
+                },
+            },
+        },
+    ),
+    Tool(
+        name="rag_set_community_names",
+        description=(
+            "Assign human-readable names to communities found by find_communities. "
+            "The names mapping is {community_id: name}."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "names": {
+                    "type": "object",
+                    "description": "{community_id: name} mapping. Keys are community IDs (as strings).",
+                },
+            },
+            "required": ["names"],
+        },
+    ),
+    Tool(
+        name="rag_get_communities",
+        description=(
+            "Return cached communities from the last find_communities call, with "
+            "assigned names. Empty list if find_communities has not been called yet."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
 ]
 
 
@@ -783,6 +832,12 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
         "rag_delete_relation": lambda p: rag.delete_relation(
             p["source_id"], p["target_id"], p["relation"],
         ),
+        "rag_find_communities": lambda p: rag.find_communities(
+            resolution=p.get("resolution", 1.0),
+            k_nn=p.get("k_nn", 15),
+        ),
+        "rag_set_community_names": lambda p: rag.set_community_names(p["names"]),
+        "rag_get_communities": lambda p: rag.get_communities(),
     }
     fn = handlers.get(name)
     if not fn:

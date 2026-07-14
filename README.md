@@ -112,6 +112,13 @@ python -m src.cli clear
 | `rag_get_related` | BFS обход (out+in) с мета-фильтром |
 | `rag_graph_stats` | Статистика графа |
 
+### Сообщества
+| Инструмент | Описание |
+|-----------|----------|
+| `rag_find_communities` | Leiden community detection по эмбеддингам + графу |
+| `rag_set_community_names` | Задать имена сообществ (извне, LLM) |
+| `rag_get_communities` | Получить сообщества с именами |
+
 ---
 
 ## Фичи
@@ -127,6 +134,7 @@ python -m src.cli clear
 - **MCP SSE** — Streamable HTTP транспорт
 - **Docker** — Dockerfile + docker-compose.yml (Qdrant + Postgres)
 - **Graph viz** — vis.js интерактивная визуализация графа
+- **Leiden communities** — поиск семантических сообществ (k-NN граф эмбеддингов + Leiden)
 
 ---
 
@@ -162,6 +170,7 @@ MCP Client (stdio)         HTTP Client (REST)
 | Граф | `src/graph_store.py` | SQLite + NetworkX |
 | Хранилище документов | `src/document_store.py` | SQLite (source of truth) |
 | Оркестратор | `src/rag.py` | RRF + reranker + expansion + graph |
+| Сообщества | `src/rag.py` | Leiden (igraph) + k-NN эмбеддинги |
 | MCP сервер | `src/mcp_server.py` | Python MCP SDK ≥1.28 |
 | HTTP API | `src/http_api.py` | FastAPI |
 | Reranker | `src/reranker.py` | CrossEncoder (lazy load) |
