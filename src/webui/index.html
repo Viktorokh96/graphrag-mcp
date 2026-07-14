@@ -234,6 +234,7 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#0a0a1
     <h3>Node Details</h3>
     <div class="btn-group">
       <button class="btn btn-sm" id="btn-edit-node" onclick="toggleEditMode()" style="display:none">Edit</button>
+      <button class="btn btn-sm btn-danger" id="btn-delete-node" onclick="deleteNodeFromInfo()" style="display:none">Delete</button>
       <button class="close-btn" onclick="closeInfo()">&times;</button>
     </div>
   </div>
@@ -588,6 +589,7 @@ async function showNodeInfo(docId){
   editingDocId=docId;
   qs('#infopanel').classList.add('open');
   qs('#btn-edit-node').style.display='';
+  qs('#btn-delete-node').style.display='';
   qs('#info-edit-btns').style.display='none';
   const iid=document.getElementById('info-id');
   const imeta=document.getElementById('info-meta');
@@ -679,6 +681,19 @@ async function deleteSelected(){
   });
 }
 
+async function deleteNodeFromInfo(){
+  if(!editingDocId)return;
+  const shortId=editingDocId.slice(0,8)+'…';
+  confirmAction('Delete document '+shortId+'? This will remove it from all stores.',async()=>{
+    try{
+      await api('DELETE','/documents/'+encodeURIComponent(editingDocId));
+      toast('Document deleted');
+      closeInfo();
+      await loadGraph();
+    }catch(e){toast('Delete error: '+e.message,4000)}
+  });
+}
+
 /* ── filter ───────────────────────────────────────── */
 
 function applyFilter(){
@@ -766,9 +781,11 @@ function toggleEditMode(){
   editMode=!editMode;
   const textarea=qs('#info-text');
   const editBtn=qs('#btn-edit-node');
+  const delBtn=qs('#btn-delete-node');
   const editBtns=qs('#info-edit-btns');
   textarea.readOnly=!editMode;
   editBtn.style.display=editMode?'none':'';
+  delBtn.style.display=editMode?'none':'';
   editBtns.style.display=editMode?'':'none';
   if(editMode){
     textarea.style.height='auto';
