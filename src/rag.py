@@ -245,6 +245,7 @@ class RAGSystem:
             extractor = GraphExtractor(self)
             extractor.extract_and_link(doc_id, text, mode=extract_graph_mode)
 
+        self._invalidate_community_cache()
         return doc_id
 
     def _index_vector(self, doc_id: str, text: str, metadata: Optional[dict]) -> None:
@@ -487,7 +488,7 @@ class RAGSystem:
         existed = self.doc_store.delete(doc_id)  # FK CASCADE удаляет рёбра
         self.vector_store.remove(doc_id)
         self.graph_kb.delete_document(doc_id)
-        self._invalidate_community_cache()
+        self._evict_from_community_cache(doc_id)
         return existed
 
     def get_document(
@@ -614,7 +615,6 @@ class RAGSystem:
         if meta is not None:
             self.doc_store.update_metadata(doc_id, meta)
 
-        self._invalidate_community_cache()
         return {"doc_id": doc_id, "updated": True}
 
     def delete_relation(self, source_id: str, target_id: str, relation: str) -> dict:
@@ -720,6 +720,23 @@ class RAGSystem:
         self._communities = []
         self._community_names = {}
         self._community_cache_path.unlink(missing_ok=True)
+
+    def _evict_from_community_cache(self, doc_id: str) -> None:
+        """Удалить документ из кеша сообществ: вычистить из members, убрать пустые."""
+        if not self._communities:
+            return
+        new_communities = []
+        for c in self._communities:
+            if doc_id in c["members"]:
+                c["members"] = [m for m in c["members"] if m != doc_id]
+                c["size"] = len(c["members"])
+            if c["size"] > 0:
+                new_communities.append(c)
+            else:
+                # Community became empty — remove its name too
+                self._community_names.pop(c["id"], None)
+        self._communities = new_communities
+        self._save_community_cache()
 
     def _load_community_cache(self) -> None:
         """Загрузить кеш сообществ с диска (при старте RAGSystem)."""

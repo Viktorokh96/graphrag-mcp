@@ -290,28 +290,29 @@ class TestCommunityCacheInvalidation:
         assert rag._communities == []
         assert rag._community_names == {}
 
-    def test_delete_document_resets_communities(self, rag):
-        """После delete_document() кеш сообществ должен быть пуст."""
+    def test_delete_document_evicts_from_communities(self, rag):
+        """После delete_document() документ удаляется из кеша сообществ."""
         rag.add_document("python programming language for general purpose scripting and automation tasks")
         rag.add_document("java programming language for enterprise software development and scaling")
         rag.find_communities()
         assert len(rag._communities) > 0
 
         items, _ = rag.doc_store.list(limit=1)
-        rag.delete_document(items[0]["doc_id"])
-        assert rag._communities == []
-        assert rag._community_names == {}
+        deleted_id = items[0]["doc_id"]
+        rag.delete_document(deleted_id)
+        # Deleted doc must not appear in any community
+        for c in rag._communities:
+            assert deleted_id not in c["members"]
 
-    def test_update_document_resets_communities(self, rag):
-        """После update_document() кеш сообществ должен быть пуст."""
+    def test_update_document_preserves_communities(self, rag):
+        """После update_document() кеш сообществ НЕ сбрасывается."""
         doc_id = rag.add_document("python programming language for general purpose scripting and automation tasks")
         rag.add_document("java programming language for enterprise software development and scaling")
         rag.find_communities()
         assert len(rag._communities) > 0
 
         rag.update_document(doc_id, text="updated content for this test document to verify text update works correctly and thoroughly")
-        assert rag._communities == []
-        assert rag._community_names == {}
+        assert len(rag._communities) > 0
 
 
 class TestCommunityCachePersistence:
