@@ -112,6 +112,16 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#0a0a1
 #confirm-box{background:rgba(16,16,38,0.98);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:24px 28px;max-width:380px;width:90%;backdrop-filter:blur(12px);box-shadow:0 16px 48px rgba(0,0,0,.6)}
 #confirm-box .msg{font-size:14px;margin-bottom:18px;line-height:1.5;color:#d0d0d0}
 #confirm-box .actions{display:flex;gap:10px;justify-content:flex-end}
+
+/* community legend */
+#community-legend{position:fixed;bottom:16px;left:16px;z-index:50;background:rgba(10,10,26,0.92);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:12px 16px;backdrop-filter:blur(12px);max-height:280px;overflow-y:auto;display:none;min-width:180px;scrollbar-width:thin}
+#community-legend.show{display:block}
+#community-legend h4{font-size:10px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px}
+.cl-item{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11px;color:#bbb;cursor:pointer;transition:color .1s}
+.cl-item:hover{color:#fff}
+.cl-swatch{width:14px;height:14px;border-radius:4px;flex-shrink:0;border:2px solid}
+.cl-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cl-count{color:#555;font-size:10px;font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
@@ -210,7 +220,13 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#0a0a1
   <button onclick="toggleSidebar()" id="btn-sidebar" class="active-btn">☰ Menu</button>
   <button onclick="focusSearch()" id="btn-search" title="Search (Ctrl+F)">🔍</button>
   <button onclick="fitGraph()" title="Fit graph to screen">⊞ Fit</button>
+  <button onclick="toggleCommunities()" id="btn-communities" title="Show/hide communities">◉ Communities</button>
   <button onclick="resetView()" title="Reset everything">⟳ Reset</button>
+</div>
+
+<div id="community-legend">
+  <h4>Communities</h4>
+  <div id="community-legend-items"></div>
 </div>
 
 <div id="infopanel">
@@ -256,6 +272,8 @@ let confirmCallback = null;
 let expandedNodeId = null;
 let editMode = false;
 let editingDocId = null;
+let communitiesVisible = false;
+let communitiesData = null;
 
 /* ── helpers ──────────────────────────────────────── */
 
@@ -785,6 +803,185 @@ function parseFilterInput(raw){
     return{[m[1]]:val};
   }
   return null;
+}
+
+/* ── communities visualization ──────────────────────── */
+
+// Color palette: pastel hues with good contrast on dark background
+const COMMUNITY_COLORS=[
+  {fill:'rgba(96,165,250,0.10)',  border:'rgba(96,165,250,0.55)',   text:'#60a5fa'},  // blue
+  {fill:'rgba(167,139,250,0.10)', border:'rgba(167,139,250,0.55)',  text:'#a78bfa'},  // purple
+  {fill:'rgba(52,211,153,0.10)',  border:'rgba(52,211,153,0.55)',   text:'#34d399'},  // emerald
+  {fill:'rgba(251,191,36,0.10)',  border:'rgba(251,191,36,0.55)',   text:'#fbbf24'},  // amber
+  {fill:'rgba(248,113,113,0.10)', border:'rgba(248,113,113,0.55)',  text:'#f87171'},  // red
+  {fill:'rgba(56,189,248,0.10)',  border:'rgba(56,189,248,0.55)',   text:'#38bdf8'},  // sky
+  {fill:'rgba(232,121,249,0.10)', border:'rgba(232,121,249,0.55)',  text:'#e879f9'},  // fuchsia
+  {fill:'rgba(163,230,53,0.10)',  border:'rgba(163,230,53,0.55)',   text:'#a3e635'},  // lime
+  {fill:'rgba(251,146,60,0.10)',  border:'rgba(251,146,60,0.55)',   text:'#fb923c'},  // orange
+  {fill:'rgba(45,212,191,0.10)',  border:'rgba(45,212,191,0.55)',   text:'#2dd4bf'},  // teal
+  {fill:'rgba(192,132,252,0.10)', border:'rgba(192,132,252,0.55)',  text:'#c084fc'},  // violet
+  {fill:'rgba(249,168,212,0.10)', border:'rgba(249,168,212,0.55)',  text:'#f9a8d4'},  // pink
+  {fill:'rgba(134,239,172,0.10)', border:'rgba(134,239,172,0.55)',  text:'#86efac'},  // green
+  {fill:'rgba(253,224,71,0.10)',  border:'rgba(253,224,71,0.55)',   text:'#fde047'},  // yellow
+  {fill:'rgba(147,197,253,0.10)', border:'rgba(147,197,253,0.55)',  text:'#93c5fd'},  // indigo-200
+];
+
+function hullColor(i){return COMMUNITY_COLORS[i % COMMUNITY_COLORS.length]}
+
+// Graham scan convex hull
+function convexHull(points){
+  if(points.length<3)return points.slice();
+  points=points.slice().sort((a,b)=>a.x-b.x||a.y-b.y);
+  const cross=(O,A,B)=>(A.x-O.x)*(B.y-O.y)-(A.y-O.y)*(B.x-O.x);
+  const lower=[];
+  for(const p of points){while(lower.length>=2&&cross(lower[lower.length-2],lower[lower.length-1],p)<=0)lower.pop();lower.push(p)}
+  const upper=[];
+  for(const p of points.reverse()){while(upper.length>=2&&cross(upper[upper.length-2],upper[upper.length-1],p)<=0)upper.pop();upper.push(p)}
+  return lower.concat(upper.slice(1,-1));
+}
+
+// Expand hull outward by padding pixels (in screen coords)
+function expandHull(hull,pad){
+  if(hull.length<3)return hull;
+  const cx=hull.reduce((s,p)=>s+p.x,0)/hull.length;
+  const cy=hull.reduce((s,p)=>s+p.y,0)/hull.length;
+  return hull.map(p=>{
+    const dx=p.x-cx, dy=p.y-cy;
+    const len=Math.sqrt(dx*dx+dy*dy)||1;
+    return{x:p.x+dx/len*pad, y:p.y+dy/len*pad};
+  });
+}
+
+function drawCommunityHulls(ctx){
+  if(!communitiesData||!communitiesData.length||!network)return;
+  const canvas=ctx.canvas;
+  const dpr=window.devicePixelRatio||1;
+  const w=canvas.width/dpr, h=canvas.height/dpr;
+  if(w===0||h===0)return;
+
+  for(let ci=0;ci<communitiesData.length;ci++){
+    const c=communitiesData[ci];
+    const colors=hullColor(ci);
+    const positions=[];
+    for(const docId of c.members){
+      try{
+        const pos=network.getPosition(docId);
+        if(pos&&pos.x!==undefined)positions.push(pos);
+      }catch(e){}
+    }
+    if(positions.length<3)continue;
+    const hull=convexHull(positions);
+    const expanded=expandHull(hull,28);
+
+    // Draw filled hull
+    ctx.beginPath();
+    ctx.moveTo(expanded[0].x,expanded[0].y);
+    for(let i=1;i<expanded.length;i++)ctx.lineTo(expanded[i].x,expanded[i].y);
+    ctx.closePath();
+    ctx.fillStyle=colors.fill;
+    ctx.fill();
+
+    // Draw border with slight glow
+    ctx.strokeStyle=colors.border;
+    ctx.lineWidth=2;
+    ctx.shadowColor=colors.border;
+    ctx.shadowBlur=12;
+    ctx.stroke();
+    ctx.shadowBlur=0;
+
+    // Draw community name label at centroid
+    const cx2=positions.reduce((s,p)=>s+p.x,0)/positions.length;
+    const cy2=positions.reduce((s,p)=>s+p.y,0)/positions.length;
+    const name=c.name||('Community '+c.id);
+    ctx.font='bold 12px Segoe UI, system-ui, sans-serif';
+    ctx.textAlign='center';
+    ctx.textBaseline='middle';
+    // Background pill
+    const tw=ctx.measureText(name).width;
+    const px=8, py=4;
+    ctx.fillStyle='rgba(10,10,26,0.85)';
+    ctx.beginPath();
+    const rx=cx2-tw/2-px, ry=cy2-8-py, rw=tw+px*2, rh=16+py*2, rr=8;
+    ctx.roundRect(rx,ry,rw,rh,rr);
+    ctx.fill();
+    ctx.strokeStyle=colors.border;
+    ctx.lineWidth=1;
+    ctx.stroke();
+    // Text
+    ctx.fillStyle=colors.text;
+    ctx.fillText(name,cx2,cy2);
+  }
+}
+
+function buildCommunityLegend(){
+  const el=document.getElementById('community-legend-items');
+  if(!communitiesData||!communitiesData.length){el.innerHTML='';return}
+  let html='';
+  for(let ci=0;ci<communitiesData.length;ci++){
+    const c=communitiesData[ci];
+    const colors=hullColor(ci);
+    const name=c.name||('Community '+c.id);
+    html+='<div class="cl-item" onclick="focusCommunity('+ci+')" title="'+esc(name)+' — '+c.size+' docs">';
+    html+='<div class="cl-swatch" style="background:'+colors.fill.replace('0.10','0.35')+';border-color:'+colors.border+'"></div>';
+    html+='<span class="cl-name">'+esc(name)+'</span>';
+    html+='<span class="cl-count">'+c.size+'</span>';
+    html+='</div>';
+  }
+  el.innerHTML=html;
+}
+
+function focusCommunity(ci){
+  if(!communitiesData||!communitiesData[ci]||!network)return;
+  const members=communitiesData[ci].members;
+  if(!members.length)return;
+  // Select community nodes
+  network.selectNodes(members);
+  // Focus on bounding box
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+  for(const id of members){
+    try{
+      const p=network.getPosition(id);
+      if(p.x<minX)minX=p.x;if(p.x>maxX)maxX=p.x;
+      if(p.y<minY)minY=p.y;if(p.y>maxY)maxY=p.y;
+    }catch(e){}
+  }
+  if(minX<Infinity){
+    const cx=(minX+maxX)/2, cy=(minY+maxY)/2;
+    const span=Math.max(maxX-minX,maxY-minY)+200;
+    network.moveTo({position:{x:cx,y:cy},scale:Math.min(2,800/span),animation:{duration:400,easingFunction:'easeInOutQuad'}});
+  }
+}
+
+async function toggleCommunities(){
+  if(communitiesVisible){
+    communitiesVisible=false;
+    communitiesData=null;
+    document.getElementById('btn-communities').classList.remove('active-btn');
+    document.getElementById('community-legend').classList.remove('show');
+    if(network)network.redraw();
+    return;
+  }
+  // Detect communities
+  const btn=document.getElementById('btn-communities');
+  btn.textContent='⏳ Detecting...';
+  btn.disabled=true;
+  try{
+    const data=await api('POST','/communities',{resolution:1.0,k_nn:15});
+    communitiesData=data.communities||[];
+    if(!communitiesData.length){toast('No communities found');return}
+    communitiesVisible=true;
+    btn.classList.add('active-btn');
+    document.getElementById('community-legend').classList.add('show');
+    buildCommunityLegend();
+    // Hook into afterDrawing if not already
+    if(!network._communityDrawn){
+      network.on('afterDrawing',function(ctx){drawCommunityHulls(ctx)});
+      network._communityDrawn=true;
+    }
+    network.redraw();
+    toast(communitiesData.length+' communities detected');
+  }catch(e){toast('Community error: '+e.message,4000)}
+  finally{btn.textContent='◉ Communities';btn.disabled=false}
 }
 
 /* ── init ─────────────────────────────────────────── */
