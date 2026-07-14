@@ -411,6 +411,7 @@ function buildGraph(docs){
     }else{
       restoreExpandedNode();
       closeInfo();
+      if(selectedCommunityId!==null)restoreCommunityFocus();
     }
     updateDeleteButton();
   });
@@ -426,7 +427,13 @@ function buildGraph(docs){
   network.on('select',function(){updateDeleteButton();});
 
   graphBuilt=true;
-  if(communitiesVisible&&communitiesData)applyCommunityStyles();
+  if(communitiesVisible&&communitiesData){
+    applyCommunityStyles();
+    if(selectedCommunityId!==null&&communitiesData[selectedCommunityId]){
+      const memberSet=new Set(communitiesData[selectedCommunityId].members);
+      dimNonCommunityNodes(memberSet);
+    }
+  }
 }
 
 function fitGraph(){
@@ -931,11 +938,53 @@ function buildCommunityLegend(){
   el.innerHTML=html;
 }
 
+let selectedCommunityId = null;
+
+function dimNonCommunityNodes(memberSet){
+  if(!nodes)return;
+  const ids=nodes.getIds();
+  const updates=[];
+  for(const id of ids){
+    const n=nodes.get(id);
+    if(!n)continue;
+    if(!n._communityOrigColor)continue;
+    if(memberSet.has(id)){
+      // Brighten selected community
+      n.color=brightenColor(n._communityOrigColor,+30,+15);
+      n.size=Math.round(n._communityOrigSize*1.4);
+      n.borderWidth=3;
+    }else{
+      // Dim everything else heavily
+      n.color=brightenColor(n._communityOrigColor,-25,-18);
+      n.size=Math.max(6,Math.round(n._communityOrigSize*0.55));
+      n.borderWidth=1;
+    }
+    updates.push(n);
+  }
+  if(updates.length){
+    network.setOptions({physics:{enabled:false}});
+    nodes.update(updates);
+    network.setOptions({physics:{enabled:true}});
+  }
+}
+
+function restoreCommunityFocus(){
+  if(!communitiesVisible||!communitiesData||!nodes){selectedCommunityId=null;return}
+  selectedCommunityId=null;
+  applyCommunityStyles();
+  network.redraw();
+}
+
 function focusCommunity(ci){
   if(!communitiesData||!communitiesData[ci]||!network)return;
-  const members=communitiesData[ci].members;
+  const c=communitiesData[ci];
+  const members=c.members;
   if(!members.length)return;
-  // Select community nodes
+  // Toggle off if clicking same community
+  if(selectedCommunityId===ci){restoreCommunityFocus();return}
+  selectedCommunityId=ci;
+  const memberSet=new Set(members);
+  dimNonCommunityNodes(memberSet);
   network.selectNodes(members);
   // Focus on bounding box
   let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
@@ -1024,6 +1073,7 @@ async function toggleCommunities(){
   if(communitiesVisible){
     communitiesVisible=false;
     communitiesData=null;
+    selectedCommunityId=null;
     document.getElementById('btn-communities').classList.remove('active-btn');
     document.getElementById('community-legend').classList.remove('show');
     restoreCommunityStyles();
