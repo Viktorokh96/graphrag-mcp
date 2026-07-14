@@ -961,25 +961,24 @@ async function toggleCommunities(){
     if(network)network.redraw();
     return;
   }
-  // Detect communities
   const btn=document.getElementById('btn-communities');
-  btn.textContent='⏳ Detecting...';
+  btn.textContent='⏳ Loading...';
   btn.disabled=true;
   try{
-    const data=await api('POST','/communities',{resolution:1.0,k_nn:15});
-    communitiesData=data.communities||[];
-    if(!communitiesData.length){toast('No communities found');return}
+    const data=await api('GET','/communities');
+    communitiesData=data||[];
+    if(!communitiesData.length){toast('No communities cached. Run Leiden first via MCP.');return}
     communitiesVisible=true;
     btn.classList.add('active-btn');
     document.getElementById('community-legend').classList.add('show');
     buildCommunityLegend();
-    // Hook into afterDrawing if not already
     if(!network._communityDrawn){
       network.on('afterDrawing',function(ctx){drawCommunityHulls(ctx)});
       network._communityDrawn=true;
     }
     network.redraw();
-    toast(communitiesData.length+' communities detected');
+    const named=communitiesData.filter(c=>c.name).length;
+    toast(communitiesData.length+' communities'+(named?', '+named+' named':''));
   }catch(e){toast('Community error: '+e.message,4000)}
   finally{btn.textContent='◉ Communities';btn.disabled=false}
 }
