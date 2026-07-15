@@ -1270,3 +1270,21 @@ some authority from previous existence, the same flow applies but the
 ratio is finite and automatic resolution may fire if ratio > 3.0.
 The contradiction report is always emitted — the LLM sees it as context
 in the response, even if resolution was automatic.
+
+#### Acceptance as a Deliberate Operation
+
+Overriding an authoritative claim is not a simple write — it is an
+**acceptance ceremony**. The HKG treats knowledge replacement as a
+high-friction operation by design:
+
+- Old claims with high authority cannot be silently overwritten
+- The contradiction report is always emitted, even when auto-resolved
+- LLM must explicitly call `rag_resolve_contradiction(winner=new)` —
+  a conscious act, not a side effect of adding a document
+- The resolved contradiction edge persists in the graph as an audit
+  trail: who overrode what, when, and why
+
+This asymmetry — easy to add, hard to override — mirrors how human
+teams treat authoritative documents. Anyone can write a proposal.
+Overriding an ADR requires explicit acknowledgment that you have
+read the ADR, understood it, and are consciously replacing it.
