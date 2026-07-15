@@ -2,17 +2,17 @@
 
 Семантический поиск + BM25 (разреженные векторы) + графовые реляции между документами.
 
-Работает как **MCP сервер** (JSON-RPC через stdio/SSE) или **HTTP REST API** (FastAPI).
+Работает как **MCP сервер** (stdio + SSE) или **HTTP REST API** (FastAPI).
 
 ---
 
 ## Установка
 
 ```bash
-uv sync   # или pip install -e .
+uv sync
 ```
 
-**Зависимости:** Python ≥3.11, Qdrant (embedded), sentence-transformers (BGE-M3), FastAPI, NetworkX, SQLite.
+**Зависимости:** Python ≥3.12, Qdrant (embedded/HTTP), sentence-transformers (BGE-M3), FastAPI, NetworkX, SQLite, igraph, leidenalg.
 
 ---
 
@@ -20,42 +20,53 @@ uv sync   # или pip install -e .
 
 ```bash
 # Добавить документ
-python -m src.cli add-document --text "Python — мощный язык программирования"
+rag-server add-document --text "Python — мощный язык программирования"
 
 # Семантический поиск
-python -m src.cli search --query "язык программирования"
+rag-server search --query "язык программирования"
 
 # Гибридный поиск (RRF alpha-dilution)
-python -m src.cli hybrid-search --query "Python" --alpha 0.5
+rag-server hybrid-search --query "Python" --alpha 0.5
 
 # С CrossEncoder reranking
-python -m src.cli hybrid-search --query "Python" --rerank
+rag-server hybrid-search --query "Python" --rerank
 
 # С LLM query expansion
-python -m src.cli hybrid-search --query "Python" --query-expansion
+rag-server hybrid-search --query "Python" --query-expansion
 
 # Repomix-style индексация кода
-python -m src.cli add-structured --content "$(cat repomix-output.json)"
+rag-server add-structured --content "$(cat repomix-output.json)"
 
 # Граф
-python -m src.cli add-relation --source UUID1 --target UUID2 --relation "related_to"
-python -m src.cli get-related --node UUID --max-depth 2
-python -m src.cli graph-viz -o graph.html
+rag-server add-relation --source UUID1 --target UUID2 --relation "related_to"
+rag-server get-related --node UUID --max-depth 2
+rag-server graph-viz -o graph.html
+
+# Обновить документ
+rag-server update-document --doc-id UUID --text "новый текст"
+
+# Удалить документ / ребро
+rag-server delete-document --doc-id UUID
+rag-server delete-relation --source UUID1 --target UUID2 --relation "related_to"
+
+# Сообщества
+rag-server find-communities
+rag-server set-community-names --names '{"0": "Authentication", "1": "Database"}'
 
 # Список документов
-python -m src.cli list-documents --limit 10
+rag-server list-documents --limit 10
 
 # Получить документ
-python -m src.cli get-document --doc-id UUID
+rag-server get-document --doc-id UUID
 
 # Статистика
-python -m src.cli stats
+rag-server stats
 
-# Запуск HTTP сервера
-python -m src.cli --http --port 8765
+# Запуск HTTP сервера (включает WebUI на /webui/)
+rag-server --http --port 8765
 
 # Очистить всё
-python -m src.cli clear
+rag-server clear
 ```
 
 ---
@@ -66,8 +77,8 @@ python -m src.cli clear
 {
   "mcpServers": {
     "rag-knowledge-base": {
-      "command": "python",
-      "args": ["-m", "src.mcp_server"],
+      "command": "uv",
+      "args": ["run", "python3", "-m", "src.mcp_server"],
       "env": {
         "EMBEDDING_MODEL": "bge-m3"
       }
@@ -76,7 +87,7 @@ python -m src.cli clear
 }
 ```
 
-Или standalone: `python -m src.mcp_server` (stdio) / `python -m src.cli --http` (HTTP).
+Или standalone: `uv run python3 -m src.mcp_server` (stdio) / `rag-server --http` (HTTP + WebUI).
 
 ---
 
@@ -130,37 +141,44 @@ python -m src.cli clear
 - **Query expansion** — Qwen3-1.8B multi-query + RRF слияние
 - **Auto graph extraction** — LLM (Qwen3-4B) + spaCy NER fallback
 - **Repomix индексация** — чанки кода с авто-sibling связями
-- **HTTP REST API** — FastAPI, 15+ эндпоинтов, `/docs` (OpenAPI)
+- **Chunker** — семантическое разбиение длинных документов (>8192 токенов), интегрирован в add_document/add_file
+- **Update / Delete** — `rag_update_document` (текст/мета, связи сохраняются), `rag_delete_document` (каскадное), `rag_delete_relation`
+- **HTTP REST API** — FastAPI, 17+ эндпоинтов, `/docs` (OpenAPI)
+- **WebUI** — визуальный интерфейс (vis.js граф + документы + поиск) на `/webui/`
 - **MCP SSE** — Streamable HTTP транспорт
-- **Docker** — Dockerfile + docker-compose.yml (Qdrant + Postgres)
+- **Docker** — multi-stage uv build + docker-compose.yml (Qdrant + Postgres)
 - **Graph viz** — vis.js интерактивная визуализация графа
 - **Leiden communities** — поиск семантических сообществ (k-NN граф эмбеддингов + Leiden)
+- **Offline mode** — `HF_HUB_OFFLINE=true` для загрузки моделей без сети
+- **Local models** — `MODELS_DIR=./models`, `scripts/setup_models.sh`
+- **Graceful shutdown** — корректное закрытие Qdrant/SQLite при Ctrl+C
+- **ChromaDB → Qdrant миграция** — `rag-server migrate [--dry-run] [--force]`
 
 ---
 
 ## Архитектура
 
 ```
-MCP Client (stdio)         HTTP Client (REST)
-       │                         │
-       ▼                         ▼
-┌──────────────────────────────────────┐
-│     MCPServer / HttpAPI             │
-│  JSON-RPC stdio + SSE + FastAPI     │
-└──────────┬───────────────────────────┘
-           │
-           ▼
-┌──────────────────────────────────────┐
-│          RAGSystem                  │
-│  search / hybrid / rerank / expand  │
-└────┬──────┬──────┬──────┬───────────┘
-     │      │      │      │
-     ▼      ▼      ▼      ▼
-┌──────┐ ┌──────┐ ┌──────┐ ┌──────────┐
-│Vector│ │Sparse│ │Graph │ │Document  │
-│Store │ │      │ │Store │ │Store     │
-│(Qdrt)│ │(Qdrt)│ │(Nx)  │ │(SQLite)  │
-└──────┘ └──────┘ └──────┘ └──────────┘
+MCP Client (stdio)         HTTP Client (REST)        WebUI (browser)
+       │                         │                        │
+       ▼                         ▼                        ▼
+┌──────────────────────────────────────────────────────────────┐
+│     MCPServer / HttpAPI + WebUI (/webui/)                   │
+│  stdio + SSE + FastAPI + vis.js                             │
+└──────────────────────────┬───────────────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│                      RAGSystem                              │
+│  search / hybrid / rerank / expand / communities / update   │
+└────┬──────┬──────┬──────┬──────┬────────────────────────────┘
+     │      │      │      │      │
+     ▼      ▼      ▼      ▼      ▼
+┌──────┐ ┌──────┐ ┌──────┐ ┌──────────┐ ┌────────────┐
+│Vector│ │Sparse│ │Graph │ │Document  │ │Community   │
+│Store │ │      │ │Store │ │Store     │ │Cache       │
+│(Qdrt)│ │(Qdrt)│ │(Nx)  │ │(SQLite)  │ │(JSON file) │
+└──────┘ └──────┘ └──────┘ └──────────┘ └────────────┘
 ```
 
 | Компонент | Файл | Технология |
@@ -178,6 +196,7 @@ MCP Client (stdio)         HTTP Client (REST)
 | Graph extraction | `src/graph_extractor.py` | LLM Qwen3-4B + spaCy NER |
 | Структур. индексатор | `src/structured_indexer.py` | repomix JSON → чанки |
 | Визуализация | `src/graph_viz.py` | vis.js + NetworkX |
+| WebUI | `src/webui/index.html` | vis.js граф + документы |
 | CLI | `src/cli.py` | argparse |
 
 ---
@@ -209,20 +228,35 @@ MCP Client (stdio)         HTTP Client (REST)
 | `QUERY_EXPANSION_MODEL` | LLM для expansion | `qwen3:1.8b` |
 | `QUERY_EXPANSION_COUNT` | Число вариантов | `3` |
 | `QUERY_EXPANSION_OLLAMA_URL` | URL для LLM expansion | `http://localhost:11434` |
+| `OLLAMA_TIMEOUT` | Таймаут Ollama запросов (сек) | `120` |
+| `EXTRACT_GRAPH` | Авто-извлечение графа по умолч. | `false` |
+| `HF_HUB_OFFLINE` | Offline-режим (без HF Hub) | `false` |
+| `MODELS_DIR` | Директория локальных моделей | — |
+| `PRELOAD_MODELS` | Грузить модели при старте | `false` |
 
 ---
 
 ## Тесты
 
 ```bash
-python -m pytest tests/ -v
-python -m pytest tests/test_mcp_server.py -v
-python -m pytest tests/test_search_quality.py -v
+uv run python3 -m pytest tests/ -v
+uv run python3 -m pytest tests/test_mcp_server.py -v
+uv run python3 -m pytest tests/test_search_quality.py -v
+```
+
+## Линтинг
+
+```bash
+uv run ruff check src/ tests/
 ```
 
 ## Docker
 
 ```bash
+# Только Qdrant (для локальной разработки)
+docker compose up -d qdrant
+
+# Полный стек: Qdrant + Postgres + RAG HTTP API
 docker compose up --build
 # HTTP API на порту 8765, OpenAPI: http://localhost:8765/docs
 ```
@@ -251,7 +285,7 @@ src/
 ├── vector_store.py      # Qdrant (dense + sparse)
 ├── _meta_filter.py      # Фильтр метаданных
 ├── migrate.py           # Миграция со старой ChromaDB
-├── chunker.py           # Semantic splitting (резерв)
+├── chunker.py           # Semantic splitting (интегрирован в add_document)
 tests/
 ├── test_rag.py, test_mcp_server.py, ...  # pytest тесты
 specifications/
