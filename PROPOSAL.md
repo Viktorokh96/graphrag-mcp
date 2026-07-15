@@ -1391,6 +1391,27 @@ discovery. **Open:** pattern mining on the graph — cluster
 substructures, detect recurring motifs, propose rules for them
 without LLM involvement.
 
+### Ontology Drift
+
+The ontology is fixed: Class, Method, Service, Endpoint, Module.
+When the codebase introduces new concepts — MessageQueue, CronJob,
+FeatureFlag — extraction produces entities with unknown or missing
+types. These entities are invisible to inference: no rule matches
+them, no contradiction rule checks them, no reasoning applies.
+The system progressively goes blind to new parts of the codebase.
+
+**Mitigation:** periodic ontology gap scan. Entities without a type
+or with low inference coverage (few incident edges matching known
+relations) are flagged. The LLM co-pilot (Proposal #2, layer 3a)
+proposes new entity types and relation types for them.
+`rag_propose_ontology_extensions()` — batch proposal for all
+untyped entities detected in the last scan.
+
+**Open:** semi-automatic ontology extension. If the LLM proposes
+a new type `FeatureFlag` and a human approves it, can we mine the
+graph for existing entities that match the new type's signature
+and reclassify them automatically?
+
 ## 2. Confidence Decay
 
 ### Cold Start
@@ -1429,6 +1450,25 @@ automatic heuristics.
 **Open:** implicit negative feedback. If a user reads document A,
 then immediately reads document B on the same topic — was A
 unsatisfactory? Can we infer distrust from reading patterns?
+
+### Edge Confidence Blind Spot
+
+Confidence and authority models focus on nodes. Edges have their own
+aging dynamics that are currently unaddressed:
+
+- `CALLS(A, B)` — A's code changed, no longer calls B. Node A was
+  updated (confidence 1.0), but the edge retains old confidence.
+- Edges are rarely accessed directly — they're traversed via
+  `rag_get_related`. Their access counts are always lower than nodes'.
+- An edge between two green nodes may be false, but inherits inflated
+  trust from its incident nodes.
+
+**Mitigation:** edge-specific decay. When either incident node is
+updated, the edge's decay accelerates (half-life halved for 7 days).
+This reflects the structural reality: if A changed, its outgoing
+edges are suspect until re-verified. `rag_verify_edge` (Proposal #2)
+extends to edges — LLM checks whether the edge still exists in code
+and resets confidence to 0.95 if confirmed.
 
 ## 3. Stability Tiers
 
@@ -1517,6 +1557,37 @@ history; too long → archive bloat.
 may have longer retention. Archived documents are excluded from all
 queries, search, and inference — they consume only disk.
 
+### Authority Opacity
+
+Authority is a single number — the integral of confidence over time.
+For an LLM consumer, «authority 765» is opaque. Is 765 high? Low?
+Expected for this document type? The LLM cannot calibrate its trust
+without understanding how the number was computed.
+
+**Mitigation:** `rag_explain_authority(doc_id)` — decomposes authority
+into components:
+
+```
+{
+  "authority": 765.2,
+  "percentile": "top 3%",
+  "components": {
+    "colour": "green (×5.0 multiplier)",
+    "age_days": 180,
+    "access_count": 42,
+    "avg_confidence": 0.85,
+    "confidence_trend": "stable — above 0.8 for 90 consecutive days"
+  },
+  "verdict": "Structurally authoritative. Green-tier ADR with sustained
+              high confidence and consistent access. Appropriate for
+              this document type."
+}
+```
+
+The LLM receives both the number and the story behind it. «Authority
+765 because it's a green ADR, 180 days old, read 42 times, with
+confidence above 0.8 for 3 months» is actionable. «Authority 765» is not.
+
 ## 5. Contradiction Detection
 
 ### False Negatives on Semantic Contradictions
@@ -1562,6 +1633,42 @@ The loser can be restored from archive via `rag_restore_claim(doc_id)`.
 Archive retention ensures the document still exists on disk.
 Resolution is a soft commitment, not a permanent judgment.
 
+### Mass Contradiction (Contradiction Storm)
+
+A bad repo sync misclassifies 50 entities → 50 contradiction reports
+fired simultaneously. The LLM is flooded. Individual review of each
+contradiction is impractical — the consumer needs to see the pattern,
+not the list.
+
+**Mitigation:** contradiction aggregation. When N > AGGREGATION_THRESHOLD
+(default: 5) contradictions share the same source and structural pattern,
+they are collapsed into a single aggregated report:
+
+```
+⚠ Repo sync «auth-service» introduced 47 type_clash contradictions.
+  Pattern: extracted type → «Module», existing claim → «Service».
+  Affected entities: AuthService, UserService, TokenService, ...
+  Source authority: extracted facts avg 2.1, existing claims avg 340.
+  Recommendation: review the extraction config for auth-service.
+  [Expand to see all 47] [Accept all old] [Accept all new]
+```
+
+The LLM sees one pattern, not 47 individual conflicts. Batch
+resolution is supported: `rag_accept_claim(contradiction_ids=[...], winner=...)`.
+
+### Batch Recovery from Wrong Resolutions
+
+A series of `rag_accept_claim` calls turned out to be wrong — the
+winning documents were themselves later contradicted. Restoring
+each loser individually is impractical at scale.
+
+**Mitigation:** batch rollback. `rag_rollback_resolutions(source=X,
+since=<date>)` — restores all losers that were ejected due to
+contradictions where the winner came from source X within the given
+time window. The losers are restored from archive, their relations
+re-established. Useful when an entire extraction run or agent session
+produced bad resolutions.
+
 ## 6. Global Risks
 
 ### Adversarial Use
@@ -1599,3 +1706,33 @@ always included in search results. The contradiction report, not
 search suppression, is the check against error. Novelty bonus:
 new documents get a temporary search-ranking boost (first 7 days)
 to ensure they are seen and can begin accumulating authority.
+
+### Cold Start: Bootstrapping
+
+An empty HKG has no authority, no confidence history, no
+stratification. All documents start equal — blue, authority 0.
+For the first 30 days, the HKG is indistinguishable from a
+plain RAG. Seeding initial authority and colour is necessary
+but currently undefined.
+
+**Mitigation:** bootstrap policy — declarative rules for initial
+document classification on first import:
+
+| Document source | Initial colour | Initial authority | Rationale |
+|---|---|---|---|
+| ADR (architectural decision record) | `green` | 500 | Structural by definition |
+| Architecture overview | `green` | 300 | Same |
+| Code extraction (stable module) | `blue` | 10 | Needs time to prove itself |
+| Design proposal | `blue` | 0 | Transient by nature |
+| Meeting notes | `blue` | 0 | Decay quickly |
+| API reference (extracted) | `yellow` | 50 | Tied to code; semi-stable |
+
+Bootstrap policy is applied once on first import. After that,
+automatic promotion/demotion takes over. The policy is
+configurable per project via `bootstrap.yaml`. Documents that
+don't match any rule start at blue, authority 0.
+
+**Open:** can the bootstrap policy itself be learned? After 6
+months of operation, the system knows which document types
+tend to become green. Could it propose bootstrap policy updates
+for new projects based on historical patterns?
