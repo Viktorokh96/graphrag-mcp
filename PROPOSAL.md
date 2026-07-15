@@ -485,14 +485,149 @@ slower than an edge to a stale node. Requires solving the feedback loop
 problem (read traffic on high-confidence nodes shouldn't inflate their
 neighbors indefinitely).
 
+### Stability Tiers (Metaplasticity)
+
+The base decay model assumes all documents decay at the same rate.
+This fails for documents that are **structurally important but rarely read**
+— ADRs, architecture overviews, core interface definitions. These change
+less often by definition, so they're consulted less often, yet they're the
+most trustworthy content in the system. Without correction, they decay
+faster than a transient proposal that everyone reads for a week then forgets.
+
+**Metaplasticity** — borrowed from neuroscience — solves this: a synapse
+that has been strong for a long time becomes structurally resistant to
+weakening. Even if signal temporarily stops, the connection degrades slowly.
+
+Applied to documents:
+- A document that **held high confidence for an extended period** earns
+  a lower decay rate — it has proven its stability
+- A new document decays at the standard rate until it earns stability
+- A human or LLM can explicitly mark a document as structurally important,
+  bypassing the waiting period
+
+#### Colour Tiers
+
+Every document carries a `colour` field — a stability tier that acts as a
+multiplier on the effective half-life:
+
+| Colour | Multiplier | Meaning | How earned |
+|---|---|---|---|
+| `blue` | ×1.0 | New document, standard decay | Default for all new documents |
+| `yellow` | ×2.0 | Established: proven stability | 30 consecutive days with confidence > 0.5 |
+| `green` | ×5.0 | Core: structural knowledge | 60 consecutive days with confidence > 0.8, OR manual assignment |
+
+#### Transitions
+
+```
+                    ┌──────────────────────┐
+                    │        blue          │
+                    │   (standard decay)   │
+                    └──────────┬───────────┘
+                               │ 30 days confidence > 0.5
+                               ▼
+                    ┌──────────────────────┐
+                    │       yellow         │
+                    │   (2× slower decay)  │
+                    └──────────┬───────────┘
+                               │ 60 days confidence > 0.8
+                               ▼
+                    ┌──────────────────────┐
+                    │        green         │
+                    │   (5× slower decay)  │
+                    └──────────────────────┘
+
+  Demotions (fast downward adjustments):
+
+  green  → yellow  when confidence drops below 0.3
+  yellow → blue    when confidence drops below 0.15
+```
+
+Promotion is **slow** (30/60 days of sustained confidence). Demotion is
+**fast** (value drops below threshold → immediate downgrade). This
+asymmetry mirrors biology: building structural stability takes time;
+losing it happens quickly when the underlying content is genuinely stale.
+
+#### Manual Override
+
+```python
+rag_set_color(doc_id="auth-service/ADR-003", color="green")
+rag_set_color(doc_id="auth-service/ADR-003", color="auto")  # return to automatic
+```
+
+Use cases:
+- **LLM during indexing:** detects «this is an ADR» → marks `green`
+- **Human curator:** marks known-trustworthy documents
+- **System analyst cron:** promotes documents that survived multiple
+  verification cycles
+
+#### Updated Decay Function
+
+```python
+def effective_half_life(conf: Confidence) -> float:
+    base = conf.half_life_days
+    access_bonus = 1 + min(conf.access_count, SATURATION_LIMIT) / max(age_days, 1) * DAMPENING_FACTOR
+    color_mult = {"blue": 1.0, "yellow": 2.0, "green": 5.0}[conf.color]
+    return base * access_bonus * color_mult
+```
+
+#### Effect on ADR Scenario
+
+| Scenario | Without colour | With green ADR |
+|---|---|---|
+| Half-life | 90 days | 90 × 5.0 = 450 days |
+| No reads for 6 months | confidence → 0.25 (decaying) | confidence → 0.75 (stable) |
+| No reads for 2 years | confidence → 0.004 (stale) | confidence → 0.32 (decaying) |
+
+A green ADR survives two years without attention before reaching the
+decaying tier — long enough that a system analyst or repo sync will
+have refreshed it.
+
+#### Confidence Response Includes Colour
+
+```
+{
+  "doc_id": "auth-service/ADR-003",
+  "confidence": {
+    "value": 0.94,
+    "tier": "fresh",
+    "colour": "green",
+    "trend": "stable"
+  }
+}
+```
+
+The LLM consumer sees both the point-in-time confidence and the structural
+stability tier — «this document is trustworthy now AND has been trustworthy
+for a long time.»
+
+#### Integration with Colours
+
+| Document type | Recommended colour | Rationale |
+|---|---|---|
+| ADR | `green` (manual) | Changes rarely; foundational |
+| Architecture overview | `green` (manual) | Same |
+| API reference (extracted) | `yellow` → auto-promote | Tracked from code; updates with repo sync |
+| Design proposal | `blue` (default) | Transient by nature |
+| Meeting notes | `blue` (default) | Decay quickly unless promoted |
+| Inferred edges | Min(colour) of premises | An edge is only as stable as its weakest source fact |
+
+#### Persistence
+
+```sql
+ALTER TABLE documents ADD COLUMN confidence_colour TEXT DEFAULT 'blue';
+ALTER TABLE documents ADD COLUMN confidence_colour_since REAL;          -- unix timestamp
+ALTER TABLE documents ADD COLUMN confidence_colour_manual INTEGER DEFAULT 0;  -- 1 = set by rag_set_color
+```
+
 ### MCP Tools
 
 | Tool | Signature | Description |
 |------|-----------|-------------|
-| `rag_get_confidence` | `doc_id: str` | Return `{value, tier, last_access, last_update, half_life_days, trend}` for a document |
+| `rag_get_confidence` | `doc_id: str` | Return `{value, tier, colour, last_access, last_update, half_life_days, trend}` for a document |
 | `rag_get_edge_confidence` | `source_id: str, target_id: str, relation: str` | Return confidence for a specific edge |
 | `rag_list_stale` | `threshold?: float, limit?: int` | List documents below confidence threshold, sorted by most stale first |
-| `rag_confidence_stats` | — | Distribution: `{fresh: N, stable: N, decaying: N, stale: N, total: N}` |
+| `rag_set_colour` | `doc_id: str, colour: "green" \| "yellow" \| "blue" \| "auto"` | Manually set stability tier. `"auto"` returns to automatic promotion/demotion |
+| `rag_confidence_stats` | — | Distribution: `{fresh: N, stable: N, decaying: N, stale: N, green: N, yellow: N, blue: N}` |
 
 Search results and graph traversals automatically include `confidence` in
 every returned item:
@@ -505,9 +640,9 @@ every returned item:
   "confidence": {
     "value": 0.72,
     "tier": "stable",
+    "colour": "yellow",
     "trend": "decaying"
   }
-}
 ```
 
 ### Integration with Semantic Reasoning
@@ -684,13 +819,13 @@ trustworthy. After:
 ```
 Search results for "authentication flow":
 
-✓ [fresh 0.94] auth-service/ADR-003-auth-flow.md
+✓ [fresh 0.94  ● green]  auth-service/ADR-003-auth-flow.md
   "Authentication uses JWT tokens issued by auth-service..."
 
-✓ [stable 0.72] auth-service/src/auth/handler.py
+✓ [stable 0.72  ● yellow]  auth-service/src/auth/handler.py
   "@app.post('/login') → returns JWT access + refresh tokens"
 
-△ [decaying 0.38] proposals/old-oauth-proposal.md
+△ [decaying 0.38  ● blue]  proposals/old-oauth-proposal.md
   "Proposed OAuth2 migration path. Was last updated 4 months ago,
    no reads in 6 weeks. Consider verifying against current code."
 ```
