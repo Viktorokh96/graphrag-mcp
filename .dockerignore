@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Data
+rag_data/
+store.db*
+qdrant/
+
+# Tests
+tests/
+.coverage
+.pytest_cache/
+
+# Config (mounted at runtime)
+.env
+opencode.json
+config/
+
+# Tooling
+.ruff_cache/
+.mypy_cache/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+
+# Artifacts
+*.html
+graph_viz.html
+lib/
+
+# Docs
+*.md
+specifications/
