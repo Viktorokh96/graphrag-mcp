@@ -885,3 +885,197 @@ RAG с графом — это архитектура, в которой сим�
 An HKG is to a knowledge base what long-term potentiation is to a synapse:
 it is not a static store — it is a living structure that calibrates itself
 through use.
+
+
+# PROPOSAL: Automatic Contradiction Detection (Cognitive Dissonance)
+
+## Problem
+
+A knowledge graph that grows from multiple sources — code extraction, ADRs,
+proposals, LLM-generated summaries — will inevitably accumulate contradictions:
+
+- Two documents state opposite facts about the same entity
+- An inferred edge conflicts with a stated edge
+- A document describes an API that the extracted code graph says doesn't exist
+
+Classical RAG has no way to detect these. The LLM consumer receives all
+chunks and may not notice the conflict, or notices it but can't resolve
+it without a separate verification round-trip.
+
+With inference and confidence decay already in place, the system has
+everything needed to **detect contradictions automatically** and **resolve
+them by freshness** — the graph equivalent of cognitive dissonance.
+
+## Solution
+
+### Contradiction Types
+
+| Type | Pattern | Example |
+|---|---|---|
+| **Type clash** | Same entity, conflicting types | `UserService` is both `Class` and `Module` |
+| **Edge conflict** | Opposite relations between same nodes | `CALLS(A, B)` + `AVOIDS(A, B)` — A depends on B but explicitly avoids it |
+| **Inferred vs stated** | Inference derives X, graph explicitly states ¬X | Rule infers `OVERRIDES(Child, M)`, but graph has `REMOVES(Child, M)` |
+| **Factual contradiction** | Two documents claim different values for same property | Doc A: «auth uses JWT», Doc B: «auth uses sessions» |
+| **Structural impossibility** | Graph topology violates ontology constraints | Cycle in a DAG-only relation; service depends on itself transitively |
+
+### Detection: Contradiction Rules
+
+Contradiction rules are inference rules with a `CONTRADICTS` output:
+
+```python
+@contradiction_rule(
+    name="type_clash",
+    description="Same entity cannot have two different types"
+)
+def detect_type_clashes(g: nx.DiGraph) -> list[Contradiction]:
+    """For each entity, check that all incoming HAS_TYPE edges agree."""
+    clashes = []
+    for node in g.nodes:
+        types = {d["value"] for _, _, d in edges_of_type(g, "HAS_TYPE")
+                 if d["target"] == node}
+        if len(types) > 1:
+            clashes.append(Contradiction(
+                kind="type_clash",
+                subjects=[node],
+                claims=[f"{node} is {t}" for t in types],
+            ))
+    return clashes
+
+@contradiction_rule(
+    name="inferred_vs_stated",
+    description="Inferred edge conflicts with an explicitly stated edge"
+)
+def detect_inferred_vs_stated(g: nx.DiGraph) -> list[Contradiction]:
+    """OVERRIDES(Child, M) inferred, but REMOVES(Child, M) stated."""
+    # Inferred edges carry _inferred=True metadata
+    # Stated edges carry _inferred=False
+    ...
+```
+
+### Resolution: Freshness Wins
+
+When a contradiction is detected, the system does NOT delete either fact.
+Instead it applies the **freshness tiebreaker**:
+
+```
+For each contradiction (claim_A, claim_B):
+    winner = argmax(confidence(claim) for claim in [claim_A, claim_B])
+    loser  = argmin(...)
+
+    If confidence(winner) - confidence(loser) > CLEAR_VICTORY_THRESHOLD (0.3):
+        → winner marked as "preferred", loser suppressed in search
+    Else:
+        → both kept, flagged for LLM review
+```
+
+This is the Hebbian principle applied to conflict resolution: **the fact
+that has been verified, read, and updated more recently is the one that
+survives**. The old fact isn't deleted — it persists with a `suppressed`
+flag and a pointer to the winning fact.
+
+### LLM Review (Cognitive Dissonance Resolution)
+
+When confidence is too close to call or the contradiction is high-impact
+(e.g., architecture-level), the LLM co-pilot is invoked:
+
+```
+Contradiction detected:
+  Claim A [confidence 0.72]: "AuthService issues JWT tokens"
+    Source: ADR-003, last updated 2026-06-15
+  Claim B [confidence 0.68]: "AuthService uses session cookies"
+    Source: auth/README.md, last updated 2026-06-20
+
+Resolution: Close confidence gap (Δ = 0.04).
+→ Requesting LLM verification against source code.
+
+LLM inspects auth-service/src/auth/handler.py:
+  "Found JWT token issuance in /login endpoint.
+   No session cookie logic detected.
+   → Claim A confirmed. Claim B suppressed."
+```
+
+After LLM resolution:
+- Winner confidence → 0.95 (verified)
+- Loser gets `suppressed: true`, `suppressed_by: "LLM-verify-2026-07-15"`
+- A `CONTRADICTS` edge is added between the two claims, resolved
+
+### New MCP Tools
+
+| Tool | Signature | Description |
+|---|---|---|
+| `rag_detect_contradictions` | `scope?: "all" \| "entity" \| "relation", entity_id?: str` | Run contradiction rules, return list of detected conflicts with confidence deltas |
+| `rag_get_contradictions` | `entity_id: str` | All unresolved contradictions involving this entity |
+| `rag_resolve_contradiction` | `contradiction_id: str, winner: str` | Manually resolve: pick winning claim |
+
+Search results include contradiction annotations:
+
+```json
+{
+  "doc_id": "auth/README.md",
+  "text": "AuthService uses session cookies...",
+  "confidence": {"value": 0.68, "tier": "stable"},
+  "contradiction": {
+    "status": "suppressed",
+    "winner": "ADR-003-auth-flow.md",
+    "reason": "LLM verification against source code on 2026-07-15",
+    "delta": 0.04
+  }
+}
+```
+
+### Integration with Existing Layers
+
+**Confidence decay feeds contradiction resolution:**
+When a contradiction is detected, the system records it but doesn't
+immediately resolve. Time works for the system — the winning fact
+gets read more (slower decay), the losing fact decays faster.
+After a grace period (default: 7 days), unresolved contradictions
+are re-evaluated: the gap may have widened enough for automatic
+resolution.
+
+**Inference engine provides contradiction rules:**
+Contradiction rules are first-class citizens in the rule registry,
+alongside inference rules. Both run in the same fixed-point loop.
+An inferred edge can trigger a contradiction check; a resolved
+contradiction can suppress further inference on dubious premises.
+
+**LLM co-pilot closes the loop:**
+The same `rag_verify_edge` tool from Proposal #2 is used to verify
+the winning claim against source code. Successful verification
+boosts confidence to 0.95 and marks the contradiction resolved.
+
+### Files
+
+| File | What |
+|---|---|
+| `src/contradiction.py` | Contradiction detector: type-clash, edge-conflict, inferred-vs-stated rules |
+| `src/contradiction_resolver.py` | Freshness tiebreaker, LLM review dispatcher, suppression logic |
+| `src/rag_data/rules/contradictions/` | Per-rule contradiction modules (auto-discovered) |
+
+### Example Scenario
+
+```
+1. Repo sync extracts: "AuthService" HAS_TYPE "Service"
+2. ADR-003 ingested: "AuthService" HAS_TYPE "Module"
+3. Contradiction rule fires: type_clash(AuthService, Service, Module)
+4. Freshness check:
+     ADR-003 confidence = 0.94 (green, read frequently)
+     Extracted fact confidence = 0.85 (blue, just synced)
+   Δ = 0.09 < 0.3 → too close to call automatically
+5. Flagged for LLM review
+6. LLM inspects code: AuthService is a deployable unit → type = Service
+7. "Module" claim suppressed. ADR-003 updated. Contradiction resolved.
+```
+
+Without contradiction detection: the LLM consumer receives both facts
+and presents «AuthService is both a Service and a Module» — confusing
+and wrong. With it: the conflict is resolved before the consumer sees it.
+
+### Risks and Mitigations
+
+| Risk | Mitigation |
+|---|---|
+| False contradictions: legitimate synonyms flagged as conflicts | Ontology-defined synonym relations; `EQUIVALENT_TO` edges prevent clash detection |
+| Over-eager suppression: new correct fact suppressed by old high-confidence fact | New facts start at confidence 1.0; grace period gives them time to earn reads before being compared |
+| Contradiction cascade: resolving one contradiction triggers more | Single-pass resolution per cycle; max resolution depth |
+| LLM review cost: every contradiction invokes LLM | Only high-impact or close-call (Δ < 0.3) contradictions trigger LLM. Clear winners resolve automatically |
