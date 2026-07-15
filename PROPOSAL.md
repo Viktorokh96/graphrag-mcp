@@ -1736,3 +1736,100 @@ don't match any rule start at blue, authority 0.
 months of operation, the system knows which document types
 tend to become green. Could it propose bootstrap policy updates
 for new projects based on historical patterns?
+
+
+# Market Positioning: Why HKG Doesn't Exist Yet
+
+## The Gap
+
+Current tools fall into three categories, none of which solve the
+problem HKG addresses:
+
+| Category | Examples | What they do | What they don't |
+|---|---|---|---|
+| **Vector RAG** | LangChain, LlamaIndex, OpenAI assistants | Semantic search + LLM generation | No structure, no reasoning, no freshness signal |
+| **Knowledge Graphs** | Neo4j, Apache Atlas, DataHub | Entities + typed relations | Static, manually curated, no decay, no contradictions |
+| **Enterprise Search** | Glean, Elastic Workplace Search | Unified search across tools | No inference, no graph, no confidence — just BM25+embeddings |
+
+The gap: **a knowledge base that ages well without a curator.**
+
+Existing tools are either dumb (RAG — equal trust in all documents)
+or high-maintenance (Knowledge Graphs — manual curation). HKG is
+neither. It self-organizes through use, surfaces contradictions,
+and tells consumers how much to trust each piece of knowledge.
+
+## Positioning
+
+**HKG is not «yet another RAG.»** It is a **self-regulating knowledge
+base for teams whose documentation outruns their ability to curate it.**
+
+Elevator pitch:
+
+> HKG is a knowledge base that breathes. Documents you use stay alive.
+> Documents you ignore quietly fade. Contradictions are surfaced, not
+> hidden. The system tells your AI agents not just *what* it knows,
+> but *how well* it knows it — and whether your new claim contradicts
+> years of accumulated trust.
+
+One-liner:
+
+> RAG finds documents. HKG knows which ones to trust.
+
+## Who Needs This
+
+### Primary: Multi-repo microservice teams (5–50 services)
+
+The cross-repo dependency reasoning is the killer feature. «What
+breaks if I change this endpoint?» — a question that requires
+traversing `DEPENDS_ON` across service boundaries. HKG answers this
+from the graph. RAG cannot.
+
+These teams also suffer from **documentation fragmentation**: ADRs
+in one repo, API docs in another, READMEs everywhere. HKG ingests
+all of them and the contradiction detection tells you when they
+disagree.
+
+### Primary: AI-assisted development platforms
+
+Internal developer platforms with AI copilots (GitHub Copilot
+extensions, custom IDE agents, Slack bots). The platform already
+has LLM access — what it lacks is a knowledge layer that tells
+the LLM *which* documents are trustworthy.
+
+HKG plugs into the platform as an MCP server. The LLM queries it
+like any other tool, but gets back structured knowledge with
+confidence, authority, and contradiction annotations.
+
+### Secondary: Technical documentation teams
+
+Teams maintaining large documentation sites (docs-as-code). The
+decay model identifies stale pages. The authority model surfaces
+which pages are actually consulted. Contradiction detection finds
+conflicts between overlapping docs.
+
+### Secondary: Compliance and audit
+
+ADR is a regulatory requirement (architecture decisions must be
+documented and traceable). HKG's audit trail — who accepted which
+contradiction, when, and why — provides traceability that static
+docs cannot.
+
+## Competitive Moats
+
+Why this won't be replicated quickly:
+
+| Moat | Why |
+|---|---|
+| **Hebbian plasticity** | Most engineers think «cache eviction» not «synaptic decay.» The biological metaphor drives design decisions that pure CS wouldn't — like colour tiers, access dampening, and asymmetric promotion/demotion |
+| **Contradiction as a first-class citizen** | Every other system hides conflicts or avoids creating them. HKG surfaces them as the primary UI for knowledge addition. This is a UX choice, not a technical one — and it's the right one |
+| **Neuro-symbolic, not just neural** | Pure-LLM approaches (full RAG, agentic memory) lack structural reasoning. Pure-symbolic approaches (ontologies, SHACL) lack adaptability. HKG does both in one loop |
+| **MCP-native** | HKG is an MCP server first, a database second. It plugs into any LLM agent that speaks MCP — no SDK, no API key, no proprietary protocol |
+
+## What to Compare Against
+
+| If someone asks | Answer |
+|---|---|
+| «How is this different from LangChain/LlamaIndex RAG?» | RAG retrieves. HKG retrieves + reasons + tells you if the result contradicts other knowledge + shows you how much to trust it. RAG is a library. HKG is a living knowledge base. |
+| «How is this different from Neo4j/DataHub?» | Knowledge graphs are manually curated and static. HKG self-organizes from usage. No one needs to decide which documents are important — the system learns it from read traffic. |
+| «Why not just use embeddings + LLM for everything?» | Embeddings measure similarity, not structural truth. «What breaks if X changes» requires graph reasoning, not semantic search. And LLMs hallucinate — HKG tells them when their new claim contradicts existing knowledge. |
+| «How does this compare to Glean?» | Glean unifies search across SaaS tools. HKG is for structured technical knowledge within a codebase. Glean doesn't do inference, doesn't detect contradictions between documents, and doesn't model confidence over time. |
