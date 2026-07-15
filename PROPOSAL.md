@@ -1135,13 +1135,22 @@ The LLM or human can explicitly resolve a contradiction:
 ```
 rag_accept_claim(contradiction_id, winner_id)
   → winner's confidence → 0.95 (verified by acceptance)
-  → loser marked as deprecated, points to winner
-  → CONTRADICTS edge stored as audit trail
+  → loser marked as contradicted, ALL relations severed
+  → loser moved to archive (excluded from search, inference, graph traversals)
+  → loser eligible for deletion by cleanup cron
+  → CONTRADICTS edge stored as audit trail pointing winner → loser
 
 rag_reject_claim(contradiction_id)
-  → both claims remain, contradiction closed as «irreconcilable»
+  → both claims remain active, contradiction closed as «irreconcilable»
   → both documents carry a warning annotation
 ```
+
+When a claim loses, it is **fully ejected** from the active knowledge
+graph — not suppressed, not deprecated, but removed from circulation.
+It exists only in the archive as an audit record. A cleanup cron can
+purge archived contradicted documents after a retention period (default:
+90 days). This keeps the active graph clean: defeated claims do not
+linger, do not accumulate authority, and do not pollute future queries.
 
 Unresolved contradictions persist indefinitely. A document involved
 in an unresolved contradiction shows a warning badge in search results.
@@ -1153,7 +1162,7 @@ This is intentional: the HKG refuses to hide unresolved conflict.
 |---|---|---|
 | `rag_detect_contradictions` | `scope?: "all" \| "entity" \| "relation", entity_id?: str` | Run contradiction rules, return list of conflicts with authority context |
 | `rag_get_contradictions` | `entity_id: str` | All unresolved contradictions involving this entity |
-| `rag_accept_claim` | `contradiction_id: str, winner_id: str` | Explicitly accept one claim as correct; the other is deprecated |
+| `rag_accept_claim` | `contradiction_id: str, winner_id: str` | Accept winner; loser is ejected to archive, all relations severed, eligible for deletion |
 | `rag_reject_claim` | `contradiction_id: str` | Close contradiction as irreconcilable; both claims coexist with warning |
 
 Search results include contradiction annotations:
@@ -1321,8 +1330,10 @@ high-friction operation by design:
 - The contradiction report is always emitted — never auto-resolved
 - LLM must explicitly call `rag_accept_claim(contradiction_id, winner_id)` —
   a conscious act, not a side effect of adding a document
-- The resolved contradiction edge persists in the graph as an audit
-  trail: who overrode what, when, and why
+- The loser is fully ejected: all relations severed, moved to archive,
+  eligible for deletion after retention period
+- The CONTRADICTS edge persists in the graph as an audit trail:
+  who overrode what, when, and why
 
 This asymmetry — easy to add, hard to override — mirrors how human
 teams treat authoritative documents. Anyone can write a proposal.
@@ -1495,17 +1506,16 @@ authority» is stable over time, even as absolute values inflate.
 Absolute authority is retained for computation; percentile is
 used for presentation in contradiction reports.
 
-### Deprecated Documents Continue Accumulating
+### Archive vs Deletion Trade-off
 
-A document deprecated via `rag_accept_claim` continues accumulating
-authority from residual reads. The deprecated claim silently regains
-weight.
+Ejected documents remain in the archive as audit trail. A cleanup cron
+purges archived contradicted documents after a configurable retention
+period (default: 90 days). The trade-off: too short → loses audit
+history; too long → archive bloat.
 
-**Mitigation:** authority freeze on deprecation. When a document
-is deprecated via `rag_accept_claim`, its authority stops growing.
-The deprecation edge stores the snapshot authority at the time of
-acceptance. If the winning document later decays significantly,
-the contradiction can be reopened.
+**Mitigation:** configurable retention. Critical namespaces (ADRs)
+may have longer retention. Archived documents are excluded from all
+queries, search, and inference — they consume only disk.
 
 ## 5. Contradiction Detection
 
@@ -1526,30 +1536,31 @@ other?» Expensive but acceptable at daily cadence.
 classifier that detects factual contradiction between two chunks
 without invoking the LLM?
 
-### Deprecation Cascade
+### Archive Cascade
 
-Document D is deprecated via `rag_accept_claim`. Fifty inferred edges
-had D as a premise. Should they all be deprecated? Recalculated?
-Deleting them loses the inference work; keeping them propagates a
-defeated premise.
+Document D is ejected to archive via `rag_accept_claim`. Fifty inferred
+edges had D as a premise. Those edges are now dangling — their premise
+is no longer in the active graph.
 
-**Mitigation:** lazy re-evaluation. Inferred edges are not deprecated
-— they are recalculated on next access. If premises changed, the
-edge's confidence updates. No permanent deprecation state for inferred
-edges; only stated edges can be deprecated.
-
+**Mitigation:** lazy re-evaluation. Inferred edges are recalculated on
+next access. If a premise is archived, the edge's confidence drops to
+the min of remaining premises. If no premises remain, the edge is
+deleted. No permanent damage — inference is always computed from the
+current active graph.
 ### Irreversible Resolutions
 
 A contradiction is resolved via `rag_accept_claim`, a winner is chosen,
-the loser is deprecated. Six months later, the winner itself is found
-wrong. The loser is still deprecated. The system has no mechanism to
-reopen old resolutions.
+the loser is ejected to archive. Six months later, the winner itself
+is found wrong. The loser is still in archive, unreachable by normal
+queries. The system has no mechanism to restore it if the resolution
+was mistaken.
 
 **Mitigation:** reversible resolutions with TTL. Each resolution
 stores a snapshot of both claims' authority at resolution time.
-If the loser's authority later exceeds the winner's (or the winner
-is itself contradicted), the resolution is reopened. Deprecation is
-a soft commitment, not a permanent judgment.
+If the winner is itself contradicted, the resolution is reopened.
+The loser can be restored from archive via `rag_restore_claim(doc_id)`.
+Archive retention ensures the document still exists on disk.
+Resolution is a soft commitment, not a permanent judgment.
 
 ## 6. Global Risks
 
