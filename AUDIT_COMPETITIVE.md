@@ -44,7 +44,7 @@
 | **MCP транспорт** | Нет | **Да (stdio + SSE)** |
 | **Эмбеддинги** | OpenAI GPT | BGE-M3 / Ollama / OpenRouter |
 | **Стоимость индексации** | Высокая | Низкая |
-| **Community reports** | Да | Нет |
+| **Community reports** | Да (LLM map-reduce) | Да (Leiden, k-NN граф) |
 | **Визуализация** | Нет | Да (vis.js) |
 | **Сложность кода** | Высокая (тысячи строк) | Умеренная |
 
@@ -56,12 +56,12 @@
 | **Звёзды GitHub** | 37.5k | — |
 | **Архитектура** | Dual-level KG + vector | RRF hybrid + граф |
 | **MCP транспорт** | Нет | **Да** |
-| **WebUI** | **Да** | Нет |
+| **WebUI** | **Да** | Да (vis.js) |
 | **Multimodal** | **Да (MinerU/Docling)** | Нет |
 | **Режимы запросов** | 5 (local/global/hybrid/naive/mix) | semantic/BM25/hybrid |
 | **Storage backends** | PostgreSQL, MongoDB, Neo4j, OpenSearch | Qdrant + SQLite/PG |
 | **Reranker** | Да | Да |
-| **Incremental update** | **Да** | Нет |
+| **Incremental update** | **Да** | Да (rag_update_document, rag_delete_document) |
 
 **graphrag преимущества**: MCP транспорт, легче, BGE-M3, лучше для русскоязычных проектов (language-aware alpha)
 
@@ -151,13 +151,11 @@
 
 ### Слабые стороны (Weaknesses)
 1. **Версия 0.2.0** — ранняя стадия зрелости
-2. **Нет WebUI** — только CLI/HTTP/MCP (добавлен в PLAN.md как Фаза 3.5)
-3. **Нет community reports** — как в MS GraphRAG
-4. **Ограниченные storage backend** — только Qdrant + SQLite/PG
-5. **Нет multimodal** — изображения, таблицы, PDF
-6. **Нет инкрементального обновления графа**
-7. **Нет multi-tenancy**
-8. **Нет тестов производительности** (benchmarks)
+2. **Нет community reports** (текстовых саммари) — как в MS GraphRAG; есть Leiden-кластеризация, но нет LLM-саммари по сообществам
+3. **Ограниченные storage backend** — только Qdrant + SQLite/PG
+4. **Нет multimodal** — изображения, таблицы, PDF
+5. **Нет multi-tenancy**
+6. **Нет тестов производительности** (benchmarks)
 
 ### Возможности (Opportunities)
 1. MCP протокол набирает популярность (Claude, Cline, IDE)
@@ -177,16 +175,14 @@
 ## 4. Рекомендации по улучшению
 
 ### Критические (для конкурентоспособности)
-1. **Incremental graph updates** — без этого проигрыш LightRAG
-2. **WebUI** — для non-technical пользователей
-3. **CI/CD бенчмарки** — NDCG@k, latency, throughput
-4. **Multi-tenancy** — для enterprise
+1. **Community reports** (текстовые саммари по Leiden-сообществам) — для alignment с MS GraphRAG
+2. **CI/CD бенчмарки** — NDCG@k, latency, throughput
+3. **Multi-tenancy** — для enterprise
 
 ### Важные
-5. **Поддержка Neo4j как graph backend**
-6. **Community detection / reports** (алгоритмы Лувена)
-7. **Multimodal** (PDF, изображения — через OCR/vision)
-8. **Больше storage backends** (PostgreSQL vector, Redis, MongoDB)
+4. **Поддержка Neo4j как graph backend**
+5. **Multimodal** (PDF, изображения — через OCR/vision)
+6. **Больше storage backends** (PostgreSQL vector, Redis, MongoDB)
 
 ### Дополнительные
 9. **Публичный roadmap** (GitHub Projects)
@@ -210,4 +206,4 @@
 3) лёгкости и низкой стоимости индексации
 4) on-premise развёртывания
 
-**Риски**: LightRAG и Microsoft быстро догонят по MCP. Нужно срочно развивать incremental updates, WebUI и multi-tenancy.
+**Риски**: LightRAG и Microsoft быстро догонят по MCP. Нужно развивать community reports (текстовые саммари), multi-tenancy и бенчмарки.

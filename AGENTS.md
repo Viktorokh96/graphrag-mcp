@@ -59,7 +59,8 @@ uv run python3 -m src.cli graph-viz -o rag_data/graph.html
 
 | Файл | Описание |
 |------|----------|
-| `src/mcp_server.py` | MCP-сервер (JSON-RPC stdio + SSE) |
+| `src/mcp_server.py` | MCP-сервер (stdio + SSE транспорт) |
+| `src/webui/index.html` | WebUI (graph + documents, vis.js) |
 | `src/http_api.py` | FastAPI HTTP REST API (порт 8765) |
 | `src/rag.py` | RAGSystem — оркестратор поиска |
 | `src/embeddings.py` | Эмбеддинги: BGE-M3 / Ollama / OpenRouter |
@@ -239,6 +240,18 @@ score = (1-alpha)/(K + rank_bm25 + 1)                                # bm25-only
 **Query expansion:** `query_expansion=true` → N парафразов Qwen3-1.8B → каждый search → RRF слияние.
 
 **Candidate expansion:** каждый канал возвращает `max(k*3, 20)` кандидатов перед фьюжном.
+
+## WebUI
+
+Визуальный интерфейс для просмотра графа и документов. Доступен на `/webui/` при запуске HTTP API:
+
+```bash
+# Запуск HTTP API (включает WebUI)
+uv run python3 -m src.cli --http
+# WebUI: http://localhost:8765/webui/
+```
+
+WebUI (`src/webui/index.html`): граф (vis.js), список документов, поиск, добавление/удаление.
 
 ## Docker
 

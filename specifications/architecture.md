@@ -22,7 +22,7 @@ RAG-сервер с гибридным поиском (dense + sparse + граф
 | `QueryExpander` | `src/query_expander.py` | Multi-query expansion через Ollama LLM |
 | `GraphExtractor` | `src/graph_extractor.py` | Авто-извлечение графа (LLM / spaCy NER) |
 | `StructuredIndexer` | `src/structured_indexer.py` | Индексация repomix JSON |
-| `Chunker` | `src/chunker.py` | Semantic splitting (не используется в production) |
+| `Chunker` | `src/chunker.py` | Semantic splitting (>8192 токенов), интегрирован в add_document/add_file |
 | `MCP Server` | `src/mcp_server.py` | JSON-RPC stdio + SSE транспорт |
 | `HTTP API` | `src/http_api.py` | FastAPI REST + MCP SSE |
 | `RAGConfig` | `src/config.py` | Конфигурация из env |

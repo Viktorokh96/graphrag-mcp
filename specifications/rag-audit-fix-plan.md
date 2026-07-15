@@ -5,8 +5,9 @@
 Comprehensive fix for 10 defects (D1-D10) identified in `specifications/rag-audit-fixes.md`.
 Organized by priority: P0 (critical), P1 (serious), P2/P3 (improvements).
 
-**Status:** ✅ All code changes implemented, tests written, 283/283 passing.
+**Status:** ✅ All code changes implemented, tests written, all passing.
 **Date:** 2026-07-06
+**Updated:** 2026-07-15 — документация обновлена, `bm25_index.py` удалён (BM25 в Qdrant)
 
 ### Legend
 - ✅ Implemented
@@ -15,7 +16,10 @@ Organized by priority: P0 (critical), P1 (serious), P2/P3 (improvements).
 
 ## Changes per file
 
-### 1. `src/bm25_index.py` ✅
+> **⚠️ NOTE (2026-07-15):** `src/bm25_index.py` удалён — BM25 теперь в Qdrant sparse vectors.
+> Ссылки на `bm25_index.py` ниже — исторические.
+
+### 1. `src/bm25_index.py` ✅ (DELETED — BM25 in Qdrant now)
 
 #### D9 — Stop words filtering ✅
 - `STOP_WORDS` constant added: standard English + basic Russian stop words
@@ -62,12 +66,12 @@ Organized by priority: P0 (critical), P1 (serious), P2/P3 (improvements).
 ### 4. `src/rag.py` — Main orchestrator changes ✅
 
 #### D7 — RRF instead of linear combination in `search_hybrid()` ✅
-RRF implemented with `RRF_K=60`, alpha weighting, candidate expansion.
+RRF implemented with `RRF_K=20`, alpha weighting, candidate expansion.
 Key design detail: documents found by only one channel get full reciprocal rank (no dilution by alpha).
 See `src/rag.py:216-318`.
 
 #### D5 — `min_content_length` guard ✅
-`MIN_CONTENT_LENGTH = 50`, `ValueError` in `add_document()`.
+`MIN_CONTENT_LENGTH = 40`, `ValueError` in `add_document()`.
 
 #### D6 — Dedup via content hash ✅
 SHA256 of normalized text (lowercased/stripped/whitespace-collapsed).

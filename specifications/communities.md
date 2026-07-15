@@ -35,7 +35,7 @@
 
 1. Строит k-NN граф из эмбеддингов документов (cosine similarity)
 2. Объединяет с существующими рёбрами графа (max вес при конфликте)
-3. Запускает Louvain community detection
+3. Запускает Leiden community detection (igraph + leidenalg)
 4. Возвращает список сообществ с членами
 5. Кеширует результат (для последующего set_community_names)
 
