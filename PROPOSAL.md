@@ -1833,3 +1833,184 @@ Why this won't be replicated quickly:
 | «How is this different from Neo4j/DataHub?» | Knowledge graphs are manually curated and static. HKG self-organizes from usage. No one needs to decide which documents are important — the system learns it from read traffic. |
 | «Why not just use embeddings + LLM for everything?» | Embeddings measure similarity, not structural truth. «What breaks if X changes» requires graph reasoning, not semantic search. And LLMs hallucinate — HKG tells them when their new claim contradicts existing knowledge. |
 | «How does this compare to Glean?» | Glean unifies search across SaaS tools. HKG is for structured technical knowledge within a codebase. Glean doesn't do inference, doesn't detect contradictions between documents, and doesn't model confidence over time. |
+
+
+# Mathematical Model & Simulation
+
+A formal model validates the system's dynamics before implementation:
+does stratification emerge? Does green inflation occur? At what
+parameter values does the system break?
+
+## State Variables
+
+Each node $i$ in the knowledge graph carries state:
+
+$$S_i(t) = (c_i(t), a_i(t), k_i(t), n_i(t))$$
+
+| Symbol | Meaning | Range | Dynamics |
+|---|---|---|---|
+| $c_i(t)$ | Confidence | $[0, 1]$ | Exponential decay + update resets |
+| $a_i(t)$ | Authority | $[0, \infty)$ | Integral of confidence × colour multiplier |
+| $k_i(t)$ | Colour tier | $\{blue, yellow, green\}$ | Hysteresis automaton |
+| $n_i(t)$ | Access count | $[0, N_{sat}]$ | Incremented on reads, saturates |
+
+## Confidence Dynamics
+
+$$\frac{dc_i}{dt} = -\lambda_i \cdot c_i + u_i(t)$$
+
+where:
+
+$$\lambda_i = \frac{\ln 2}{T_{half} \cdot m_{colour}(k_i) \cdot (1 + r_i \cdot D)}$$
+
+- $T_{half}$ — base half-life (configurable per document type: 30d code, 90d ADR, 180d concept)
+- $m_{colour}(k_i)$ — colour multiplier: blue = 1, yellow = 2, green = 5
+- $r_i = \frac{n_i}{\max(t - t_{last\_update}, 1)}$ — access rate (reads/day)
+- $D$ — dampening factor (default: 7)
+- $u_i(t)$ — update signal: $c_i \to 1.0$ on document edit; 0 otherwise
+
+**Interpretation:** confidence decays exponentially. Colour slows the
+exponent by up to 5×. Frequent reads stretch the effective half-life
+by up to $1 + N_{sat} \cdot D$ ≈ 7000× (theoretical bound; practical
+limit set by saturation).
+
+## Authority Dynamics
+
+$$\frac{da_i}{dt} = c_i(t) \cdot m_{colour}(k_i(t))$$
+
+Authority is the cumulative integral of confidence, weighted by the
+colour multiplier active at each moment. It is monotonic non-decreasing.
+A green document accumulates authority 5× faster than a blue document
+at the same confidence.
+
+At steady state (constant confidence $c_i^*$, constant colour):
+
+$$a_i(t) = a_i(0) + c_i^* \cdot m_{colour} \cdot t$$
+
+The authority gap between a green ADR and a blue proposal, both at
+stable confidence, widens linearly at rate $5c_{adr} - 1c_{prop}$ per day.
+
+## Colour Automaton (Hysteresis)
+
+$$k_i(t + \Delta) = \begin{cases} green & \text{if } c_i(\tau) > 0.8 \;\; \forall \tau \in [t-60d, t] \text{ (60 consecutive days)} \\ yellow & \text{if } c_i(\tau) > 0.5 \;\; \forall \tau \in [t-30d, t] \text{ (30 consecutive days)} \\ blue & \text{otherwise} \end{cases}$$
+
+**Demotion** is instantaneous (no waiting period):
+
+$$c_i < 0.3 \Rightarrow green \to yellow$$
+$$c_i < 0.15 \Rightarrow yellow \to blue$$
+
+**Manual override:** $k_i = green$ regardless of confidence. Returns to
+automatic only via explicit `rag_set_colour(doc_id, "auto")`.
+
+## Analytical Results (Zero-Traffic Limit)
+
+When $r_i = 0$, $u_i = 0$ (no reads, no updates):
+
+$$c_i(t) = c_i(0) \cdot 2^{-t / T_{eff}}$$
+
+where $T_{eff} = T_{half} \cdot m_{colour}$.
+
+| Document | $T_{half}$ | Colour | $T_{eff}$ | $c_i$ after 1 year | Tier |
+|---|---|---|---|---|---|
+| ADR | 90 days | green | 450 days | 0.57 | stable |
+| Code extraction | 30 days | blue | 30 days | 0.0002 | stale |
+| Proposal | 60 days | blue | 60 days | 0.015 | stale |
+
+**Result:** the 2850× gap in residual confidence between a green ADR
+and a blue code extraction after one year confirms that stratification
+emerges naturally, even with zero traffic.
+
+## Analytical Results (Steady-State with Reads)
+
+With constant access rate $r_i$ and no updates, confidence stabilises at:
+
+$$c_i^* = \frac{0}{\lambda_i} \to 0 \quad \text{(decays to zero without updates)}$$
+
+With periodic updates (every $T_{update}$ days, confidence resets to 1.0):
+
+$$c_i^{\min} = 2^{-T_{update} / T_{eff}}$$
+
+| $T_{update}$ | Green ADR ($T_{eff}=450$d) | Blue proposal ($T_{eff}=60$d) |
+|---|---|---|
+| Every 7 days | $c_i^{\min} = 0.989$ | $c_i^{\min} = 0.922$ |
+| Every 30 days | $c_i^{\min} = 0.955$ | $c_i^{\min} = 0.707$ |
+| Every 90 days | $c_i^{\min} = 0.871$ | $c_i^{\min} = 0.354$ |
+| Every 365 days | $c_i^{\min} = 0.570$ | $c_i^{\min} = 0.015$ |
+
+**Result:** a green ADR updated once a year stays stable ($c > 0.5$).
+A blue proposal updated once a year decays to stale. The colour
+multiplier makes the difference between «survives neglect» and
+«must be actively maintained.»
+
+## Analytical Results (Contradiction Gap)
+
+For two documents with contradictory claims:
+
+$$\Delta a(t) = \int_0^t [c_A(\tau) \cdot m_A - c_B(\tau) \cdot m_B] \, d\tau$$
+
+If ADR (green, $m_A = 5$) and proposal (blue, $m_B = 1$) both have
+confidence oscillating around 0.7:
+
+$$\Delta a(t) \approx 0.7 \cdot (5 - 1) \cdot t = 2.8t$$
+
+After 30 days: $\Delta a \approx 84$. After 180 days: $\Delta a \approx 504$.
+
+**Result:** the authority gap widens linearly even when both documents
+have identical confidence. Freshness cannot close the gap — only
+extended superior confidence or manual intervention can.
+
+## Numerical Simulation
+
+### Setup
+
+- 1000 nodes, 5000 edges, 90-day simulated window
+- Read events: Poisson process with per-node intensity $\nu_i$
+  (log-normal distribution: most nodes low traffic, few nodes high traffic)
+- Update events: 10% of nodes updated randomly every 7 days
+- Parameters: $T_{half}$ = 60d default, $D = 7$, $N_{sat} = 1000$, green quota = 20%
+
+### Questions to Answer
+
+1. **Stratification:** does the node population separate into clear
+   confidence tiers by day 90?
+2. **Green inflation:** what fraction of nodes are green at day 90?
+   Does the 20% quota activate?
+3. **Authority distribution:** is authority power-law distributed
+   (few nodes dominate) or uniform?
+4. **Burst recovery:** after a 100-read burst on day 45, how long
+   until access count saturates and normal decay resumes?
+5. **Parameter sensitivity:** at what $T_{half}$ does the system
+   fail to stratify (all nodes in same tier)?
+
+### Expected Results
+
+- Confidence stratification visible by day 30–45
+- Green quota activates by day 60–75 with default parameters
+- Authority follows power law: top 5% of nodes hold ~60% of total authority
+- Burst effects dissipate within 14 days (saturation limit reached,
+  decay overtakes access dampening)
+
+## Implementation
+
+```python
+# simulator.py — 500 lines
+import numpy as np
+from scipy.integrate import solve_ivp
+from scipy.stats import poisson
+
+class HKGSimulator:
+    def __init__(self, n_nodes=1000, n_edges=5000, ...): ...
+    def step(self, days=1): ...
+    def stats(self) -> dict: ...
+```
+
+The simulator operates in discrete time (1-day steps). Each step:
+1. Sample read events from Poisson(ν_i)
+2. Sample update events (10% of nodes every 7 days)
+3. Update confidence via analytic solution (exponential decay per day)
+4. Update authority via Euler integration
+5. Evaluate colour transitions
+6. Check green quota and apply demotions if needed
+7. Record stats
+
+This is a validation tool, not production code. It answers «do the
+parameters work?» before a single line of production code is written.
