@@ -619,6 +619,118 @@ ALTER TABLE documents ADD COLUMN confidence_colour_since REAL;          -- unix 
 ALTER TABLE documents ADD COLUMN confidence_colour_manual INTEGER DEFAULT 0;  -- 1 = set by rag_set_color
 ```
 
+### Authority Score (Cumulative Reputation)
+
+Confidence is a point-in-time snapshot — it jumps to 1.0 on every update
+and decays between reads. This makes it a poor tiebreaker for contradictions:
+a freshly updated proposal (confidence 1.0) would beat a stable ADR
+(confidence 0.7) in a head-to-head comparison, even though the ADR has
+months of accumulated trust.
+
+**Authority** is a separate, monotonic score that grows over time as a
+function of confidence. It represents **cumulative reputation** — how
+much the system has trusted this document over its lifetime.
+
+```
+authority(t) = ∫ confidence(τ) × colour_multiplier dτ
+```
+
+In discrete form, authority is updated lazily on every read:
+
+```python
+def update_authority(conf: Confidence, now: float) -> float:
+    """Add confidence-weighted time delta to authority."""
+    delta_t = (now - conf.authority_last_updated) / 86400  # days
+    if delta_t <= 0:
+        return conf.authority
+    colour_mult = {"blue": 1.0, "yellow": 2.0, "green": 5.0}[conf.colour]
+    conf.authority += conf.value * colour_mult * delta_t
+    conf.authority_last_updated = now
+    return conf.authority
+```
+
+#### Key Properties
+
+| Property | Confidence | Authority |
+|---|---|---|
+| Direction | Up and down | Monotonic — only grows |
+| Meaning | «How fresh is this right now?» | «How much has the system trusted this over time?» |
+| Reacts to | Updates, reads, time | Integral of confidence over time |
+| Jumps on | Document edit → 1.0 | Nothing — authority is smooth |
+| Used for | Tier classification, search ranking | Contradiction resolution, core/periphery classification |
+
+#### Effect
+
+```
+Document A (ADR, green, confidence 0.85, 180 days old):
+  authority ≈ 0.85 × 5.0 × 180 ≈ 765
+
+Document B (proposal, blue, confidence 1.0, 2 days old):
+  authority ≈ 1.0 × 1.0 × 2 ≈ 2
+
+Contradiction: A vs B. Confidence says B wins (1.0 > 0.85).
+Authority says A wins (765 >> 2). System picks A.
+```
+
+Authority captures what confidence cannot: **structural, accumulated
+trustworthiness that survives momentary freshness spikes.**
+
+#### Manual Seeding
+
+```python
+rag_set_authority(doc_id="auth-service/ADR-003", authority=500)
+```
+
+Use case: ADRs, architecture docs, and verified reference material
+get seeded authority during indexing — no need to wait months for
+the integral to accumulate.
+
+#### Contradiction Resolution via Authority
+
+Replaces the confidence-based tiebreaker in Proposal #4:
+
+```
+For each contradiction (claim_A, claim_B):
+    winner = argmax(authority(claim) for claim in [claim_A, claim_B])
+    loser  = argmin(...)
+
+    If authority(winner) / authority(loser) > DOMINANCE_RATIO (default: 3.0):
+        → winner marked preferred, loser suppressed
+    Else:
+        → ratio too close, flagged for LLM review
+```
+
+Using authority instead of confidence for contradiction resolution
+fixes the core problem: a new document with confidence 1.0 can no
+longer shout down a proven document with confidence 0.7.
+
+#### MCP Tools (additions)
+
+| Tool | Signature | Description |
+|---|---|---|
+| `rag_get_authority` | `doc_id: str` | Return `{authority, colour, last_updated}` |
+| `rag_set_authority` | `doc_id: str, authority: float` | Seed or override authority score |
+| `rag_list_authoritative` | `limit?: int, colour?: str` | Top documents by authority, optionally filtered by colour |
+
+Confidence responses include authority:
+
+```json
+{
+  "doc_id": "auth-service/ADR-003",
+  "confidence": {"value": 0.85, "tier": "fresh", "colour": "green"},
+  "authority": 765.2
+}
+```
+
+#### Persistence
+
+```sql
+ALTER TABLE documents ADD COLUMN authority REAL DEFAULT 0.0;
+ALTER TABLE documents ADD COLUMN authority_last_updated REAL;
+ALTER TABLE edges ADD COLUMN authority REAL DEFAULT 0.0;
+ALTER TABLE edges ADD COLUMN authority_last_updated REAL;
+```
+
 ### MCP Tools
 
 | Tool | Signature | Description |
@@ -952,52 +1064,46 @@ def detect_inferred_vs_stated(g: nx.DiGraph) -> list[Contradiction]:
     ...
 ```
 
-### Resolution: Freshness Wins
+### Resolution: Authority Wins
 
 When a contradiction is detected, the system does NOT delete either fact.
-Instead it applies the **freshness tiebreaker**:
+Instead it applies the **authority tiebreaker** — cumulative reputation
+decides, not the momentary confidence snapshot:
 
 ```
 For each contradiction (claim_A, claim_B):
-    winner = argmax(confidence(claim) for claim in [claim_A, claim_B])
+    winner = argmax(authority(claim) for claim in [claim_A, claim_B])
     loser  = argmin(...)
 
-    If confidence(winner) - confidence(loser) > CLEAR_VICTORY_THRESHOLD (0.3):
+    If authority(winner) / authority(loser) > DOMINANCE_RATIO (default: 3.0):
         → winner marked as "preferred", loser suppressed in search
     Else:
-        → both kept, flagged for LLM review
+        → ratio too close, flagged for LLM review
 ```
 
-This is the Hebbian principle applied to conflict resolution: **the fact
-that has been verified, read, and updated more recently is the one that
-survives**. The old fact isn't deleted — it persists with a `suppressed`
-flag and a pointer to the winning fact.
+Authority is used instead of confidence because it is **immune to freshness
+spikes**. A newly updated proposal with confidence 1.0 and authority 2 does
+not beat a six-month-old ADR with confidence 0.7 and authority 765. The
+Hebbian principle still holds — the document that has accumulated more
+trust over its lifetime wins — but the metric is cumulative, not point-in-time.
 
 ### LLM Review (Cognitive Dissonance Resolution)
 
-When confidence is too close to call or the contradiction is high-impact
+When authority ratio is too close to call or the contradiction is high-impact
 (e.g., architecture-level), the LLM co-pilot is invoked:
 
 ```
 Contradiction detected:
-  Claim A [confidence 0.72]: "AuthService issues JWT tokens"
-    Source: ADR-003, last updated 2026-06-15
-  Claim B [confidence 0.68]: "AuthService uses session cookies"
-    Source: auth/README.md, last updated 2026-06-20
+  Claim A [authority 765, confidence 0.72]: "AuthService issues JWT tokens"
+    Source: ADR-003, last updated 2026-06-15, colour green
+  Claim B [authority 12, confidence 0.68]: "AuthService uses session cookies"
+    Source: auth/README.md, last updated 2026-06-20, colour blue
 
-Resolution: Close confidence gap (Δ = 0.04).
-→ Requesting LLM verification against source code.
+Resolution: authority ratio 765 / 12 = 63.8 → clear winner (>> 3.0).
+→ Claim A automatically preferred. Claim B suppressed.
+→ No LLM review needed.
 
-LLM inspects auth-service/src/auth/handler.py:
-  "Found JWT token issuance in /login endpoint.
-   No session cookie logic detected.
-   → Claim A confirmed. Claim B suppressed."
-```
-
-After LLM resolution:
-- Winner confidence → 0.95 (verified)
-- Loser gets `suppressed: true`, `suppressed_by: "LLM-verify-2026-07-15"`
-- A `CONTRADICTS` edge is added between the two claims, resolved
+(If ratio were < 3.0, LLM would inspect source code to break the tie.)
 
 ### New MCP Tools
 
@@ -1014,24 +1120,26 @@ Search results include contradiction annotations:
   "doc_id": "auth/README.md",
   "text": "AuthService uses session cookies...",
   "confidence": {"value": 0.68, "tier": "stable"},
+  "authority": 12.3,
   "contradiction": {
     "status": "suppressed",
     "winner": "ADR-003-auth-flow.md",
-    "reason": "LLM verification against source code on 2026-07-15",
-    "delta": 0.04
+    "winner_authority": 765.0,
+    "ratio": 62.2,
+    "reason": "Authority ratio 62.2 >> 3.0 — automatic resolution"
   }
 }
 ```
 
 ### Integration with Existing Layers
 
-**Confidence decay feeds contradiction resolution:**
+**Authority feeds contradiction resolution:**
 When a contradiction is detected, the system records it but doesn't
-immediately resolve. Time works for the system — the winning fact
-gets read more (slower decay), the losing fact decays faster.
+immediately resolve. Time works for the system — the winning fact's
+authority continues to accumulate, widening the gap against the loser.
 After a grace period (default: 7 days), unresolved contradictions
-are re-evaluated: the gap may have widened enough for automatic
-resolution.
+are re-evaluated: the authority ratio may have crossed the 3.0 threshold
+for automatic resolution.
 
 **Inference engine provides contradiction rules:**
 Contradiction rules are first-class citizens in the rule registry,
@@ -1042,7 +1150,8 @@ contradiction can suppress further inference on dubious premises.
 **LLM co-pilot closes the loop:**
 The same `rag_verify_edge` tool from Proposal #2 is used to verify
 the winning claim against source code. Successful verification
-boosts confidence to 0.95 and marks the contradiction resolved.
+boosts confidence to 0.95, marks the contradiction resolved, and
+updates authority with the verified confidence weight.
 
 ### Files
 
@@ -1058,13 +1167,12 @@ boosts confidence to 0.95 and marks the contradiction resolved.
 1. Repo sync extracts: "AuthService" HAS_TYPE "Service"
 2. ADR-003 ingested: "AuthService" HAS_TYPE "Module"
 3. Contradiction rule fires: type_clash(AuthService, Service, Module)
-4. Freshness check:
-     ADR-003 confidence = 0.94 (green, read frequently)
-     Extracted fact confidence = 0.85 (blue, just synced)
-   Δ = 0.09 < 0.3 → too close to call automatically
-5. Flagged for LLM review
-6. LLM inspects code: AuthService is a deployable unit → type = Service
-7. "Module" claim suppressed. ADR-003 updated. Contradiction resolved.
+4. Authority check:
+     ADR-003 authority = 765 (green, 180 days of accumulated trust)
+     Extracted fact authority = 1.7 (blue, just synced 2 days ago)
+   Ratio = 765 / 1.7 = 450 >> 3.0 → resolved automatically
+5. "Module" claim suppressed. ADR-003 confirmed as authoritative.
+6. No LLM review needed — authority gap is decisive.
 ```
 
 Without contradiction detection: the LLM consumer receives both facts
@@ -1076,6 +1184,6 @@ and wrong. With it: the conflict is resolved before the consumer sees it.
 | Risk | Mitigation |
 |---|---|
 | False contradictions: legitimate synonyms flagged as conflicts | Ontology-defined synonym relations; `EQUIVALENT_TO` edges prevent clash detection |
-| Over-eager suppression: new correct fact suppressed by old high-confidence fact | New facts start at confidence 1.0; grace period gives them time to earn reads before being compared |
+| Over-eager suppression: new correct fact suppressed by old high-authority fact | New facts start with authority 0; grace period (7 days) gives them time to accumulate before ratio comparison. Manual `rag_set_authority` can bootstrap critical new docs |
 | Contradiction cascade: resolving one contradiction triggers more | Single-pass resolution per cycle; max resolution depth |
-| LLM review cost: every contradiction invokes LLM | Only high-impact or close-call (Δ < 0.3) contradictions trigger LLM. Clear winners resolve automatically |
+| LLM review cost: every contradiction invokes LLM | Only close authority ratios (< 3.0) or high-impact contradictions trigger LLM. Clear winners (ratio > 3.0) resolve automatically |
