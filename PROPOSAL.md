@@ -842,3 +842,38 @@ The LLM can now construct an answer that:
 | Reasoning | Questions beyond semantic search | Datalog inference, transitive closure |
 | Confidence | Staleness invisible to LLM | Exponential decay + access dampening |
 | **Together** | **System self-calibrates from usage** | Core emerges, archive settles, LLM sees freshness signal in every result |
+
+
+# Naming: Hebbian Knowledge Graph (HKG)
+
+The composition of all three proposals produces a system that is qualitatively
+different from classical RAG. It is not merely a retrieval engine — it is a
+**self-regulating, neuro-symbolic knowledge base** with the following
+emergent properties:
+
+| Property | Mechanism |
+|---|---|
+| Memory | Confidence decay — documents remember their usage history |
+| Forgetting | Exponential decay — unused content fades, never deleted |
+| Consolidation | Stability tiers — structurally important knowledge resists decay |
+| Associative reasoning | Inference engine — new facts derived from existing ones |
+| Meta-cognition | LLM co-pilot — verifies inferences against ground truth, proposes rules |
+| Self-organization | Core/periphery/archive emerges without a curator |
+| Homeostasis | System trends toward equilibrium: new content cools, core consolidates, noise fades into background |
+
+The name **Hebbian Knowledge Graph** reflects the core design principle:
+
+> *Neurons that fire together, wire together. Cells that don't, fade.*
+
+- **Hebbian** — the system strengthens knowledge that is used and weakens
+  knowledge that is not, mirroring Hebbian plasticity in biological neural
+  networks. Read traffic is the signal; exponential decay is the forgetting
+  curve; stability tiers are metaplasticity — the structural resistance to
+  weakening that strong synapses acquire over time.
+- **Knowledge Graph** — entities and typed relations form the structural
+  backbone. Inference derives new facts. The ontology declares what kinds
+  of things exist and how they relate.
+
+An HKG is to a knowledge base what long-term potentiation is to a synapse:
+it is not a static store — it is a living structure that calibrates itself
+through use.
