@@ -346,3 +346,264 @@ OVERRIDES(C, M) :-
 Souffle runs as a subprocess; the Python `reasoner.py` shell becomes a thin
 wrapper that serializes facts to CSV, invokes `souffle`, and loads results
 back into NetworkX.
+
+
+# PROPOSAL: Confidence Decay Model for Knowledge Freshness
+
+## Problem
+
+Not all documents in RAG are equally trustworthy. Some are actively maintained,
+frequently consulted cornerstones of the system. Others are stale, deprecated,
+or describe code that no longer exists. Yet the current system treats them as
+equal — a chunk from a document last updated six months ago ranks the same as
+one verified yesterday.
+
+We need a **freshness signal** that:
+- Decays naturally over time
+- Slows its decay when a document is actively read (sign of continued relevance)
+- Resets when a document is updated (sign of active maintenance)
+- Never deletes anything — just annotates low-confidence content
+- Lets the consuming agent decide: trust, or verify from source
+
+This is not cache eviction. Nothing is ever removed. Confidence is metadata
+that travels with every search result and graph traversal, giving the LLM
+consumer a signal: «this answer is based on well-maintained knowledge» vs
+«this is from a rarely-visited corner of the docs — double-check it».
+
+## Related Work
+
+**Google Knowledge Vault (2014):** every extracted fact carries a confidence
+score derived from source reliability, extraction freshness, and corroboration
+count. Facts never disappear — their confidence drifts.
+
+**Wikidata:** every statement has `rank` (preferred / normal / deprecated).
+Deprecated statements persist indefinitely with a «no longer current» marker.
+
+**Adaptive TTL (RFC 8767):** DNS resolvers may extend a record's lifetime
+beyond its TTL if the authoritative server is unreachable, relying on the
+record's historical stability as a trust proxy.
+
+**Truth Discovery (Li et al., 2016):** iterative models that jointly estimate
+source reliability and fact confidence, with recency-weighted evidence.
+
+**LRU cache eviction (inverted):** instead of evicting cold items, we keep
+them but lower their confidence. Frequent access acts as a soft refresh —
+the opposite of LRU's «unused → evict».
+
+Our model differs from all of these in one key aspect: **decay slows with
+use, not just with recency of update**. A document that is read daily decays
+slower than one that was updated last week but never consulted. This turns
+read traffic into a first-class freshness signal.
+
+## Solution
+
+### Core Model
+
+Every node and edge in the knowledge graph carries a `Confidence` record:
+
+```python
+@dataclass
+class Confidence:
+    value: float            # [0.0, 1.0]
+    last_access: float      # unix timestamp
+    last_update: float      # unix timestamp
+    access_count: int       # total explicit reads
+    half_life_days: float   # configurable per document type
+```
+
+### Decay Function
+
+Exponential decay with access-based dampening:
+
+```
+decay(conf, now) = conf.value * 0.5 ^ (age_days / effective_half_life)
+
+where:
+    age_days           = (now - conf.last_update) / 86400
+    access_rate        = conf.access_count / max(age_days, 1)
+    effective_half_life = conf.half_life_days * (1 + access_rate * DAMPENING_FACTOR)
+```
+
+- `half_life_days` — base half-life. Default: 30 days for code docs, 90 for ADRs, 180 for concept docs.
+- `DAMPENING_FACTOR` — how strongly frequent access slows decay. Default: 7 (so daily access roughly doubles the half-life).
+- Decay is computed **lazily on read**, not via a background job. Thread-safe via atomic timestamp updates.
+
+**Why exponential decay with access dampening:**
+- Exponential models real-world knowledge staleness better than linear — a document is most likely to go stale shortly after its last update, then stabilizes
+- Access dampening reflects the «wisdom of the crowd»: if many agents consult this document and nobody edits it, it's probably still correct
+- No background sweep needed — confidence is always current when read
+
+### Access Counting
+
+| Event | Effect on confidence |
+|---|---|
+| `rag_get_document(doc_id)` — explicit full read | `access_count += 1`, `last_access = now` |
+| `rag_get_related(node_id)` — graph traversal | `access_count += 1` for the center node, `+= 0.5` for each direct neighbor |
+| `rag_search*` — search hit | `access_count += 0.01` per hit (1/100th of a read). BM25/semantics found it → weak validity signal |
+| `rag_add_document` / `rag_add_relation` — creation | `value = 1.0`, `last_update = now`, `last_access = now` |
+| `rag_update_document` — content change | `value = 1.0`, `last_update = now`, `access_count` preserved |
+| `rag_update_document` — metadata-only change | `value += 0.3` (capped at 1.0), `last_update = now` |
+| `rag_add_relation` — new edge | Edge `value = 1.0`. Node `value` unchanged |
+| `rag_delete_document` / `rag_delete_relation` — removal | Record removed (no confidence to track) |
+
+**Why search hits count as 1/100:** a search match means the document is
+semantically or lexically relevant to a real query. This is a weak but
+genuine signal that the content is still «in play». The 1/100 ratio
+prevents popular but shallow documents from dominating: a document that
+appears in 100 search results but is never opened shouldn't outrank a
+document read 5 times explicitly.
+
+**Noise floor:** `access_count` saturates at `SATURATION_LIMIT` (default: 1000)
+to prevent ancient documents with massive historical traffic from never
+decaying.
+
+### Confidence Tiers
+
+For human and LLM consumption, raw `value` is mapped to a tier:
+
+| Tier | Range | Label | Meaning |
+|------|-------|-------|---------|
+| `fresh` | ≥ 0.8 | «актуально» | Recently updated or heavily consulted. Trust directly. |
+| `stable` | 0.5–0.8 | «стабильно» | No recent changes but regularly read. Likely correct. |
+| `decaying` | 0.2–0.5 | «устаревает» | Not updated or read in a while. Cross-check with source. |
+| `stale` | < 0.2 | «возможно неактуально» | Abandoned corner of the docs. Verify from code before relying. |
+
+### Isolation Model (v1)
+
+Confidence is **per-node, per-edge, independent**. A node's confidence does
+not propagate to its neighbors in v1. Rationale:
+
+- Simpler reasoning: a document is stale, not its entire subgraph
+- Prevents cascading decay: one abandoned doc doesn't drag down everything
+  that links to it
+- The consuming LLM can combine signals itself: «this answer comes from a
+  stable doc that references a stale doc → I should verify the stale part»
+
+**Future (v2): confidence diffusion.** A node linked from many high-confidence
+nodes gets a partial decay slowdown. An edge between two fresh nodes decays
+slower than an edge to a stale node. Requires solving the feedback loop
+problem (read traffic on high-confidence nodes shouldn't inflate their
+neighbors indefinitely).
+
+### MCP Tools
+
+| Tool | Signature | Description |
+|------|-----------|-------------|
+| `rag_get_confidence` | `doc_id: str` | Return `{value, tier, last_access, last_update, half_life_days, trend}` for a document |
+| `rag_get_edge_confidence` | `source_id: str, target_id: str, relation: str` | Return confidence for a specific edge |
+| `rag_list_stale` | `threshold?: float, limit?: int` | List documents below confidence threshold, sorted by most stale first |
+| `rag_confidence_stats` | — | Distribution: `{fresh: N, stable: N, decaying: N, stale: N, total: N}` |
+
+Search results and graph traversals automatically include `confidence` in
+every returned item:
+
+```json
+{
+  "doc_id": "abc123",
+  "text": "...",
+  "score": 0.87,
+  "confidence": {
+    "value": 0.72,
+    "tier": "stable",
+    "trend": "decaying"
+  }
+}
+```
+
+### Integration with Semantic Reasoning
+
+Inferred edges (from Proposal #2) inherit confidence from their source facts:
+
+```
+OVERRIDES(Child, M) confidence = min(
+    IMPLEMENTS(Child, M).confidence,
+    EXTENDS(Child, Parent).confidence,
+    IMPLEMENTS(Parent, M).confidence
+)
+```
+
+An inferred edge is only as trustworthy as its weakest premise. If the
+underlying IMPLEMENTS edge is stale, the OVERRIDES conclusion carries
+that uncertainty forward.
+
+When `rag_verify_edge` is called (LLM verification, Proposal #2, layer 3c),
+a successful verification sets `value = 0.95` and resets `last_update`.
+
+### Persistence
+
+Confidence fields are stored in the SQLite `documents` table:
+
+```sql
+ALTER TABLE documents ADD COLUMN confidence_value REAL DEFAULT 1.0;
+ALTER TABLE documents ADD COLUMN confidence_last_access REAL;
+ALTER TABLE documents ADD COLUMN confidence_last_update REAL;
+ALTER TABLE documents ADD COLUMN confidence_access_count INTEGER DEFAULT 0;
+ALTER TABLE documents ADD COLUMN confidence_half_life_days REAL DEFAULT 30.0;
+```
+
+And in the `edges` table:
+
+```sql
+ALTER TABLE edges ADD COLUMN confidence_value REAL DEFAULT 1.0;
+ALTER TABLE edges ADD COLUMN confidence_last_access REAL;
+ALTER TABLE edges ADD COLUMN confidence_last_update REAL;
+ALTER TABLE edges ADD COLUMN confidence_access_count INTEGER DEFAULT 0;
+```
+
+### Configuration
+
+```bash
+# Default half-life per document type (days)
+RAG_CONFIDENCE_CODE_HALF_LIFE=30
+RAG_CONFIDENCE_ADR_HALF_LIFE=90
+RAG_CONFIDENCE_CONCEPT_HALF_LIFE=180
+RAG_CONFIDENCE_DEFAULT_HALF_LIFE=60
+
+# Access dampening factor (higher = access slows decay more)
+RAG_CONFIDENCE_DAMPENING_FACTOR=7
+
+# Access count saturation limit (prevents immortal docs)
+RAG_CONFIDENCE_SATURATION_LIMIT=1000
+```
+
+### Example Scenario
+
+**Question:** «Как работает аутентификация?»
+
+Search returns two documents:
+
+| Doc | Score | Confidence | Tier |
+|-----|-------|-----------|------|
+| `auth-architecture` (ADR) | 0.89 | 0.94 | fresh |
+| `old-auth-proposal` (design doc) | 0.81 | 0.31 | decaying |
+
+Both are semantically relevant, but `old-auth-proposal` hasn't been read in
+3 months and was last updated 5 months ago. The LLM consumer sees the tier
+labels and decides:
+- Base answer on `auth-architecture`
+- Optionally mention `old-auth-proposal` with a caveat: «вот старая версия
+  дизайна, возможно устарела — сверьтесь с кодом»
+
+Without confidence decay, both documents would appear equally authoritative.
+
+### Files
+
+| File | What |
+|------|------|
+| `src/confidence.py` | `Confidence` dataclass, decay function, tier classifier, lazy evaluation |
+| `src/document_store.py` | Schema migration (new columns), access/update hooks |
+| `src/graph_store.py` | Edge confidence columns, access hooks for `get_related` |
+| `src/mcp_server.py` | New tools: `rag_get_confidence`, `rag_list_stale`, `rag_confidence_stats` |
+| `src/rag.py` | Inject confidence into search results and graph traversals |
+| `tests/test_confidence.py` | Decay math, saturation, search-hit fractional counting |
+
+### Risks and Mitigations
+
+| Risk | Mitigation |
+|------|-----------|
+| Feedback loop: high confidence → more reads → even higher confidence | Access only slows decay, never raises confidence above the post-update value. Only updates reset to 1.0 |
+| Feedback loop: high confidence → more search hits → more access points | Search hit contribution is 1/100 vs 1 for explicit read. Marginal impact |
+| Ancient docs with huge historical traffic never decay | `access_count` saturates at `SATURATION_LIMIT` (1000). Beyond that, additional access doesn't slow decay further |
+| Half-life choice is arbitrary | Per-type defaults (code=30d, ADR=90d, concept=180d), overridable via env. Empirical tuning via `rag_confidence_stats` histogram |
+| Write amplification on every read | Confidence recomputed lazily on read, not on access. The access counter is an atomic increment; decay is computed only when `value` is requested |
+| Low-value documents are never cleaned up | This is a feature, not a bug. `rag_list_stale(threshold=0.1)` lets an analyst or cron job decide what to archive. Nothing is ever auto-deleted |
