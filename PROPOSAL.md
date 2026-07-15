@@ -2014,3 +2014,177 @@ The simulator operates in discrete time (1-day steps). Each step:
 
 This is a validation tool, not production code. It answers «do the
 parameters work?» before a single line of production code is written.
+
+
+---
+
+# Orchestrator Analysis: Verdict & Market Assessment
+
+Date: 2026-07-15
+Reviewer: Orchestrator (big-pickle)
+
+## Executive Summary
+
+The proposals are **not garbage** — they are ambitious, well-reasoned, and
+address real gaps in the RAG market. The mathematical model is rigorous,
+the philosophy ("highlight, don't resolve" for contradictions) is sound,
+and the competitive moats are genuine. However, the document attempts too
+much in a single specification and needs ruthless phasing.
+
+## What the System Gains (If Fully Realized)
+
+### 1. Confidence Decay: Knowledge Sorts Itself
+
+**Current state:** 500 documents — LLM receives equal signal from a fresh
+ADR and a 2023 draft. Cannot distinguish.
+
+**After:** Every document carries a freshness signal. LLM sees "this ADR
+has confidence 0.94, green tier, read 42 times" vs "this draft has
+confidence 0.31, blue tier, untouched for 5 months". Answer builds on
+the ADR; the draft is flagged as potentially stale.
+
+**Concrete win:** Search for "How does authentication work?" returns
+two documents with different confidence tiers. LLM constructs an answer
+from the authoritative source and marks the other with a caveat. Without
+this — it mixes both indiscriminately.
+
+### 2. Inference Engine: Questions RAG Cannot Answer
+
+**Current state:** "What breaks if I remove this method?" — impossible.
+BFS finds neighbors but not transitive dependencies.
+
+**After:** Datalog rules derive new facts: OVERRIDES, TRANSITIVE_DEPENDS,
+SERVICE_CALLS. "What breaks?" = transitive closure of DEPENDS_ON, built
+automatically by the inference engine.
+
+**Concrete win:** Developer asks "Which services are affected if I change
+AuthService.authenticate?" → system finds all services via transitive
+dependencies → returns a concrete list. Currently impossible even with
+graph BFS — no transitive edges exist.
+
+### 3. Contradiction Detection: Conflicts Visible, Not Hidden
+
+**Current state:** Two documents assert opposite facts. LLM receives both
+and silently hallucinates a compromise.
+
+**After:** System finds the conflict, shows authority of both sides (ADR
+authority=765 vs proposal authority=2), LLM sees the gap and notes:
+"ADR claims JWT, proposal claims session cookies — ADR is significantly
+more authoritative, but conflict is unresolved."
+
+**Concrete win:** LLM no longer presents contradictory answers as fact.
+It flags conflicts. This is trust in the system — the primary asset for
+enterprise adoption.
+
+### 4. Self-Organization: No Curator Required
+
+**Current state:** To mark a document as "stale", someone must do it
+manually. Forget — and the draft hangs with full authority.
+
+**After:** System self-stratifies: core (ADRs, frequently read),
+periphery (active docs), archive (deprecated). Without a curator.
+Read traffic = freshness signal.
+
+**Concrete win:** At 10K+ documents, the system doesn't degrade — stale
+content is automatically pushed to the periphery. Scalability without
+human-in-the-loop.
+
+## Market Assessment
+
+### Market Context (2026)
+
+1. **MCP became the de facto standard** — Anthropic, Claude, OpenCode,
+   Cursor — all transitioning to MCP as the way to connect tools to LLMs.
+2. **GraphRAG goes mainstream** — LightRAG (37.5k stars), MS GraphRAG
+   (34.3k stars) proved graph-based RAG is not a niche.
+3. **Enterprise wants "controllable RAG"** — not just search, but knowledge
+   with provenance, freshness, authority.
+4. **AI Agents are the next frontier** — agents need to know what to trust.
+   Plain RAG doesn't provide this signal.
+
+### Where HKG Hits Market Demand
+
+| Market Trend | What HKG Delivers | Competitors |
+|---|---|---|
+| MCP as standard | MCP-native server, plug into any agent | LightRAG — no MCP; MS GraphRAG — no MCP (yet) |
+| Enterprise: AI trust | Confidence tiers + contradiction detection | **Nobody** — unique advantage |
+| Self-maintaining knowledge | Confidence decay + self-organization | **Nobody** — all require a curator |
+| Neuro-symbolic AI | Inference engine + LLM co-pilot | HippoRAG (PPR), but no inference rules |
+| Russian-speaking market | Language-aware alpha | **Nobody** in GraphRAG space |
+
+### Unique Competitive Moats
+
+1. **Confidence Decay + Authority** — **no competitor does this.** Not MS
+   GraphRAG, not LightRAG, not LlamaIndex. All RAG systems treat documents
+   equally. HKG says: "this document is fresh, that one is decaying."
+   This is a genuine white spot on the map.
+
+2. **Contradiction Detection** — **nobody surfaces conflicts.** All systems
+   silently return contradictory results. HKG flags them. Critical for
+   enterprise trust.
+
+3. **MCP-native + Graph + Confidence** — **nobody combines these three
+   layers.** LightRAG has graph but no confidence. MS GraphRAG has graph
+   but no MCP and no freshness. HKG = MCP + Graph + Confidence + Reasoning.
+
+### Not Unique but Important
+- Inference engine — useful, but Datalog approach is not new (Neo4j, Apache
+  Jena do similar)
+- Language-aware alpha — valuable for Russian, but niche
+- MCP — unique now, but LightRAG and MS will add MCP within 6-12 months
+
+### Who Needs This
+
+1. **Multi-repo microservice teams (5–50 services)** — cross-repo dependency
+   reasoning, documentation fragmentation. Primary target. Pain: "Which
+   services will break?" + "Which ADRs are stale?"
+
+2. **AI-assisted development platforms** — internal dev tools with LLM.
+   Need a knowledge layer with provenance. HKG = MCP plugin.
+
+3. **Technical documentation teams** — large docs-as-code sites. Decay model
+   finds stale pages. Authority surfaces the most consulted pages.
+
+### Key Risk
+
+HKG is an ambitious project with 20 open problems at v0.2.0. The market
+won't wait — LightRAG ships features every month. If HKG takes 6 months
+to implement PROPOSAL.md, competitors may close the MCP and confidence gap.
+
+**Strategy:** Ship Phase 1 (Confidence Decay + SSE fix) in 3-4 weeks.
+Show on real data that stratification works. Then Phase 2. Don't build
+everything at once.
+
+## Phased Implementation Plan
+
+### Phase 1 (2-3 weeks): Foundation
+1. SSE → Streamable HTTP transport fix (1-2 days)
+2. Confidence Decay V1 (decay + tiers, NO colour/authority)
+3. Simulator for parameter validation
+4. Fix critical bugs from PROBLEMS.md (16-20)
+
+### Phase 2 (after data accumulation): Intelligence
+5. Authority Score
+6. Structural contradiction rules
+7. Ontology + basic inference rules
+
+### Phase 3 (after system proves value): LLM Integration
+8. LLM co-pilot (propose/verify rules)
+9. Colour tiers / Metaplasticity
+10. Semantic contradiction scan (nightly cron)
+
+## Verdict
+
+| Aspect | Rating |
+|---|---|
+| **Technical value** | High — confidence decay + contradiction detection solve real RAG problems |
+| **Market relevance** | High — enterprise wants AI trust, self-maintenance, provenance |
+| **Uniqueness** | High — **no competitor does confidence decay + contradiction detection** |
+| **Timing** | Ideal — MCP growing, AI agents need trust signals, GraphRAG mainstream |
+| **Feasibility** | Medium — 20 open problems, ruthless prioritization needed |
+| **ROI** | Depends on execution — ship Phase 1 in a month = high ROI. Drag 6 months = competitors close the gap |
+
+**Final verdict:** This is not just a good idea — it is a **market gap**
+that nobody is closing. Confidence decay + contradiction detection is what
+every RAG solution on the market is missing. The question is not "do we
+need this?" but "can we build it first?"
