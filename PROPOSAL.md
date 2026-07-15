@@ -1288,3 +1288,252 @@ This asymmetry — easy to add, hard to override — mirrors how human
 teams treat authoritative documents. Anyone can write a proposal.
 Overriding an ADR requires explicit acknowledgment that you have
 read the ADR, understood it, and are consciously replacing it.
+
+
+# Known Limitations & Open Problems
+
+Every layer introduces its own failure modes. Below is a systematic
+audit of what can go wrong and how to mitigate it — both in v1 and
+as future research directions.
+
+## 1. Inference Engine
+
+### Rule Explosion
+
+Transitive closure on a dense graph produces O(n²) edges. At 10K
+nodes with `DEPENDS_ON`, this is 100M inferred edges. The fixed-point
+loop never terminates within practical limits.
+
+**Mitigation:** maximum inference depth (≤ 3 hops). Inferred edges
+inherit `min(confidence)` of all premises — garbage premises produce
+garbage conclusions with low confidence, which decay quickly.
+
+**Open:** lazy transitive closure — compute on demand per query rather
+than materialising all pairs ahead of time.
+
+### Garbage In, Garbage Out
+
+One false positive edge from code extraction triggers a cascade of
+false inferred edges. The system has no way to distinguish «inferred
+from solid premises» vs «inferred from extraction noise».
+
+**Mitigation:** inferred edges carry provenance — which premises were
+used. If a premise is later deleted or contradicted, dependent
+inferred edges are invalidated. Edge confidence = min(premise
+confidences), so noisy edges yield low-confidence conclusions.
+
+### Missing Rules
+
+Inference only answers questions for which someone wrote a rule.
+«Which services use the Circuit Breaker pattern?» — no rule → no
+answer. Coverage depends on manual rule authoring.
+
+**Mitigation:** LLM-propose-rules (Proposal #2, layer 3b) covers
+discovery. **Open:** pattern mining on the graph — cluster
+substructures, detect recurring motifs, propose rules for them
+without LLM involvement.
+
+## 2. Confidence Decay
+
+### Cold Start
+
+A small team with 5 queries per week generates near-zero traffic.
+All documents decay at the same rate → no stratification → tiers
+are meaningless. The system needs a minimum pulse to breathe.
+
+**Mitigation:** global decay floor. If total system traffic over
+30 days is below `MIN_TRAFFIC_THRESHOLD`, decay is suspended or
+slowed globally. A dormant system should not rot.
+
+### Burst Traffic
+
+A production incident drives 50 reads of one file in an hour.
+`access_count` saturates at `SATURATION_LIMIT`. After the incident,
+the document remains artificially alive for months — it was read
+during a crisis, not because it's authoritative.
+
+**Mitigation:** burst detection. If read frequency exceeds N standard
+deviations from the document's historical mean, apply diminishing
+returns — access count increases sublinearly (e.g., log scale) for the
+duration of the burst. Rate limiter on access count accumulation.
+
+### No Negative Feedback
+
+Current model: reading a document always slows its decay. But «read
+and found wrong» should have the opposite effect. There is no signal
+for distrust.
+
+**Mitigation:** negative access. A `QualityCard` with 👎 or an
+explicit `rag_mark_incorrect(doc_id)` call accelerates decay —
+subtracts from effective access count. Human distrust overrides
+automatic heuristics.
+
+**Open:** implicit negative feedback. If a user reads document A,
+then immediately reads document B on the same topic — was A
+unsatisfactory? Can we infer distrust from reading patterns?
+
+## 3. Stability Tiers
+
+### Green Inflation
+
+After six months of operation, 80% of documents may be green.
+The tier loses its discriminatory power — it no longer signals
+«think twice before overriding.»
+
+**Mitigation:** green quota. At most N% of documents (default: 20%)
+may be green simultaneously. When the quota is exceeded, the
+lowest-authority green documents are demoted to yellow. This creates
+healthy competition: only the most structurally proven documents
+retain green status.
+
+### Wrongful Promotion
+
+A document with an error is heavily read (people are debugging it).
+High access rate → high confidence → promoted to yellow → green.
+The erroneous document becomes structurally protected from decay.
+
+**Mitigation:** negative feedback overrides tiers. A single 👎
+resets colour to blue, regardless of confidence history. Human
+judgment trumps automatic promotion.
+
+### Demotion Instability
+
+A document drops below the demotion threshold for one day due to
+a calculation glitch and immediately loses green. Re-promotion
+takes another 60 days.
+
+**Mitigation:** sustained breach requirement. Confidence must be
+below the demotion threshold for N consecutive days (default: 7)
+before colour changes downward. Protection against transient
+fluctuations.
+
+## 4. Authority
+
+### Absolute Authority Makes Old Documents Unassailable
+
+An ADR with authority 5000 will never lose to a new document.
+But ADRs do become obsolete — architecture changes. No automatic
+mechanism allows a new, correct document to overtake an old,
+obsolete one.
+
+**Mitigation:** slow authority decay — e.g., 1% per month. Not
+as aggressive as confidence decay, but enough that a 5-year-old
+ADR without reads eventually becomes contestable. Combined with
+relative authority (percentile, not absolute value), the system
+can detect «this was once authoritative but is no longer.»
+
+### Authority Ratio on Noise
+
+Document A: authority 0.003. Document B: authority 0.001.
+Ratio = 3.0 → triggers automatic resolution in favour of A.
+But both are noise — neither has meaningful authority.
+
+**Mitigation:** resolution floor. Automatic contradiction
+resolution only fires if the winner's authority exceeds
+`MIN_RESOLUTION_AUTHORITY` (default: 10.0). Below this,
+the contradiction is flagged for LLM review regardless of ratio.
+
+### Authority Inflation
+
+Authority only grows. After a year, the mean authority across
+all documents shifts from 10 to 500. The absolute difference
+between «authoritative» and «not» compresses — like monetary
+inflation.
+
+**Mitigation:** percentile-based authority display. «Top 5% by
+authority» is stable over time, even as absolute values inflate.
+Absolute authority is retained for computation; percentile is
+used for presentation and contradiction resolution thresholds.
+
+### Defeated Documents Continue Accumulating
+
+A document loses a contradiction, gets suppressed, but continues
+accumulating authority from residual reads. The suppressed claim
+silently regains weight.
+
+**Mitigation:** authority freeze on suppression. When a document
+is suppressed, its authority stops growing. The suppression edge
+stores the snapshot authority at the time of defeat. If the
+winning document later decays significantly, the contradiction
+can be reopened.
+
+## 5. Contradiction Detection
+
+### False Negatives on Semantic Contradictions
+
+Structural contradictions (type clash, edge conflict) are caught
+by rules. Semantic contradictions («auth uses JWT» vs «auth uses
+OAuth») require comparing the *meaning* of two text chunks — out
+of scope for Datalog rules. Most real-world contradictions are
+semantic, not structural.
+
+**Mitigation:** periodic semantic scan. A nightly cron selects
+pairs of documents with high embedding similarity but different
+sources, and asks the LLM: «Do these documents contradict each
+other?» Expensive but acceptable at daily cadence.
+
+**Open:** contradiction embedding. Can we train a lightweight
+classifier that detects factual contradiction between two chunks
+without invoking the LLM?
+
+### Suppression Cascade
+
+Document D is suppressed. Fifty inferred edges had D as a premise.
+Should they all be suppressed? Recalculated? Deleting them loses
+the inference work; keeping them propagates a defeated premise.
+
+**Mitigation:** lazy re-evaluation. Inferred edges are not
+suppressed — they are recalculated on next access. If premises
+changed, the edge's confidence updates. No permanent suppression
+state for inferred edges; only stated edges can be suppressed.
+
+### Irreversible Resolutions
+
+A contradiction is resolved, a winner is declared, the loser is
+suppressed. Six months later, the winner itself is found wrong.
+The loser is still suppressed. The system has no mechanism to
+reopen old resolutions.
+
+**Mitigation:** reversible resolutions with TTL. Each resolution
+stores a snapshot of both claims' authority at resolution time.
+If the loser's authority later exceeds the winner's (or the winner
+is itself contradicted), the resolution is reopened. Resolutions
+are soft commitments, not permanent judgments.
+
+## 6. Global Risks
+
+### Adversarial Use
+
+A buggy agent or malicious cron adds 1000 junk documents → graph
+saturation → contradiction detection overwhelmed → LLM budget
+exhausted on garbage review.
+
+**Mitigation:** per-agent rate limiting on document creation.
+Documents that trigger > N contradictions on insertion enter a
+sandbox queue — not visible to search until reviewed. Anomaly
+detection: if a document's contradiction count exceeds K standard
+deviations from the mean, it is quarantined.
+
+### Feedback Loop Between Layers
+
+High authority → more reads → slower decay → higher confidence →
+even higher authority. The system could enter a «rich get richer»
+regime where early-established documents dominate forever.
+
+**Mitigation:** confidence is bounded (cannot exceed 1.0). Authority
+growth rate, not absolute authority, is affected by reads. Slow
+authority decay (1%/month) provides a counter-force. Green quota
+prevents tier monopolisation.
+
+### Loss of Novelty
+
+If authority and stability tiers work too well, new documents
+struggle to break into visibility. The system becomes conservative
+— it prefers old, proven knowledge over new, possibly better
+knowledge.
+
+**Mitigation:** new documents start at confidence 1.0 and are
+always included in search results. The contradiction report, not
+search suppression, is the check against error. Novelty bonus:
+new documents get a temporary search-ranking boost (first 7 days)
+to ensure they are seen and can begin accumulating authority.
