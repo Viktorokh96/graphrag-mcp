@@ -1187,3 +1187,86 @@ and wrong. With it: the conflict is resolved before the consumer sees it.
 | Over-eager suppression: new correct fact suppressed by old high-authority fact | New facts start with authority 0; grace period (7 days) gives them time to accumulate before ratio comparison. Manual `rag_set_authority` can bootstrap critical new docs |
 | Contradiction cascade: resolving one contradiction triggers more | Single-pass resolution per cycle; max resolution depth |
 | LLM review cost: every contradiction invokes LLM | Only close authority ratios (< 3.0) or high-impact contradictions trigger LLM. Clear winners (ratio > 3.0) resolve automatically |
+
+### New Document Contradiction Flow
+
+When an LLM agent adds a document via `rag_add_document`, the document
+starts with `authority = 0` and `confidence = 1.0`. This is by design:
+a new document has no accumulated trust, regardless of its momentary
+confidence. But a new document with authority 0 that contradicts an
+existing document with authority 765 creates a mathematical edge case —
+the authority ratio is infinite, and automatic resolution is impossible.
+
+This is not a bug. It is a **forcing function**: the system MUST surface
+the contradiction to the LLM that added the document, because the LLM
+is the only entity qualified to decide whether it is fixing a mistake
+or making one.
+
+#### Flow
+
+```
+LLM calls rag_add_document(content, resolve_contradictions=True)
+  │
+  ▼
+System indexes document
+  confidence = 1.0, authority = 0, colour = blue
+  │
+  ▼
+System runs contradiction rules scoped to the new document
+  │
+  ▼
+Returns structured contradiction report directly to LLM:
+
+  ⚠ New document «auth-v2-proposal» introduces 2 contradictions:
+
+  ┌─ Contradiction #1: type_clash ─────────────────────────────┐
+  │ New:  "AuthService" IS_A "Module"                          │
+  │       authority 0 · confidence 1.0 · colour blue           │
+  │                                                            │
+  │ Old:  "AuthService" IS_A "Service"                         │
+  │       authority 765 · confidence 0.85 · colour green       │
+  │       Source: ADR-003 (last read 2 days ago)               │
+  │                                                            │
+  │ ⚡ Ratio ∞ — old document is structurally authoritative    │
+  │    ADR-003 is a green-tier document with 180 days of trust │
+  └────────────────────────────────────────────────────────────┘
+
+  ┌─ Contradiction #2: factual_conflict ───────────────────────┐
+  │ New:  "AuthService uses OAuth2 tokens"                     │
+  │       authority 0 · confidence 1.0 · colour blue           │
+  │                                                            │
+  │ Old:  "AuthService issues JWT tokens"                      │
+  │       authority 120 · confidence 0.72 · colour yellow      │
+  │       Source: auth/README.md (last read 5 days ago)        │
+  │                                                            │
+  │ ⚡ Ratio ∞ — old document has 120 days of accumulated trust│
+  └────────────────────────────────────────────────────────────┘
+
+  Resolve by calling:
+    rag_resolve_contradiction(id=<id>, winner="new"|"old")
+```
+
+#### Why This Matters
+
+**LLM is smarter than the system, but it's also fallible.** The HKG's
+job is not to be the final authority — it's to ensure the LLM never
+overrides authoritative knowledge **by accident**. The contradiction
+report is a cognitive speed bump:
+
+- LLM sees «ADR-003, green, authority 765» and pauses
+- If the LLM is correcting a genuine mistake → `rag_resolve(id, winner=new)` — conscious override
+- If the LLM hallucinated → `rag_resolve(id, winner=old)` or deletes its document
+- The signal is the **colour** and **authority gap** — LLM understands
+  «green ADR» means «think twice» far better than a numeric threshold
+
+This is the HKG's core value proposition for LLM consumers: **it tells
+you what it knows, how well it knows it, and whether your new claim
+contradicts old claims that have proven trustworthy over time.**
+
+#### When Authority Is Non-Zero
+
+If the new document is added by a repo sync (not LLM) and already has
+some authority from previous existence, the same flow applies but the
+ratio is finite and automatic resolution may fire if ratio > 3.0.
+The contradiction report is always emitted — the LLM sees it as context
+in the response, even if resolution was automatic.
