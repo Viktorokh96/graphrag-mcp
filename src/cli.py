@@ -20,6 +20,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     Returns:
         int: exit code (0 — успех, 1 — ошибка)
     """
+    import logging as _logging
+    _log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    _logging.basicConfig(
+        level=getattr(_logging, _log_level, _logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+    for _lib in ("httpx", "huggingface_hub", "sentence_transformers", "httpcore"):
+        _logging.getLogger(_lib).setLevel(_logging.WARNING)
+
     if argv is None:
         argv = sys.argv[1:]
 

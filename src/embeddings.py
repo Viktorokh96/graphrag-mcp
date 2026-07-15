@@ -1,10 +1,13 @@
 """Embedding Generator for RAG system."""
 
+import logging
 import re
 from typing import Optional
 import httpx
 import os
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingGenerator:
@@ -142,6 +145,12 @@ class BgeM3EmbeddingGenerator:
 
     def _ensure_model(self):
         if self._model is None:
+            import time as _time
+            t0 = _time.monotonic()
+            logger.info(
+                "Loading embedding model %s (device=%s, local_files_only=%s) …",
+                self.model_name, self.device, self._local_files_only,
+            )
             # Ленивая загрузка: sentence-transformers тянет torch (~секунды импорта),
             # а сама модель — ~2GB RAM. Не грузим, пока эмбеддинги реально не нужны.
             from sentence_transformers import SentenceTransformer
@@ -152,6 +161,7 @@ class BgeM3EmbeddingGenerator:
             if self._token:
                 kwargs["token"] = self._token
             self._model = SentenceTransformer(self.model_name, **kwargs)
+            logger.info("Embedding model loaded in %.1fs", _time.monotonic() - t0)
         return self._model
 
     def get_embedding(self, text: str) -> list[float]:

@@ -11,10 +11,14 @@ BM25 (токены с TF-сатурацией; IDF считает Qdrant чер�
 payload содержит doc_id, metadata (для нативных фильтров) и text_preview.
 """
 
+import logging
 import math
 import re
 import uuid
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+
 
 from qdrant_client import QdrantClient, models
 
@@ -104,10 +108,15 @@ class QdrantVectorStore:
         self.location = location
         self.dimension = dimension
         self._is_remote = location.startswith(("http://", "https://"))
+        logger.info("Connecting to Qdrant: %s (dim=%d, remote=%s) …", location, dimension, self._is_remote)
+        t0 = __import__("time").monotonic()
         self._connect()
+        logger.info("Qdrant client connected in %.1fs", __import__("time").monotonic() - t0)
         self._token_df: dict[int, int] = {}
         self._did_load_token_df = False
+        t0 = __import__("time").monotonic()
         self._ensure_collection()
+        logger.info("Qdrant collection '%s' ready in %.1fs", COLLECTION, __import__("time").monotonic() - t0)
 
     def _connect(self) -> None:
         if self._is_remote:
@@ -115,17 +124,14 @@ class QdrantVectorStore:
         else:
             self._client = QdrantClient(path=self.location)
 
-    # -- collection lifecycle -------------------------------------------------
-
     def _ensure_collection(self) -> None:
         if not self._client.collection_exists(COLLECTION):
+            logger.info("Creating Qdrant collection '%s' …", COLLECTION)
             self._create_collection()
             return
         actual = self.get_dimension()
         if actual and actual != self.dimension:
-            import logging
-
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 "Collection dim=%s, config dim=%s. Run `rag-server migrate` to re-index.",
                 actual,
                 self.dimension,

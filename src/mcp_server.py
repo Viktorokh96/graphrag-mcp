@@ -858,11 +858,31 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
 
 
 def main():
+    import logging as _logging
+    _log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    _logging.basicConfig(
+        level=getattr(_logging, _log_level, _logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+    # Приглушаем библиотечные логгеры — они только шумят на INFO
+    for _lib in ("httpx", "huggingface_hub", "sentence_transformers", "httpcore"):
+        _logging.getLogger(_lib).setLevel(_logging.WARNING)
     from src.rag import RAGSystem
     from src.config import RAGConfig
     from src.migrate import has_old_data
 
     config = RAGConfig.from_env()
+    logger.info("=" * 50)
+    logger.info("Starting graphrag MCP server")
+    logger.info("Config: provider=%s, device=%s, qdrant=%s, db=%s, store=%s",
+                 config.embedding_provider, config.embedding_device,
+                 config.qdrant_url or "(embedded)", config.resolve_database_url(),
+                 config.store_path)
+    logger.info("Preload models: %s | Reranker: %s (device=%s) | Query expansion: %s",
+                 config.preload_models, config.rerank_model if config.rerank_enabled else "off",
+                 config.rerank_device, config.query_expansion_model if config.query_expansion_enabled else "off")
+    t_start = __import__("time").monotonic()
     if has_old_data(config.store_path):
         logger.warning(
             "Found old data in %s (chroma.sqlite3 / graph_index.json). "
@@ -871,6 +891,7 @@ def main():
             config.store_path,
         )
     rag = RAGSystem(config=config)
+    logger.info("RAGSystem initialized in %.1fs", __import__("time").monotonic() - t_start)
     server = Server("rag-knowledge-base")
 
     @server.list_tools()
@@ -894,11 +915,14 @@ def main():
                     server_name="rag-knowledge-base",
                     server_version="1.0.0",
                     capabilities=server.get_capabilities(
+
                         notification_options=NotificationOptions(),
                         experimental_capabilities={},
                     ),
                 ),
             )
+
+    logger.info("MCP server ready (total startup: %.1fs)", __import__("time").monotonic() - t_start)
 
     # Graceful shutdown: закрываем Qdrant (файловые locks) и SQLite (WAL) при
     # выходе — иначе при перезапуске возможны locked-ошибки. KeyboardInterrupt

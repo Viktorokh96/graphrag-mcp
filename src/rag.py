@@ -56,6 +56,13 @@ class RAGSystem:
         self.config = cfg
         self.store_path = cfg.store_path
 
+        logger.info(
+            "RAGSystem init: provider=%s, device=%s, store=%s, qdrant=%s",
+            cfg.embedding_provider, cfg.embedding_device,
+            cfg.store_path, cfg.qdrant_url or "(embedded)",
+        )
+
+
         if embedding_generator is not None:
             self.embedding_generator = embedding_generator
         elif api_key is not None:
@@ -95,6 +102,10 @@ class RAGSystem:
             dimension=self.embedding_generator.get_dimension(),
         )
         self.graph_kb = GraphStore(self.db, self.doc_store)
+        logger.info(
+            "Stores ready: db=%s, graph=%d edges",
+            cfg.resolve_database_url(), self.graph_kb.stats()["total_edges"],
+        )
 
         self._default_alpha = cfg.default_alpha
         self._cyrillic_alpha = cfg.cyrillic_alpha
@@ -119,13 +130,22 @@ class RAGSystem:
         self._communities: list[dict] = []
         self._community_names: dict[int, str] = {}
         self._community_cache_path = Path(cfg.store_path) / "community_cache.json"
+
+        logger.info("Loading community cache …")
         self._load_community_cache()
+        logger.info(
+            "Syncing stores (SQLite ↔ Qdrant) – doc count: %d …",
+            self.doc_store.count(),
+        )
+        t_sync = __import__("time").monotonic()
         self._sync_stores()
+        logger.info("Store sync done in %.1fs", __import__("time").monotonic() - t_sync)
 
         # Прелоад моделей: загружаем в память сразу, чтобы первый запрос
         # был быстрым (без задержки на lazy init ~5-15 сек).
         if cfg.preload_models:
             self._preload_models()
+        logger.info("RAGSystem init complete")
 
     # -- text utils -----------------------------------------------------------
 
@@ -171,13 +191,10 @@ class RAGSystem:
         и (опционально) reranker, чтобы первый запрос не тратил ~5-15 сек
         на инициализацию.
         """
-        import logging
-        log = logging.getLogger(__name__)
-
         # Embedding model (BGE-M3 или аналог)
         t0 = __import__("time").monotonic()
         self.embedding_generator._ensure_model()
-        log.info(
+        logger.info(
             "Preloaded embedding model in %.1fs",
             __import__("time").monotonic() - t0,
         )
@@ -186,10 +203,11 @@ class RAGSystem:
         if self._reranker_enabled:
             t0 = __import__("time").monotonic()
             self._get_reranker()
-            log.info(
+            logger.info(
                 "Preloaded reranker in %.1fs",
                 __import__("time").monotonic() - t0,
             )
+
 
     # -- indexing ---------------------------------------------------------------
 
@@ -665,20 +683,32 @@ class RAGSystem:
         try:
             doc_ids = self.doc_store.all_ids()
             vector_ids = self.vector_store.get_all_ids()
+            phantom_count = len(vector_ids - doc_ids)
+            missing = doc_ids - vector_ids
+            total = len(missing) + len(doc_ids)
+            logger.info(
+                "Store sync: %d docs in SQLite, %d points in Qdrant (%d unique doc_ids). "
+                "Phantoms: %d, missing in Qdrant: %d",
+                len(doc_ids), len(vector_ids), len(set(vector_ids)),
+                phantom_count, len(missing),
+            )
 
             for phantom in vector_ids - doc_ids:
                 self.vector_store.remove(phantom)
 
-            missing = doc_ids - vector_ids
-            for doc_id in missing:
+            if missing:
+                logger.info("Reindexing %d docs (this loads the embedding model on first call) …", len(missing))
+            for idx, doc_id in enumerate(missing):
                 record = self.doc_store.get(doc_id)
                 if record is None:
+                    logger.warning("  [%d/%d] doc %s vanished, skipping", idx + 1, len(missing), doc_id)
                     continue
+                if (idx + 1) % 10 == 0 or idx == 0:
+                    logger.info("  reindex [%d/%d] %s …", idx + 1, len(missing), doc_id[:8])
                 self._index_vector(doc_id, record["text"], record["metadata"])
 
-            phantom_count = len(vector_ids - doc_ids)
-            if phantom_count or missing:
-                logger.info("Removed %d phantom vectors, reindexed %d docs", phantom_count, len(missing))
+            if phantom_count or len(missing):
+                logger.info("Sync done: removed %d phantoms, reindexed %d docs", phantom_count, len(missing))
         except Exception as e:
             logger.warning("Store sync failed: %s", e)
 
