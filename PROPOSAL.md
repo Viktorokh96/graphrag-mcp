@@ -845,6 +845,7 @@ The LLM can now construct an answer that:
 
 
 # Naming: Hebbian Knowledge Graph (HKG)
+# Нейросимволическая база знаний с хеббовской пластичностью (НБЗХП)
 
 The composition of all three proposals produces a system that is qualitatively
 different from classical RAG. It is not merely a retrieval engine — it is a
@@ -873,6 +874,13 @@ The name **Hebbian Knowledge Graph** reflects the core design principle:
 - **Knowledge Graph** — entities and typed relations form the structural
   backbone. Inference derives new facts. The ontology declares what kinds
   of things exist and how they relate.
+
+Русское название — **Нейросимволическая база знаний с хеббовской
+пластичностью (НБЗХП)** — подчёркивает двойственную природу системы:
+символический слой (онтология, граф, Datalog-правила) и нейро-слой
+(confidence decay, metaplasticity, LLM-верификация). Это не просто
+RAG с графом — это архитектура, в которой символьный вывод и
+статистическая саморегуляция работают в одном цикле.
 
 An HKG is to a knowledge base what long-term potentiation is to a synapse:
 it is not a static store — it is a living structure that calibrates itself
