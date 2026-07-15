@@ -1064,54 +1064,97 @@ def detect_inferred_vs_stated(g: nx.DiGraph) -> list[Contradiction]:
     ...
 ```
 
-### Resolution: Authority Wins
+### Resolution: Highlight, Don't Resolve
 
-When a contradiction is detected, the system does NOT delete either fact.
-Instead it applies the **authority tiebreaker** — cumulative reputation
-decides, not the momentary confidence snapshot:
+Contradiction resolution is not a solvable problem for RAG or HKG —
+and it doesn't need to be. The system's job is not to decide who is
+right. Its job is to **make the conflict visible** to the entity that
+can decide: the human or LLM adding the document.
+
+HKG never auto-suppresses a claim. When a contradiction is detected,
+the system produces a **contradiction report** — a structured
+side-by-side comparison of the conflicting claims with their full
+authority context:
 
 ```
 For each contradiction (claim_A, claim_B):
-    winner = argmax(authority(claim) for claim in [claim_A, claim_B])
-    loser  = argmin(...)
+    Emit: {
+        claim_A: { text, source, authority, confidence, colour },
+        claim_B: { text, source, authority, confidence, colour },
+        authority_ratio: authority(A) / authority(B) if both > 0 else ∞,
+        recommendation: null  // system never recommends a winner
+    }
 
-    If authority(winner) / authority(loser) > DOMINANCE_RATIO (default: 3.0):
-        → winner marked as "preferred", loser suppressed in search
-    Else:
-        → ratio too close, flagged for LLM review
+    The consumer (LLM or human) decides:
+    - Accept new claim → rag_accept_claim(contradiction_id, winner)
+    - Keep old claim  → rag_reject_claim(contradiction_id)
+    - Defer           → contradiction persists, both claims coexist
 ```
 
-Authority is used instead of confidence because it is **immune to freshness
-spikes**. A newly updated proposal with confidence 1.0 and authority 2 does
-not beat a six-month-old ADR with confidence 0.7 and authority 765. The
-Hebbian principle still holds — the document that has accumulated more
-trust over its lifetime wins — but the metric is cumulative, not point-in-time.
+The authority and colour signals make the decision informed, not
+automatic. «ADR-003, green, authority 765» vs «new proposal, blue,
+authority 0» — the LLM sees this and understands the weight of what
+it's about to override. But the system never makes the call.
 
 ### LLM Review (Cognitive Dissonance Resolution)
 
-When authority ratio is too close to call or the contradiction is high-impact
-(e.g., architecture-level), the LLM co-pilot is invoked:
+When the LLM consumer requests knowledge that touches a contradiction,
+the contradiction report is included in the response — the LLM sees
+both claims and their authority context inline:
 
 ```
-Contradiction detected:
-  Claim A [authority 765, confidence 0.72]: "AuthService issues JWT tokens"
-    Source: ADR-003, last updated 2026-06-15, colour green
-  Claim B [authority 12, confidence 0.68]: "AuthService uses session cookies"
-    Source: auth/README.md, last updated 2026-06-20, colour blue
+Query: "How does AuthService authenticate?"
 
-Resolution: authority ratio 765 / 12 = 63.8 → clear winner (>> 3.0).
-→ Claim A automatically preferred. Claim B suppressed.
-→ No LLM review needed.
+Relevant documents:
 
-(If ratio were < 3.0, LLM would inspect source code to break the tie.)
+✓ [fresh 0.85 · ● green · authority 765] ADR-003:
+  "AuthService issues JWT tokens via /login endpoint"
+
+△ [stable 0.68 · ● blue · authority 12] auth/README.md:
+  "AuthService uses session cookies"
+  ⚠ CONTRADICTS ADR-003 (authority ratio 63.8)
+     This document claims session cookies; ADR-003 claims JWT.
+     ADR-003 is green-tier with 180 days of accumulated trust.
+     Resolution: unresolved — decide which claim to accept.
+
+LLM response:
+  "According to ADR-003 (authoritative, last verified 2 days ago),
+   AuthService uses JWT tokens. However, auth/README.md mentions
+   session cookies. These claims contradict each other. I recommend
+   verifying against auth-service/src/auth/handler.py."
+```
+
+The LLM never receives a pre-resolved answer. It receives the full
+dissonance with all the signals it needs to reason about it. The HKG's
+role ends at «here is what I know, and here is what doesn't add up.»
+
+#### Manual Resolution
+
+The LLM or human can explicitly resolve a contradiction:
+
+```
+rag_accept_claim(contradiction_id, winner_id)
+  → winner's confidence → 0.95 (verified by acceptance)
+  → loser marked as deprecated, points to winner
+  → CONTRADICTS edge stored as audit trail
+
+rag_reject_claim(contradiction_id)
+  → both claims remain, contradiction closed as «irreconcilable»
+  → both documents carry a warning annotation
+```
+
+Unresolved contradictions persist indefinitely. A document involved
+in an unresolved contradiction shows a warning badge in search results.
+This is intentional: the HKG refuses to hide unresolved conflict.
 
 ### New MCP Tools
 
 | Tool | Signature | Description |
 |---|---|---|
-| `rag_detect_contradictions` | `scope?: "all" \| "entity" \| "relation", entity_id?: str` | Run contradiction rules, return list of detected conflicts with confidence deltas |
+| `rag_detect_contradictions` | `scope?: "all" \| "entity" \| "relation", entity_id?: str` | Run contradiction rules, return list of conflicts with authority context |
 | `rag_get_contradictions` | `entity_id: str` | All unresolved contradictions involving this entity |
-| `rag_resolve_contradiction` | `contradiction_id: str, winner: str` | Manually resolve: pick winning claim |
+| `rag_accept_claim` | `contradiction_id: str, winner_id: str` | Explicitly accept one claim as correct; the other is deprecated |
+| `rag_reject_claim` | `contradiction_id: str` | Close contradiction as irreconcilable; both claims coexist with warning |
 
 Search results include contradiction annotations:
 
@@ -1122,36 +1165,34 @@ Search results include contradiction annotations:
   "confidence": {"value": 0.68, "tier": "stable"},
   "authority": 12.3,
   "contradiction": {
-    "status": "suppressed",
-    "winner": "ADR-003-auth-flow.md",
-    "winner_authority": 765.0,
-    "ratio": 62.2,
-    "reason": "Authority ratio 62.2 >> 3.0 — automatic resolution"
+    "status": "unresolved",
+    "conflicts_with": "ADR-003-auth-flow.md",
+    "conflict_authority": 765.0,
+    "conflict_colour": "green"
   }
 }
-```
 
 ### Integration with Existing Layers
 
-**Authority feeds contradiction resolution:**
-When a contradiction is detected, the system records it but doesn't
-immediately resolve. Time works for the system — the winning fact's
-authority continues to accumulate, widening the gap against the loser.
-After a grace period (default: 7 days), unresolved contradictions
-are re-evaluated: the authority ratio may have crossed the 3.0 threshold
-for automatic resolution.
+**Authority feeds contradiction awareness:**
+When a contradiction is detected, both claims are annotated with each
+other's authority context. Time may widen the authority gap, making
+the decision easier — but the system never makes the decision. The
+contradiction report evolves (authority numbers change) but resolution
+always requires explicit human or LLM action.
 
 **Inference engine provides contradiction rules:**
 Contradiction rules are first-class citizens in the rule registry,
 alongside inference rules. Both run in the same fixed-point loop.
-An inferred edge can trigger a contradiction check; a resolved
-contradiction can suppress further inference on dubious premises.
+An inferred edge can trigger a contradiction check. A resolved
+contradiction feeds back into inference: deprecated claims are
+excluded from future inference premises.
 
-**LLM co-pilot closes the loop:**
-The same `rag_verify_edge` tool from Proposal #2 is used to verify
-the winning claim against source code. Successful verification
-boosts confidence to 0.95, marks the contradiction resolved, and
-updates authority with the verified confidence weight.
+**LLM co-pilot verifies, not resolves:**
+The `rag_verify_edge` tool from Proposal #2 verifies a claim against
+source code. Successful verification boosts confidence to 0.95 and
+updates authority — but does NOT auto-resolve the contradiction.
+Resolution remains a separate, explicit step.
 
 ### Files
 
@@ -1167,26 +1208,31 @@ updates authority with the verified confidence weight.
 1. Repo sync extracts: "AuthService" HAS_TYPE "Service"
 2. ADR-003 ingested: "AuthService" HAS_TYPE "Module"
 3. Contradiction rule fires: type_clash(AuthService, Service, Module)
-4. Authority check:
-     ADR-003 authority = 765 (green, 180 days of accumulated trust)
-     Extracted fact authority = 1.7 (blue, just synced 2 days ago)
-   Ratio = 765 / 1.7 = 450 >> 3.0 → resolved automatically
-5. "Module" claim suppressed. ADR-003 confirmed as authoritative.
-6. No LLM review needed — authority gap is decisive.
+4. Contradiction report emitted:
+     ADR-003 authority = 765 · green · confidence 0.85
+     Extracted fact authority = 1.7 · blue · confidence 1.0
+     Authority ratio = 450
+     → Unresolved. Both claims coexist with warning.
+5. LLM consumer queries «What is AuthService?» — sees both claims
+   with authority context, notes the contradiction, and either:
+   a) Inspects source code and calls rag_accept_claim(winner=...)
+   b) Flags for human review
+6. No automatic suppression. The conflict is visible, not hidden.
 ```
 
-Without contradiction detection: the LLM consumer receives both facts
-and presents «AuthService is both a Service and a Module» — confusing
-and wrong. With it: the conflict is resolved before the consumer sees it.
+Without contradiction detection: the LLM receives both facts and
+presents «AuthService is both a Service and a Module» — confusing
+and wrong. With it: the LLM sees the conflict, sees the authority
+gap, and is equipped to resolve it deliberately.
 
 ### Risks and Mitigations
 
 | Risk | Mitigation |
 |---|---|
 | False contradictions: legitimate synonyms flagged as conflicts | Ontology-defined synonym relations; `EQUIVALENT_TO` edges prevent clash detection |
-| Over-eager suppression: new correct fact suppressed by old high-authority fact | New facts start with authority 0; grace period (7 days) gives them time to accumulate before ratio comparison. Manual `rag_set_authority` can bootstrap critical new docs |
+| Over-eager suppression: new correct fact suppressed by old high-authority fact | No auto-suppression exists. Both claims coexist with warning until explicitly resolved. Manual `rag_set_authority` can bootstrap critical new documents |
 | Contradiction cascade: resolving one contradiction triggers more | Single-pass resolution per cycle; max resolution depth |
-| LLM review cost: every contradiction invokes LLM | Only close authority ratios (< 3.0) or high-impact contradictions trigger LLM. Clear winners (ratio > 3.0) resolve automatically |
+| LLM review cost: every contradiction invokes LLM | Contradiction report is cheap (structural rules). LLM is only invoked when consumer queries touch a contradiction — not on every detection |
 
 ### New Document Contradiction Flow
 
@@ -1237,14 +1283,11 @@ Returns structured contradiction report directly to LLM:
   │                                                            │
   │ Old:  "AuthService issues JWT tokens"                      │
   │       authority 120 · confidence 0.72 · colour yellow      │
-  │       Source: auth/README.md (last read 5 days ago)        │
-  │                                                            │
-  │ ⚡ Ratio ∞ — old document has 120 days of accumulated trust│
-  └────────────────────────────────────────────────────────────┘
-
   Resolve by calling:
-    rag_resolve_contradiction(id=<id>, winner="new"|"old")
-```
+    rag_accept_claim(id=<id>, winner_id="<new|old>")  — pick winner
+    rag_reject_claim(id=<id>)                         — keep both, mark irreconcilable
+  (Unresolved contradictions persist and appear in all future queries touching these documents.)
+  └────────────────────────────────────────────────────────────┘
 
 #### Why This Matters
 
@@ -1252,10 +1295,9 @@ Returns structured contradiction report directly to LLM:
 job is not to be the final authority — it's to ensure the LLM never
 overrides authoritative knowledge **by accident**. The contradiction
 report is a cognitive speed bump:
-
 - LLM sees «ADR-003, green, authority 765» and pauses
-- If the LLM is correcting a genuine mistake → `rag_resolve(id, winner=new)` — conscious override
-- If the LLM hallucinated → `rag_resolve(id, winner=old)` or deletes its document
+- If the LLM is correcting a genuine mistake → `rag_accept_claim(id, winner_id=new)` — conscious override
+- If the LLM hallucinated → `rag_accept_claim(id, winner_id=old)` or deletes its document
 - The signal is the **colour** and **authority gap** — LLM understands
   «green ADR» means «think twice» far better than a numeric threshold
 
@@ -1266,20 +1308,18 @@ contradicts old claims that have proven trustworthy over time.**
 #### When Authority Is Non-Zero
 
 If the new document is added by a repo sync (not LLM) and already has
-some authority from previous existence, the same flow applies but the
-ratio is finite and automatic resolution may fire if ratio > 3.0.
-The contradiction report is always emitted — the LLM sees it as context
-in the response, even if resolution was automatic.
+some authority from prior existence, the same flow applies. The
+contradiction report is always emitted — the LLM sees it as context
+in the response. No automatic resolution occurs regardless of ratio.
 
 #### Acceptance as a Deliberate Operation
 
 Overriding an authoritative claim is not a simple write — it is an
 **acceptance ceremony**. The HKG treats knowledge replacement as a
 high-friction operation by design:
-
 - Old claims with high authority cannot be silently overwritten
-- The contradiction report is always emitted, even when auto-resolved
-- LLM must explicitly call `rag_resolve_contradiction(winner=new)` —
+- The contradiction report is always emitted — never auto-resolved
+- LLM must explicitly call `rag_accept_claim(contradiction_id, winner_id)` —
   a conscious act, not a side effect of adding a document
 - The resolved contradiction edge persists in the graph as an audit
   trail: who overrode what, when, and why
@@ -1304,12 +1344,19 @@ Transitive closure on a dense graph produces O(n²) edges. At 10K
 nodes with `DEPENDS_ON`, this is 100M inferred edges. The fixed-point
 loop never terminates within practical limits.
 
-**Mitigation:** maximum inference depth (≤ 3 hops). Inferred edges
-inherit `min(confidence)` of all premises — garbage premises produce
-garbage conclusions with low confidence, which decay quickly.
+**Mitigation:** maximum inference depth (≤ 3 hops). Per-query edge
+limit: at most 10 inferred edges are returned. The LLM consumer
+receives the top-10 highest-confidence inferred edges and can request
+more via pagination (`rag_infer(offset=10)`). This prevents graph
+saturation while keeping the most valuable inferences immediately
+available. Inferred edges inherit `min(confidence)` of all premises —
+garbage premises produce garbage conclusions with low confidence,
+which rank below the top-10 threshold.
 
 **Open:** lazy transitive closure — compute on demand per query rather
-than materialising all pairs ahead of time.
+than materialising all pairs ahead of time. LLM-guided edge curation:
+the LLM itself decides which 10 edges are most important to keep,
+pruning the rest.
 
 ### Garbage In, Garbage Out
 
@@ -1411,27 +1458,30 @@ fluctuations.
 
 ### Absolute Authority Makes Old Documents Unassailable
 
-An ADR with authority 5000 will never lose to a new document.
-But ADRs do become obsolete — architecture changes. No automatic
-mechanism allows a new, correct document to overtake an old,
-obsolete one.
+An ADR with authority 5000 will never lose to a new document in a
+contradiction report. The LLM will always see it as the dominant
+claim. But ADRs do become obsolete — architecture changes. The system
+relies on the LLM to consciously override, which requires the LLM
+to have independent knowledge that the ADR is wrong.
 
 **Mitigation:** slow authority decay — e.g., 1% per month. Not
 as aggressive as confidence decay, but enough that a 5-year-old
 ADR without reads eventually becomes contestable. Combined with
 relative authority (percentile, not absolute value), the system
-can detect «this was once authoritative but is no longer.»
+can detect «this was once authoritative but is no longer.» The
+contradiction report shows both absolute and relative authority.
 
 ### Authority Ratio on Noise
 
 Document A: authority 0.003. Document B: authority 0.001.
-Ratio = 3.0 → triggers automatic resolution in favour of A.
-But both are noise — neither has meaningful authority.
+Ratio = 3.0. Both are noise — neither has meaningful authority.
+The contradiction report is still emitted, but the LLM sees both
+authorities are negligible and treats both claims as unproven.
 
-**Mitigation:** resolution floor. Automatic contradiction
-resolution only fires if the winner's authority exceeds
-`MIN_RESOLUTION_AUTHORITY` (default: 10.0). Below this,
-the contradiction is flagged for LLM review regardless of ratio.
+**Mitigation:** authority tier annotation. Documents below
+`MIN_MEANINGFUL_AUTHORITY` (default: 10.0) are annotated as
+«low authority — limited trust history» in the report. The LLM
+can see that neither side has accumulated meaningful reputation.
 
 ### Authority Inflation
 
@@ -1443,19 +1493,19 @@ inflation.
 **Mitigation:** percentile-based authority display. «Top 5% by
 authority» is stable over time, even as absolute values inflate.
 Absolute authority is retained for computation; percentile is
-used for presentation and contradiction resolution thresholds.
+used for presentation in contradiction reports.
 
-### Defeated Documents Continue Accumulating
+### Deprecated Documents Continue Accumulating
 
-A document loses a contradiction, gets suppressed, but continues
-accumulating authority from residual reads. The suppressed claim
-silently regains weight.
+A document deprecated via `rag_accept_claim` continues accumulating
+authority from residual reads. The deprecated claim silently regains
+weight.
 
-**Mitigation:** authority freeze on suppression. When a document
-is suppressed, its authority stops growing. The suppression edge
-stores the snapshot authority at the time of defeat. If the
-winning document later decays significantly, the contradiction
-can be reopened.
+**Mitigation:** authority freeze on deprecation. When a document
+is deprecated via `rag_accept_claim`, its authority stops growing.
+The deprecation edge stores the snapshot authority at the time of
+acceptance. If the winning document later decays significantly,
+the contradiction can be reopened.
 
 ## 5. Contradiction Detection
 
@@ -1476,29 +1526,30 @@ other?» Expensive but acceptable at daily cadence.
 classifier that detects factual contradiction between two chunks
 without invoking the LLM?
 
-### Suppression Cascade
+### Deprecation Cascade
 
-Document D is suppressed. Fifty inferred edges had D as a premise.
-Should they all be suppressed? Recalculated? Deleting them loses
-the inference work; keeping them propagates a defeated premise.
+Document D is deprecated via `rag_accept_claim`. Fifty inferred edges
+had D as a premise. Should they all be deprecated? Recalculated?
+Deleting them loses the inference work; keeping them propagates a
+defeated premise.
 
-**Mitigation:** lazy re-evaluation. Inferred edges are not
-suppressed — they are recalculated on next access. If premises
-changed, the edge's confidence updates. No permanent suppression
-state for inferred edges; only stated edges can be suppressed.
+**Mitigation:** lazy re-evaluation. Inferred edges are not deprecated
+— they are recalculated on next access. If premises changed, the
+edge's confidence updates. No permanent deprecation state for inferred
+edges; only stated edges can be deprecated.
 
 ### Irreversible Resolutions
 
-A contradiction is resolved, a winner is declared, the loser is
-suppressed. Six months later, the winner itself is found wrong.
-The loser is still suppressed. The system has no mechanism to
+A contradiction is resolved via `rag_accept_claim`, a winner is chosen,
+the loser is deprecated. Six months later, the winner itself is found
+wrong. The loser is still deprecated. The system has no mechanism to
 reopen old resolutions.
 
 **Mitigation:** reversible resolutions with TTL. Each resolution
 stores a snapshot of both claims' authority at resolution time.
 If the loser's authority later exceeds the winner's (or the winner
-is itself contradicted), the resolution is reopened. Resolutions
-are soft commitments, not permanent judgments.
+is itself contradicted), the resolution is reopened. Deprecation is
+a soft commitment, not a permanent judgment.
 
 ## 6. Global Risks
 
