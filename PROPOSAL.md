@@ -607,3 +607,103 @@ Without confidence decay, both documents would appear equally authoritative.
 | Half-life choice is arbitrary | Per-type defaults (code=30d, ADR=90d, concept=180d), overridable via env. Empirical tuning via `rag_confidence_stats` histogram |
 | Write amplification on every read | Confidence recomputed lazily on read, not on access. The access counter is an atomic increment; decay is computed only when `value` is requested |
 | Low-value documents are never cleaned up | This is a feature, not a bug. `rag_list_stale(threshold=0.1)` lets an analyst or cron job decide what to archive. Nothing is ever auto-deleted |
+
+
+# Synthesis: How the Three Proposals Compose
+
+Each proposal solves one weakness of classical RAG. Together they produce
+**emergent self-organization** — the system calibrates itself from usage
+without a human curator.
+
+## Emergent Layering
+
+As documents accumulate, the system spontaneously stratifies into three
+bands driven entirely by confidence decay and access patterns:
+
+```
+                    ┌───────────────────────────┐
+                    │  Core (confidence > 0.8)    │
+                    │  ADR, architecture docs     │
+                    │  Frequently read, rarely    │
+                    │  updated — high consensus   │
+                    └─────────────┬───────────────┘
+                                  │ linked from
+                    ┌─────────────▼───────────────┐
+                    │  Periphery (0.5–0.8)         │
+                    │  Active development docs     │
+                    │  Frequently updated,         │
+                    │  actively consulted          │
+                    └─────────────┬───────────────┘
+                                  │ rarely linked
+                    ┌─────────────▼───────────────┐
+                    │  Archive (< 0.5)             │
+                    │  Old proposals, deprecated   │
+                    │  modules. No one reads       │
+                    │  them — they quietly fade    │
+                    └─────────────────────────────┘
+```
+
+This structure is **not curated** — it emerges from:
+- The reasoning layer linking documents by structural dependencies
+- Confidence decay demoting abandoned content
+- Read traffic slowing decay on frequently-consulted documents
+
+## Scaling Properties
+
+| Property | Without proposals | With all three |
+|---|---|---|
+| Search quality at 10K+ docs | Degrades: LLM must disambiguate stale from fresh by content alone | Stable: every result carries a confidence tier; LLM filters on it |
+| Core vs noise | No distinction; all documents are equal peers in the index | Core is self-identifying: high-confidence, high-access, well-linked |
+| Adding new documents | Raises noise floor; new doc indistinguishable from old | New doc starts at 1.0, earns its place through reads — or decays to periphery |
+| Reasoning across services | Impossible: graph edges exist but no inference | Transitive closures, override detection, affected-components analysis |
+| Curator dependency | High: someone must manually tag/archive/update | Near zero: update events, access traffic, and inference keep the graph alive |
+| Archive access | Binary: either deleted or forever present with full authority | Stale content is always reachable, always annotated with «verify before trusting» |
+
+## How They Interact
+
+1. **Confidence decay tells the reasoning layer which facts are reliable.**
+   An inferred `OVERRIDES` edge whose premises come from stale documents gets
+   a proportionally lowered confidence. The LLM sees «this override was
+   inferred, but one premise is from a decaying document — verify».
+
+2. **Reasoning feeds confidence.** A document linked from many core documents
+   gets indirect access traffic through graph traversals (`rag_get_related`),
+   slowing its decay. Being in the structural center of the system becomes a
+   persistence advantage — structurally important docs naturally live longer.
+
+3. **LLM co-pilot closes the feedback loop.** When `rag_verify_edge` confirms
+   an inferred edge against source code, it resets that edge's confidence to
+   0.95. The next agent that traverses this edge sees it as verified, not
+   inferred. Verification is a one-time operation whose result persists.
+
+## Effect on LLM Consumer
+
+Before: LLM receives a flat list of chunks and must guess which ones are
+trustworthy. After:
+
+```
+Search results for "authentication flow":
+
+✓ [fresh 0.94] auth-service/ADR-003-auth-flow.md
+  "Authentication uses JWT tokens issued by auth-service..."
+
+✓ [stable 0.72] auth-service/src/auth/handler.py
+  "@app.post('/login') → returns JWT access + refresh tokens"
+
+△ [decaying 0.38] proposals/old-oauth-proposal.md
+  "Proposed OAuth2 migration path. Was last updated 4 months ago,
+   no reads in 6 weeks. Consider verifying against current code."
+```
+
+The LLM can now construct an answer that:
+- Builds on fresh and stable sources
+- Mentions the old proposal with an explicit caveat
+- Knows to verify before presenting decaying content as fact
+
+## Summary
+
+| Layer | Problem solved | Mechanism |
+|---|---|---|
+| Reasoning | Questions beyond semantic search | Datalog inference, transitive closure |
+| Confidence | Staleness invisible to LLM | Exponential decay + access dampening |
+| **Together** | **System self-calibrates from usage** | Core emerges, archive settles, LLM sees freshness signal in every result |
