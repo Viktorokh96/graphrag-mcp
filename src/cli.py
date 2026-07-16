@@ -135,7 +135,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     subparsers.add_parser("graph-stats", help="Show graph statistics")
 
     # reindex
-    subparsers.add_parser("reindex", help="Re-generate embeddings for all documents (when switching embedding model)")
+    parser_reindex = subparsers.add_parser("reindex", help="Re-generate embeddings for all documents (when switching embedding model)")
+    parser_reindex.add_argument("--force", action="store_true", help="Force recreate Qdrant collection even if dimension is unchanged")
 
     # migrate (старый ChromaDB + graph_index.json → Qdrant + SQLite)
     parser_migrate = subparsers.add_parser("migrate", help="Migrate old ChromaDB/BM25/JSON-graph data to Qdrant + SQLite")
@@ -322,7 +323,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 0
 
         elif args.command == "reindex":
-            count = rag.reindex()
+            count = rag.reindex(force=args.force)
             print(f"♻️ Переиндексировано документов: {count}")
             return 0
 

@@ -689,19 +689,23 @@ class RAGSystem:
         except Exception as e:
             logger.warning("Store sync failed: %s", e)
 
-    def reindex(self) -> int:
-        """Пересчитать эмбеддинги всех документов (смена провайдера/модели)."""
+    def reindex(self, force: bool = False) -> int:
+        """Пересчитать эмбеддинги всех документов (смена провайдера/модели).
+
+        Args:
+            force: принудительно пересоздать коллекцию Qdrant, даже если
+                   размерность не изменилась.
+        """
         items, total = self.doc_store.list(limit=self.doc_store.count() or 1, offset=0)
         if not items:
             return 0
 
         self.embedding_generator.clear_cache()
-        # Определяем новую размерность по первому документу, пересоздаём коллекцию
-        # при её изменении, затем переиндексируем все документы (с чанкованием).
         first_embedding = self.embedding_generator.get_embedding(items[0]["text"])
         new_dim = len(first_embedding)
         old_dim = self.vector_store.get_dimension()
-        if old_dim and old_dim != new_dim:
+
+        if force or (old_dim and old_dim != new_dim):
             self.vector_store.dimension = new_dim
             self.vector_store.recreate_collection()
 

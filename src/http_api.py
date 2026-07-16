@@ -325,8 +325,8 @@ def clear():
 
 
 @app.post("/reindex")
-def reindex():
-    count = _rag().reindex()
+def reindex(force: bool = False):
+    count = _rag().reindex(force=force)
     return {"status": "ok", "reindexed": count}
 
 
