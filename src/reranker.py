@@ -80,7 +80,7 @@ class Reranker:
     def _rerank_api(
         self, query: str, candidates: list[dict], top_k: Optional[int]
     ) -> list[dict]:
-        url = f"{self.base_url}/rerank"
+        url = f"{self.base_url.rstrip('/')}/rerank"
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
