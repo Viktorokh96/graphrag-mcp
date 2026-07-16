@@ -2,8 +2,8 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     ports:
-      - "6333:6333"   # REST API — для MCP-сервера / CLI на хосте
-      - "6334:6334"   # gRPC (опционально)
+      - "${QDRANT_PORT:-6333}:6333"
+      - "6334:6334"
     volumes:
       - ${QDRANT_DATA_DIR:-./rag_data/qdrant_storage}:/qdrant/storage
     environment:
@@ -31,28 +31,44 @@ services:
   rag:
     build: .
     ports:
-      - "8765:8765"
+      - "${HTTP_PORT:-8766}:8765"
     environment:
+      # Embedding: openai-compatible (bifrost)
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-openai-compatible}
+      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME}
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY}
+      - EMBEDDING_DIM=1024
+      # Storage
       - QDRANT_URL=http://qdrant:6333
       - DATABASE_URL=postgresql://graphrag:graphrag_secret@postgres/graphrag
-      - EMBEDDING_MODEL=bge-m3
-      - EMBEDDING_DEVICE=cuda
-      - RERANK_ENABLED=true
-      - RERANK_MODEL=BAAI/bge-reranker-v2-m3
-      - RERANK_DEVICE=gpu
+      - STORE_PATH=/data
+      # Preload
+      - PRELOAD_MODELS=${PRELOAD_MODELS:-false}
+      # Chunking
+      - CHUNK_SIZE=${CHUNK_SIZE:-512}
+      # Reranker
+      - RERANK_ENABLED=${RERANK_ENABLED:-false}
+      - RERANK_PROVIDER=${RERANK_PROVIDER:-sentence_transformer}
+      - RERANK_MODEL=${RERANK_MODEL}
+      - RERANK_DEVICE=${RERANK_DEVICE:-cpu}
       - RERANK_TOP_K_MULTIPLIER=2
-      - QUERY_EXPANSION_ENABLED=true
-      - QUERY_EXPANSION_MODEL=qwen3:1.7b
-      - QUERY_EXPANSION_COUNT=3
-      - QUERY_EXPANSION_OLLAMA_URL=http://localhost:11434
+      # Query expansion
+      - QUERY_EXPANSION_ENABLED=${QUERY_EXPANSION_ENABLED:-false}
+      - EXPANSION_PROVIDER=${EXPANSION_PROVIDER:-ollama}
+      - EXPANSION_MODEL=${EXPANSION_MODEL:-qwen3:1.8b}
+      - EXPANSION_BASE_URL=${EXPANSION_BASE_URL:-http://localhost:11434}
+      - EXPANSION_COUNT=3
     depends_on:
       qdrant:
         condition: service_healthy
       postgres:
         condition: service_healthy
     volumes:
+      - ${STORE_DATA_DIR:-./rag_data_clean}:/data
       - rag_data_models:/root/.cache
 
 volumes:
   rag_data_pg:
   rag_data_models:
+  rag_data_store:
