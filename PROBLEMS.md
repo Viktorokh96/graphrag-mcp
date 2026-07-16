@@ -1,6 +1,6 @@
 # Problems
 
-Date: 2026-07-15
+Date: 2026-07-16
 
 ---
 
@@ -38,29 +38,53 @@ Language-aware alpha — ключевая дифференциация. Но о�
 
 FastAPI без middleware. Любой в локальной сети может читать/писать документы. Для production непригодно.
 
+### 7. `anthropic` провайдер объявлен, но не реализован
+
+В config, CLI и error messages фигурирует `anthropic` как провайдер эмбеддингов, но он не реализован ни в одном из генераторов. Вызов упадёт с `ValueError`. Касается только эмбеддингов — для query expansion `anthropic` работает.
+
 ---
 
 ## Architecture
 
-### 7. threading.Lock в async контексте
+### 8. `threading.Lock` в async контексте
 
 `Database._lock = threading.Lock()` блокирует event loop FastAPI. Весь сервер зависает при конкурентных запросах в HTTP API.
 
-### 8. Неатомарные операции
+### 9. Неатомарные операции
 
 `delete_document()`, `clear()` — удаляют из storages последовательно. При сбое на середине — несогласованное состояние.
 
-### 9. sync_stores OOM
+### 10. `sync_stores` OOM
 
 Загружает ВСЕ doc_id из SQLite и Qdrant в память для сравнения. На 1M документов — гарантированный OOM.
 
-### 10. Embedding cache без ограничения
+### 11. Embedding cache без ограничения
 
 Кеш эмбеддингов растёт бесконечно. Ollama (4096d): 3.2GB на 100K документов. Нет LRU, нет TTL, нет вытеснения.
 
-### 11. OpenRouter/Ollama API без batch
+### 12. Нет batch-эмбеддингов для Ollama/OpenAI
 
-100 документов → 100 HTTP-запросов. API поддерживает batch, но реализация вызывает по одному.
+100 документов → 100 HTTP-запросов. API поддерживает batch (`get_embeddings`), но вызов `get_embedding` по одному не редкий — в `_index_vector` для не-чанкованных доков идёт `get_embedding(text)` (один текст), а не `get_embeddings`.
+
+### 13. BFS в GraphStore без лимита fan-out
+
+`get_related()` не ограничивает количество рёбер на ноду. На графе с тысячами связей один BFS-шаг может развернуться в миллионы итераций.
+
+### 14. GraphStore: кэш NetworkX может рассинхронизироваться с SQL
+
+`delete_document()` удаляет ноду только из in-memory кэша, полагаясь на FK CASCADE в SQL. Если `DocumentStore.delete()` не был вызван (а только `GraphStore.delete_document()`), ребра остаются в SQL сиротами. `remove_phantom_edges()` чинит, но O(n).
+
+### 15. IDF-кэш строится scroll'ом всех точек Qdrant при первом BM25
+
+`_load_token_df()` загружает `text_hashes` из всех точек через scroll при старте. Для 10K+ документов — заметная задержка первого BM25-запроса. После постройки кэш обновляется инкрементально.
+
+### 16. `http_api.py` импортирует `_parse_meta` из `mcp_server.py`
+
+Два эндпоинта делают `from src.mcp_server import _parse_meta` — циклическая зависимость на уровне импорта не возникает, но логически неверно: бизнес-логика парсинга меты лежит в модуле транспорта.
+
+### 17. `EmbeddingGenerator` (TF-IDF) — мёртвый код
+
+Класс не используется нигде кроме тестов. Занимает ~50 строк, не экспортируется в rag.py.
 
 ---
 
@@ -80,6 +104,7 @@ FastAPI без middleware. Любой в локальной сети может 
 | ~~add_file без extract_graph~~ | `extract_graph` параметр добавлен в add_file | 0.2.0 |
 | ~~Query expansion timeout~~ | 120с через Ollama `Client(timeout=120.0)` | 0.2.0 |
 | ~~Unicode нормализация~~ | SHA256 хэш нормализованного текста | 0.2.0 |
+| ~~Двойной `rstrip('/')` в embeddings.py~~ | Убран лишний вызов в URL-сборке | 0.3.0 |
 
 ---
 
@@ -88,6 +113,6 @@ FastAPI без middleware. Любой в локальной сети может 
 | Category | Open | Key |
 |----------|------|-----|
 | Strategic | 3 | MS догоняет, LightRAG лидирует, ниша узка |
-| Product | 3 | WebUI сырой, нет community reports, HTTP голый |
-| Architecture | 5 | threading.Lock, неатомарность, OOM, cache без LRU, batch |
-| Solved | 10 | см. архив выше |
+| Product | 4 | WebUI сырой, нет community reports, HTTP голый, anthropic stub |
+| Architecture | 10 | threading.Lock, неатомарность, OOM, cache без LRU, batch, BFS fan-out, graph desync, IDF scroll, meta import, dead TF-IDF |
+| Solved | 11 | см. архив выше |

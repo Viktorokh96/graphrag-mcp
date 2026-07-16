@@ -259,7 +259,7 @@ class OpenAICompatibleEmbeddingGenerator:
     def get_embeddings(self, texts: list[str]) -> list[list[float]]:
         missing = list(dict.fromkeys(t for t in texts if t not in self._cache))
         if missing:
-            url = f"{self.base_url.rstrip('/')}/embeddings"
+            url = f"{self.base_url}/embeddings"
             headers = {"Content-Type": "application/json"}
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
