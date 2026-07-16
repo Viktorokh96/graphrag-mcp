@@ -164,7 +164,7 @@ class TestCLI:
 
     @patch("src.cli.RAGSystem")
     def test_cli_uses_custom_api_key(self, mock_rag):
-        """Параметр --key передаётся в RAGSystem."""
+        """Параметр --key передаётся в config.embedding_api_key."""
         from src.cli import main
 
         mock_rag_instance = MagicMock()
@@ -174,5 +174,5 @@ class TestCLI:
         main(["--key", "sk-my-key", "search", "--query", "test"])
         mock_rag.assert_called_once()
         _, kwargs = mock_rag.call_args
-        assert "api_key" in kwargs
-        assert kwargs["api_key"] == "sk-my-key"
+        assert "config" in kwargs
+        assert kwargs["config"].embedding_api_key == "sk-my-key"

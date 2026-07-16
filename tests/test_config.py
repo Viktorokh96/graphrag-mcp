@@ -1,4 +1,4 @@
-"""Тесты для модуля конфигурации RAG системы."""
+"""Тесты для RAGConfig."""
 
 from src.config import RAGConfig
 
@@ -8,28 +8,23 @@ class TestRAGConfig:
 
     def test_defaults(self):
         cfg = RAGConfig()
-        assert cfg.embedding_provider == "bge-m3"
-        assert cfg.bge_model_name == "BAAI/bge-m3"
+        assert cfg.embedding_provider == "openai-compatible"
+        assert cfg.embedding_model_name == "BAAI/bge-m3"
         assert cfg.embedding_dim == 1024
-        assert cfg.embedding_device == "cpu"
-        assert cfg.ollama_base_url == "http://localhost:11434"
-        assert cfg.ollama_model == "qwen3-embedding:8b"
-        assert cfg.ollama_dimension == 4096
-        assert cfg.openrouter_api_key is None
-        assert cfg.openrouter_model == "openai/text-embedding-3-small"
+        assert cfg.embedding_base_url == ""
+        assert cfg.embedding_api_key == ""
         assert cfg.store_path == "./rag_data"
         assert cfg.qdrant_url == ""
         assert cfg.database_url == ""
 
     def test_from_env_defaults(self, monkeypatch):
-        for key in ["EMBEDDING_MODEL", "EMBEDDING_PROVIDER", "OLLAMA_BASE_URL", "OLLAMA_MODEL",
-                     "OLLAMA_DIMENSION", "OPENROUTER_API_KEY", "OPENROUTER_MODEL", "STORE_PATH",
-                     "QDRANT_URL", "DATABASE_URL"]:
+        for key in ["EMBEDDING_PROVIDER", "EMBEDDING_MODEL", "EMBEDDING_BASE_URL",
+                     "EMBEDDING_API_KEY", "STORE_PATH", "QDRANT_URL", "DATABASE_URL"]:
             monkeypatch.delenv(key, raising=False)
 
         cfg = RAGConfig.from_env()
-        assert cfg.embedding_provider == "bge-m3"
-        assert cfg.ollama_base_url == "http://localhost:11434"
+        assert cfg.embedding_provider == "openai-compatible"
+        assert cfg.embedding_model_name == "BAAI/bge-m3"
 
     def test_resolve_storage_locations(self):
         cfg = RAGConfig(store_path="./data")
@@ -40,39 +35,30 @@ class TestRAGConfig:
         assert cfg_prod.resolve_database_url() == "postgresql://u@h/db"
 
     def test_from_env_custom(self, monkeypatch):
-        monkeypatch.setenv("EMBEDDING_PROVIDER", "openrouter")
-        monkeypatch.setenv("OLLAMA_BASE_URL", "http://custom:11434")
-        monkeypatch.setenv("OLLAMA_MODEL", "nomic-embed-text")
-        monkeypatch.setenv("OLLAMA_DIMENSION", "768")
-        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
-        monkeypatch.setenv("OPENROUTER_MODEL", "custom/model")
+        monkeypatch.setenv("EMBEDDING_PROVIDER", "ollama")
+        monkeypatch.setenv("EMBEDDING_MODEL", "qwen3-embedding:8b")
+        monkeypatch.setenv("EMBEDDING_BASE_URL", "http://ollama:11434")
         monkeypatch.setenv("STORE_PATH", "/tmp/test_rag")
 
         cfg = RAGConfig.from_env()
-        assert cfg.embedding_provider == "openrouter"
-        assert cfg.ollama_base_url == "http://custom:11434"
-        assert cfg.ollama_model == "nomic-embed-text"
-        assert cfg.ollama_dimension == 768
-        assert cfg.openrouter_api_key == "sk-test"
-        assert cfg.openrouter_model == "custom/model"
+        assert cfg.embedding_provider == "ollama"
+        assert cfg.embedding_model_name == "qwen3-embedding:8b"
+        assert cfg.embedding_base_url == "http://ollama:11434"
         assert cfg.store_path == "/tmp/test_rag"
 
     def test_custom_values(self):
         cfg = RAGConfig(
-            embedding_provider="openrouter",
-            ollama_base_url="http://custom:11434",
-            ollama_model="nomic-embed-text",
-            ollama_dimension=768,
-            openrouter_api_key="sk-test",
-            openrouter_model="custom/model",
+            embedding_provider="ollama",
+            embedding_model_name="nomic-embed-text",
+            embedding_base_url="http://ollama:11434",
             store_path="/tmp/test_rag",
         )
-        assert cfg.embedding_provider == "openrouter"
-        assert cfg.ollama_base_url == "http://custom:11434"
-        assert cfg.openrouter_api_key == "sk-test"
+        assert cfg.embedding_provider == "ollama"
+        assert cfg.embedding_model_name == "nomic-embed-text"
+        assert cfg.embedding_base_url == "http://ollama:11434"
 
     def test_to_env_preview(self):
         cfg = RAGConfig()
         preview = cfg.to_env_preview()
-        assert "EMBEDDING_MODEL=bge-m3" in preview
-        assert "OLLAMA_BASE_URL=http://localhost:11434" in preview
+        assert "EMBEDDING_PROVIDER=openai-compatible" in preview
+        assert "EMBEDDING_MODEL=BAAI/bge-m3" in preview

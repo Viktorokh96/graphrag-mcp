@@ -1,8 +1,6 @@
 """Embedding Generator for RAG system."""
-
 import logging
 import re
-from typing import Optional
 import httpx
 import os
 import numpy as np
@@ -119,12 +117,10 @@ class EmbeddingGenerator:
         return vector
 
 
-class BgeM3EmbeddingGenerator:
-    """Локальные мультиязычные эмбеддинги BAAI/bge-m3 (sentence-transformers).
+class SentenceTransformerEmbeddingGenerator:
+    """Локальные эмбеддинги через sentence-transformers (BGE-M3, all-MiniLM-L6-v2 и др.).
 
-    Модель загружается лениво при первом вызове get_embedding/get_embeddings
-    (~2GB RAM, первый запуск скачивает веса с HuggingFace). Векторы
-    L2-нормализованы, размерность 1024.
+    Модель загружается лениво при первом вызове get_embedding/get_embeddings.
     """
 
     def __init__(
@@ -151,8 +147,6 @@ class BgeM3EmbeddingGenerator:
                 "Loading embedding model %s (device=%s, local_files_only=%s) …",
                 self.model_name, self.device, self._local_files_only,
             )
-            # Ленивая загрузка: sentence-transformers тянет torch (~секунды импорта),
-            # а сама модель — ~2GB RAM. Не грузим, пока эмбеддинги реально не нужны.
             from sentence_transformers import SentenceTransformer
             kwargs = dict(
                 device=self.device,
@@ -186,157 +180,6 @@ class BgeM3EmbeddingGenerator:
 
     def clear_cache(self):
         self._cache.clear()
-
-
-class OpenRouterEmbeddingGenerator:
-    """Генератор эмбеддингов через OpenRouter API."""
-
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        model: str = "openai/text-embedding-3-small",
-        dimension: int = 1536,
-    ):
-        """
-        Инициализация генератора эмбеддингов.
-
-        Args:
-            api_key: OpenRouter API ключ (из аргумента или env OPENROUTER_API_KEY)
-            model: Модель для эмбеддингов (по умолчанию openai/text-embedding-3-small)
-            dimension: Размерность эмбеддингов модели (по умолчанию 1536 для text-embedding-3-small)
-        """
-        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
-        self.model = model
-        self._cache: dict[str, list[float]] = {}
-        self._client = httpx.Client(timeout=30.0)
-        self._fallback_dimension = dimension
-
-    def get_embedding(self, text: str) -> list[float]:
-        """
-        Получить эмбеддинг для текста через OpenRouter API.
-
-        Args:
-            text: Текст для эмбеддинга
-
-        Returns:
-            Список float значений (эмбеддинг)
-        """
-        # Проверка кеша
-        if text in self._cache:
-            return self._cache[text]
-
-        # Попытка получить через API
-        try:
-            embedding = self._call_api(text)
-            self._cache[text] = embedding
-            return embedding
-        except Exception:
-            # Fallback при ошибке API
-            embedding = self._fallback_embedding(text)
-            self._cache[text] = embedding
-            return embedding
-
-    def get_embeddings(self, texts: list[str]) -> list[list[float]]:
-        """
-        Получить эмбеддинги для нескольких текстов (батч).
-
-        Args:
-            texts: Список текстов для эмбеддинга
-
-        Returns:
-            Список списков float значений
-        """
-        results = []
-        for text in texts:
-            results.append(self.get_embedding(text))
-        return results
-
-    def get_dimension(self) -> int:
-        """
-        Получить размерность эмбеддинга.
-
-        Если есть кешированный эмбеддинг — берёт из него,
-        иначе возвращает размерность fallback'а (1536).
-        """
-        # Берём любой эмбеддинг из кеша чтобы узнать размерность
-        for emb in self._cache.values():
-            return len(emb)
-        return self._fallback_dimension
-
-    def clear_cache(self):
-        """Очистить кеш эмбеддингов."""
-        self._cache.clear()
-
-    def close(self):
-        """Закрыть HTTP-соединение (connection pool)."""
-        self._client.close()
-
-    def _call_api(self, text: str) -> list[float]:
-        """
-        Вызов OpenRouter API для получения эмбеддинга.
-
-        Args:
-            text: Текст для эмбеддинга
-
-        Returns:
-            Список float значений
-
-        Raises:
-            Exception: При ошибке API
-        """
-        url = "https://openrouter.ai/api/v1/embeddings"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": self.model,
-            "input": text
-        }
-
-        response = self._client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        data = response.json()
-        embedding = data["data"][0]["embedding"]
-        return embedding
-
-    def _fallback_embedding(self, text: str) -> list[float]:
-        """
-        Упрощённый TF-IDF-like вектор как fallback при ошибке API.
-
-        Args:
-            text: Текст для эмбеддинга
-
-        Returns:
-            Список float значений фиксированной размерности
-        """
-        # Простая реализация: хешируем слова и создаём вектор
-        import hashlib
-
-        embedding = [0.0] * self._fallback_dimension
-
-        # Разбиваем текст на слова
-        words = text.lower().split()
-
-        for word in words:
-            # Удаляем пунктуацию
-            word = word.strip(".,!?;:'\"()[]{}")
-            if not word:
-                continue
-
-            # Хешируем слово для получения индекса
-            hash_val = int(hashlib.md5(word.encode()).hexdigest(), 16)
-            index = hash_val % self._fallback_dimension
-
-            # Добавляем вклад слова (простой TF-like)
-            embedding[index] += 1.0 / len(words)
-
-        # Нормализация (L2)
-        norm = sum(v * v for v in embedding) ** 0.5
-        if norm > 0:
-            embedding = [v / norm for v in embedding]
-
-        return embedding
 
 
 class OllamaEmbeddingGenerator:

@@ -35,10 +35,10 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     parser = argparse.ArgumentParser(description="RAG System CLI")
     parser.add_argument("--store", type=str, default="./rag_data", help="Path to vector store")
-    parser.add_argument("--key", type=str, default=None, help="OpenRouter API key")
-    parser.add_argument("--provider", type=str, default=None, choices=["bge-m3", "ollama", "openrouter"], help="Embedding provider")
+    parser.add_argument("--key", type=str, default=None, help="API key for embedding provider")
+    parser.add_argument("--provider", type=str, default=None, choices=["openai-compatible", "anthropic", "ollama"], help="Embedding provider type")
+    parser.add_argument("--model", type=str, default=None, help="Embedding model name (e.g. BAAI/bge-m3)")
     parser.add_argument("--ollama-url", type=str, default=None, help="Ollama base URL")
-    parser.add_argument("--ollama-model", type=str, default=None, help="Ollama model name")
     parser.add_argument("--http", action="store_true", help="Start HTTP REST API + MCP SSE server")
     parser.add_argument("--port", type=int, default=8765, help="HTTP server port (default: 8765)")
 
@@ -127,7 +127,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     subparsers.add_parser("graph-stats", help="Show graph statistics")
 
     # reindex
-    subparsers.add_parser("reindex", help="Re-generate embeddings for all documents (when switching embedding provider)")
+    subparsers.add_parser("reindex", help="Re-generate embeddings for all documents (when switching embedding model)")
 
     # migrate (старый ChromaDB + graph_index.json → Qdrant + SQLite)
     parser_migrate = subparsers.add_parser("migrate", help="Migrate old ChromaDB/BM25/JSON-graph data to Qdrant + SQLite")
@@ -188,12 +188,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             cfg.store_path = args.store
         if args.provider:
             cfg.embedding_provider = args.provider
+        if args.model:
+            cfg.embedding_model_name = args.model
         if args.ollama_url:
-            cfg.ollama_base_url = args.ollama_url
-        if args.ollama_model:
-            cfg.ollama_model = args.ollama_model
+            cfg.embedding_base_url = args.ollama_url
+        if args.key:
+            cfg.embedding_api_key = args.key
 
-        rag = RAGSystem(store_path=args.store, api_key=args.key, config=cfg)
+        rag = RAGSystem(store_path=args.store, config=cfg)
 
         if args.command == "add-document":
             meta = json.loads(args.meta) if args.meta else None
@@ -352,11 +354,13 @@ def _start_http(args) -> int:
     import uvicorn
     os.environ.setdefault("STORE_PATH", args.store or "./rag_data")
     if args.provider:
-        os.environ["EMBEDDING_MODEL"] = args.provider
+        os.environ["EMBEDDING_PROVIDER"] = args.provider
+    if args.model:
+        os.environ["EMBEDDING_MODEL"] = args.model
     if args.ollama_url:
-        os.environ["OLLAMA_BASE_URL"] = args.ollama_url
-    if args.ollama_model:
-        os.environ["OLLAMA_MODEL"] = args.ollama_model
+        os.environ["EMBEDDING_BASE_URL"] = args.ollama_url
+    if args.key:
+        os.environ["EMBEDDING_API_KEY"] = args.key
     port = args.port or 8765
     print(f"🌐 Starting HTTP server on http://localhost:{port}", file=sys.stderr)
     print(f"   REST API: http://localhost:{port}/docs", file=sys.stderr)

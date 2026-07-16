@@ -3,11 +3,13 @@
 ## [0.3.0] — 2026-07-16
 
 ### Added
-- **OpenAI-compatible провайдер эмбеддингов**: `EMBEDDING_MODEL=openai-compatible` — внешние серверы с `POST /v1/embeddings` (TEI, Infinity, vLLM, самописные). Поддержка батчей, кеширования, fallback.
-- Конфигурация: `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL_NAME`, fallback на `OPENAI_BASE_URL`/`OPENAI_API_KEY`/`OPENAI_MODEL`.
+- **Провайдеры эмбеддингов**: `EMBEDDING_PROVIDER` — тип протокола (`openai-compatible`, `anthropic`, `ollama`, `sentence_transformer`), `EMBEDDING_MODEL` — имя модели. Единая конфигурация для всех провайдеров.
+- **sentence_transformer**: локальные модели через sentence-transformers (BGE-M3, all-MiniLM-L6-v2, ...). Preload при `PRELOAD_MODELS=true`.
 
-### Changed
-- `src/embeddings.py`: новый класс `OpenAICompatibleEmbeddingGenerator`
+### Removed
+- Удалены провайдеры `bge-m3` (локальный) и `openrouter` (покрывается `openai-compatible`)
+- Удалены специфичные конфиги: `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_DIMENSION`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `BGE_MODEL_NAME`, `BGE_DEVICE`
+- Удалён параметр `api_key` из `RAGSystem.__init__` (ключ задаётся через `EMBEDDING_API_KEY`)
 
 ## [0.2.0] — 2026-07-09
 

@@ -875,12 +875,12 @@ def main():
     config = RAGConfig.from_env()
     logger.info("=" * 50)
     logger.info("Starting graphrag MCP server")
-    logger.info("Config: provider=%s, device=%s, qdrant=%s, db=%s, store=%s",
-                 config.embedding_provider, config.embedding_device,
+    logger.info("Config: provider=%s, qdrant=%s, db=%s, store=%s",
+                 config.embedding_provider,
                  config.qdrant_url or "(embedded)", config.resolve_database_url(),
                  config.store_path)
-    logger.info("Preload models: %s | Reranker: %s (device=%s) | Query expansion: %s",
-                 config.preload_models, config.rerank_model if config.rerank_enabled else "off",
+    logger.info("Reranker: %s (device=%s) | Query expansion: %s",
+                 config.rerank_model if config.rerank_enabled else "off",
                  config.rerank_device, config.query_expansion_model if config.query_expansion_enabled else "off")
     t_start = __import__("time").monotonic()
     if has_old_data(config.store_path):

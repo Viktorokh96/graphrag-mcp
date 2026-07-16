@@ -8,7 +8,7 @@
 import pytest
 
 from src.config import RAGConfig
-from src.embeddings import OllamaEmbeddingGenerator, OpenRouterEmbeddingGenerator
+from src.embeddings import OllamaEmbeddingGenerator
 from src.rag import RAGSystem
 from tests.conftest import HashEmbeddingGenerator
 
@@ -245,42 +245,37 @@ class TestReindex:
 class TestProviderSelection:
     """Выбор провайдера эмбеддингов (без загрузки реальных моделей)."""
 
-    def test_default_provider_is_bge_m3(self):
-        """Дефолтный провайдер конфигурации — bge-m3 (локальная модель)."""
-        assert RAGConfig().embedding_provider == "bge-m3"
+    def test_default_provider_is_openai_compatible(self):
+        """Дефолтный провайдер — openai-compatible."""
+        assert RAGConfig().embedding_provider == "openai-compatible"
 
-    def test_provider_selection_openrouter_with_api_key(self, tmp_path, make_raw_rag):
-        """При передаче api_key — принудительно OpenRouter."""
-        rag = make_raw_rag(store_path=str(tmp_path / "s1"), api_key="test-key", config=RAGConfig())
-        assert isinstance(rag.embedding_generator, OpenRouterEmbeddingGenerator)
-
-    def test_provider_selection_openrouter_from_config(self, tmp_path, make_raw_rag):
-        """При embedding_provider=openrouter + api_key в конфиге — OpenRouter."""
-        cfg = RAGConfig(embedding_provider="openrouter", openrouter_api_key="cfg-key")
-        rag = make_raw_rag(store_path=str(tmp_path / "s2"), config=cfg)
-        assert isinstance(rag.embedding_generator, OpenRouterEmbeddingGenerator)
-
-    def test_provider_selection_ollama_from_config(self, tmp_path, make_raw_rag):
-        """При embedding_provider=ollama — Ollama, даже если openrouter_api_key задан."""
-        cfg = RAGConfig(embedding_provider="ollama", openrouter_api_key="some-key")
-        rag = make_raw_rag(store_path=str(tmp_path / "s3"), config=cfg)
+    def test_provider_selection_ollama(self, tmp_path, make_raw_rag):
+        """При embedding_provider=ollama — OllamaEmbeddingGenerator."""
+        cfg = RAGConfig(embedding_provider="ollama", embedding_model_name="qwen3-embedding:8b")
+        rag = make_raw_rag(store_path=str(tmp_path / "s1"), config=cfg)
         assert isinstance(rag.embedding_generator, OllamaEmbeddingGenerator)
 
-    def test_api_key_overrides_config_provider(self, tmp_path, make_raw_rag):
-        """api_key приоритетнее config.embedding_provider."""
-        cfg = RAGConfig(embedding_provider="ollama")
-        rag = make_raw_rag(store_path=str(tmp_path / "s4"), api_key="force-openrouter", config=cfg)
-        assert isinstance(rag.embedding_generator, OpenRouterEmbeddingGenerator)
+    def test_provider_selection_openai_compatible(self, tmp_path, make_raw_rag):
+        """При embedding_provider=openai-compatible — OpenAICompatibleEmbeddingGenerator."""
+        cfg = RAGConfig(embedding_provider="openai-compatible")
+        rag = make_raw_rag(store_path=str(tmp_path / "s2"), config=cfg)
+        from src.embeddings import OpenAICompatibleEmbeddingGenerator
+        assert isinstance(rag.embedding_generator, OpenAICompatibleEmbeddingGenerator)
 
     def test_embedding_generator_overrides_everything(self, tmp_path, make_raw_rag):
-        """Явный embedding_generator имеет приоритет над api_key и config."""
+        """Явный embedding_generator имеет приоритет над config."""
         embedder = HashEmbeddingGenerator()
         cfg = RAGConfig(embedding_provider="ollama")
         rag = make_raw_rag(
-            store_path=str(tmp_path / "s5"), api_key="test-key",
+            store_path=str(tmp_path / "s3"),
             config=cfg, embedding_generator=embedder,
         )
         assert rag.embedding_generator is embedder
+
+    def test_unknown_provider_raises(self):
+        """Неизвестный провайдер вызывает ValueError."""
+        with pytest.raises(ValueError, match="Unknown embedding provider"):
+            RAGSystem(config=RAGConfig(embedding_provider="nonexistent"))
 
 
 class TestStorePath:

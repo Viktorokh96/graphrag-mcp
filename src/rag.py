@@ -18,10 +18,9 @@ from typing import Optional
 from src.config import RAGConfig
 from src.document_store import Database, DocumentStore
 from src.embeddings import (
-    BgeM3EmbeddingGenerator,
     OllamaEmbeddingGenerator,
     OpenAICompatibleEmbeddingGenerator,
-    OpenRouterEmbeddingGenerator,
+    SentenceTransformerEmbeddingGenerator,
 )
 from src.graph_store import GraphStore
 from src.vector_store import QdrantVectorStore
@@ -37,7 +36,6 @@ class RAGSystem:
     def __init__(
         self,
         store_path: Optional[str] = None,
-        api_key: Optional[str] = None,
         config: Optional[RAGConfig] = None,
         embedding_generator=None,
     ):
@@ -46,7 +44,6 @@ class RAGSystem:
             store_path: путь к директории хранилища (по умолчанию — из config);
                         внутри создаются qdrant/ и store.db, если не заданы
                         QDRANT_URL / DATABASE_URL
-            api_key: OpenRouter API ключ (если передан — принудительно OpenRouter)
             config: опциональная конфигурация (если None — читается из env)
             embedding_generator: явный генератор эмбеддингов (тесты/кастомные
                         провайдеры); имеет приоритет над config
@@ -58,37 +55,19 @@ class RAGSystem:
         self.store_path = cfg.store_path
 
         logger.info(
-            "RAGSystem init: provider=%s, device=%s, store=%s, qdrant=%s",
-            cfg.embedding_provider, cfg.embedding_device,
-            cfg.store_path, cfg.qdrant_url or "(embedded)",
+            "RAGSystem init: provider=%s, store=%s, qdrant=%s, db=%s",
+            cfg.embedding_provider, cfg.store_path,
+            cfg.qdrant_url or "(embedded)", cfg.resolve_database_url(),
         )
 
 
         if embedding_generator is not None:
             self.embedding_generator = embedding_generator
-        elif api_key is not None:
-            self.embedding_generator = OpenRouterEmbeddingGenerator(
-                api_key=api_key, dimension=cfg.openrouter_dimension,
-            )
-        elif cfg.embedding_provider == "openrouter" and cfg.openrouter_api_key:
-            self.embedding_generator = OpenRouterEmbeddingGenerator(
-                api_key=cfg.openrouter_api_key,
-                model=cfg.openrouter_model,
-                dimension=cfg.openrouter_dimension,
-            )
         elif cfg.embedding_provider == "ollama":
             self.embedding_generator = OllamaEmbeddingGenerator(
-                base_url=cfg.ollama_base_url,
-                model=cfg.ollama_model,
-                dimension=cfg.ollama_dimension,
-            )
-        elif cfg.embedding_provider == "bge-m3":
-            self.embedding_generator = BgeM3EmbeddingGenerator(
-                model_name=cfg.resolve_model_path(cfg.bge_model_name),
-                device=cfg.embedding_device,
+                base_url=cfg.embedding_base_url,
+                model=cfg.embedding_model_name,
                 dimension=cfg.embedding_dim,
-                local_files_only=cfg.hf_offline,
-                token=cfg.hf_token,
             )
         elif cfg.embedding_provider == "openai-compatible":
             self.embedding_generator = OpenAICompatibleEmbeddingGenerator(
@@ -97,10 +76,18 @@ class RAGSystem:
                 model=cfg.embedding_model_name,
                 dimension=cfg.embedding_dim,
             )
+        elif cfg.embedding_provider == "sentence_transformer":
+            self.embedding_generator = SentenceTransformerEmbeddingGenerator(
+                model_name=cfg.resolve_model_path(cfg.embedding_model_name),
+                device=cfg.embedding_device,
+                dimension=cfg.embedding_dim,
+                local_files_only=cfg.hf_offline,
+                token=cfg.hf_token,
+            )
         else:
             raise ValueError(
                 f"Unknown embedding provider: {cfg.embedding_provider!r}. "
-                f"Supported: bge-m3, ollama, openrouter, openai-compatible."
+                f"Supported: openai-compatible, anthropic, ollama, sentence_transformer."
             )
 
         self.db = Database(cfg.resolve_database_url())
@@ -114,7 +101,10 @@ class RAGSystem:
             "Stores ready: db=%s, graph=%d edges",
             cfg.resolve_database_url(), self.graph_kb.stats()["total_edges"],
         )
-
+        # Preload моделей при старте (только для sentence_transformer)
+        if cfg.embedding_provider == "sentence_transformer" and cfg.preload_models:
+            self.embedding_generator._ensure_model()
+            logger.info("Embedding model preloaded (sentence_transformer)")
         self._default_alpha = cfg.default_alpha
         self._cyrillic_alpha = cfg.cyrillic_alpha
         self._hybrid_expand = cfg.hybrid_expand
@@ -148,12 +138,6 @@ class RAGSystem:
         t_sync = __import__("time").monotonic()
         self._sync_stores()
         logger.info("Store sync done in %.1fs", __import__("time").monotonic() - t_sync)
-
-        # Прелоад моделей: загружаем в память сразу, чтобы первый запрос
-        # был быстрым (без задержки на lazy init ~5-15 сек).
-        if cfg.preload_models:
-            self._preload_models()
-        logger.info("RAGSystem init complete")
 
     # -- text utils -----------------------------------------------------------
 
@@ -191,30 +175,6 @@ class RAGSystem:
                 count=self._query_expansion_count,
             )
         return self._query_expander
-
-    def _preload_models(self):
-        """Eagerly load models into memory (skip lazy init delay).
-
-        Вызывается из __init__ при PRELOAD_MODELS=1. Грузит embedding-модель
-        и (опционально) reranker, чтобы первый запрос не тратил ~5-15 сек
-        на инициализацию.
-        """
-        # Embedding model (BGE-M3 или аналог)
-        t0 = __import__("time").monotonic()
-        self.embedding_generator._ensure_model()
-        logger.info(
-            "Preloaded embedding model in %.1fs",
-            __import__("time").monotonic() - t0,
-        )
-
-        # Reranker (если включён)
-        if self._reranker_enabled:
-            t0 = __import__("time").monotonic()
-            self._get_reranker()
-            logger.info(
-                "Preloaded reranker in %.1fs",
-                __import__("time").monotonic() - t0,
-            )
 
 
     # -- indexing ---------------------------------------------------------------

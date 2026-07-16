@@ -19,24 +19,17 @@ def _env_float(key: str, default: str) -> float:
 
 @dataclass
 class RAGConfig:
-    # Провайдер эмбеддингов: bge-m3 (локально, дефолт) | ollama | openrouter.
-    # Env: EMBEDDING_MODEL (приоритет) или EMBEDDING_PROVIDER (legacy-алиас).
-    embedding_provider: str = "bge-m3"
-    # BGE-M3: локальная мультиязычная модель (sentence-transformers)
-    bge_model_name: str = "BAAI/bge-m3"
+    # Тип провайдера: openai-compatible | anthropic | ollama | sentence_transformer
+    embedding_provider: str = "openai-compatible"
+    embedding_model_name: str = "BAAI/bge-m3"
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
     embedding_dim: int = 1024
     embedding_device: str = "cpu"
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen3-embedding:8b"
-    ollama_dimension: int = 4096
-    openrouter_api_key: Optional[str] = None
-    openrouter_model: str = "openai/text-embedding-3-small"
-    openrouter_dimension: int = 1536
-    # OpenAI-compatible API (TEI, Infinity, vLLM, самописный сервер)
-    embedding_base_url: str = "http://localhost:8080/v1"
-    embedding_api_key: str = ""
-    embedding_model_name: str = "BAAI/bge-m3"
-    ollama_base_url: str = "http://localhost:11434"
+    hf_offline: bool = False
+    hf_token: str = ""
+    models_dir: str = ""
+    preload_models: bool = False
     store_path: str = "./rag_data"
     # Хранилища (Фаза 2). Пустые значения → embedded-режим внутри store_path:
     #   qdrant_url:   URL Qdrant-сервера (prod) | "" → embedded {store_path}/qdrant
@@ -44,34 +37,11 @@ class RAGConfig:
     qdrant_url: str = ""
     database_url: str = ""
     # Баланс гибридного поиска: 0.0 = чистый BM25, 1.0 = чистый семантический.
-    # Значение по умолчанию (0.5 — истинный баланс) выбрано по результатам бенчмарка
-    # NDCG@k на детерминированном корпусе с настоящей семантической структурой
-    # (см. scripts/benchmark_alpha.py, tests/semantic_mock.py). После перехода на
-    # RRF с alpha-dilution (RRF_K=20) бенчмарк выявил широкую «хорошую область»
-    # alpha ∈ [0.05, 0.75] с NDCG@5=0.8241 и P@1=0.8929; за её пределами качество
-    # падает: pure BM25 (alpha=0.0) даёт NDCG≈0.69 (провал на концептуальных/
-    # cross-lingual запросах), pure semantic (alpha=1.0) даёт NDCG≈0.80 (провал
-    # на идентификаторах). Дефолт = значение в хорошей области, ближайшее к 0.5
-    # (точке естественного баланса каналов) — робастный и детерминированный выбор.
     default_alpha: float = 0.5
-    # Alpha для запросов с кириллицей (русский и др.). BM25 без русского стемминга
-    # даёт шумовый сигнал для русских запросов (морфология, отсутствие лемматизации),
-    # поэтому семантический канал должен доминировать. Бенчмарк NDCG@k на mock-корпусе
-    # с идеальными cross-lingual эмбеддингами показывает широкое плато alpha ∈ [0.05, 0.75]
-    # (см. scripts/benchmark_alpha.py) — 0.85 лежит за краем, но это оправдано для реальных
-    # (не идеальных) мультиязычных эмбеддингов Ollama, где BM25-канал для русских
-    # концептуальных запросов вносит больше шума, чем сигнала. Проверено эмпирически:
-    # alpha=0.85 поднимает Tests Agent в топ-2 для запроса «агент тестирования кода»
-    # (при alpha=0.5 документ отсутствует в топ-5).
     cyrillic_alpha: float = 0.85
-    # Candidate expansion для гибридного поиска: из каждого канала забирается
-    # max(k * hybrid_expand, hybrid_min_candidates) кандидатов перед fusion.
     hybrid_expand: int = 3
     hybrid_min_candidates: int = 20
-    # Чанкование больших документов: текст длиннее chunk_size токенов режется на
-    # чанки (paragraph→sentence→token) и индексируется несколькими точками в
-    # Qdrant под общим doc_id. Решает обрезку хвоста длинных документов эмбеддером
-    # (BGE-M3 max ~8192 токенов). Документ в DocumentStore остаётся цельным.
+    # Чанкование больших документов (в токенах)
     chunk_size: int = 512
     chunk_overlap: int = 64
     rerank_enabled: bool = False
@@ -82,44 +52,26 @@ class RAGConfig:
     query_expansion_model: str = "qwen3:1.8b"
     query_expansion_count: int = 3
     query_expansion_ollama_url: str = "http://localhost:11434"
-    # HuggingFace: не обращаться к Hub при загрузке моделей.
-    # Env: HF_HUB_OFFLINE=1 — загружать только из локального кеша.
-    hf_offline: bool = False
-    # HuggingFace токен (для приватных моделей / rate limits).
-    # Env: HF_TOKEN — передаётся в SentenceTransformer(token=...).
-    hf_token: str = ""
-    # Директория с локальными моделями (models/bge-m3, models/bge-reranker-v2-m3).
-    # Env: MODELS_DIR — если задана, модели грузятся отсюда, а не из HF Hub.
-    models_dir: str = ""
-    # Прелоад моделей при старте (embedding + reranker).
-    # Env: PRELOAD_MODELS=1 — загружать модели в __init__, не лениво.
-    preload_models: bool = False
 
     @classmethod
     def from_env(cls) -> "RAGConfig":
         return cls(
-            embedding_provider=os.environ.get(
-                "EMBEDDING_MODEL", os.environ.get("EMBEDDING_PROVIDER", "bge-m3")
+            embedding_provider=os.environ.get("EMBEDDING_PROVIDER", "openai-compatible"),
+            embedding_model_name=os.environ.get(
+                "EMBEDDING_MODEL", os.environ.get("OPENAI_MODEL", "BAAI/bge-m3")
             ),
-            bge_model_name=os.environ.get("BGE_MODEL_NAME", "BAAI/bge-m3"),
-            embedding_dim=_env_int("EMBEDDING_DIM", "1024"),
-            embedding_device=os.environ.get("EMBEDDING_DEVICE", "cpu"),
-            ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
-            ollama_model=os.environ.get("OLLAMA_MODEL", "qwen3-embedding:8b"),
             embedding_base_url=os.environ.get(
-                "EMBEDDING_BASE_URL",
-                os.environ.get("OPENAI_BASE_URL", "http://localhost:8080/v1"),
+                "EMBEDDING_BASE_URL", os.environ.get("OPENAI_BASE_URL", "")
             ),
             embedding_api_key=os.environ.get(
                 "EMBEDDING_API_KEY", os.environ.get("OPENAI_API_KEY", "")
             ),
-            embedding_model_name=os.environ.get(
-                "EMBEDDING_MODEL_NAME", os.environ.get("OPENAI_MODEL", "BAAI/bge-m3")
-            ),
-            ollama_dimension=_env_int("OLLAMA_DIMENSION", "4096"),
-            openrouter_api_key=os.environ.get("OPENROUTER_API_KEY"),
-            openrouter_model=os.environ.get("OPENROUTER_MODEL", "openai/text-embedding-3-small"),
-            openrouter_dimension=_env_int("OPENROUTER_DIMENSION", "1536"),
+            embedding_dim=_env_int("EMBEDDING_DIM", "1024"),
+            embedding_device=os.environ.get("EMBEDDING_DEVICE", "cpu"),
+            hf_offline=os.environ.get("HF_HUB_OFFLINE", "").lower() in ("1", "true", "yes"),
+            hf_token=os.environ.get("HF_TOKEN", ""),
+            preload_models=os.environ.get("PRELOAD_MODELS", "").lower() in ("1", "true", "yes"),
+            models_dir=os.environ.get("MODELS_DIR", ""),
             store_path=os.environ.get("STORE_PATH", "./rag_data"),
             qdrant_url=os.environ.get("QDRANT_URL", ""),
             database_url=os.environ.get("DATABASE_URL", ""),
@@ -140,59 +92,27 @@ class RAGConfig:
                 "QUERY_EXPANSION_OLLAMA_URL",
                 os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
             ),
-            hf_offline=os.environ.get("HF_HUB_OFFLINE", "").lower() in ("1", "true", "yes"),
-            hf_token=os.environ.get("HF_TOKEN", ""),
-            models_dir=os.environ.get("MODELS_DIR", ""),
-            preload_models=os.environ.get("PRELOAD_MODELS", "").lower() in ("1", "true", "yes"),
         )
 
-    def resolve_qdrant_location(self) -> str:
-        """URL Qdrant-сервера или путь к embedded-хранилищу внутри store_path."""
-        return self.qdrant_url or f"{self.store_path}/qdrant"
-
-    def resolve_database_url(self) -> str:
-        """DSN Postgres или путь к SQLite-файлу внутри store_path."""
-        return self.database_url or f"{self.store_path}/store.db"
-
-    def resolve_model_path(self, model_name: str) -> str:
-        """Путь к модели: локальная директория (models/) или имя в HF Hub.
-
-        Если models_dir задан и внутри есть поддиректория с именем модели —
-        возвращает локальный путь. Иначе — оригинальное имя (HF Hub).
-        """
-        if self.models_dir:
-            # model_name может быть "BAAI/bge-m3" → берём последний компонент
-            short_name = model_name.rsplit("/", 1)[-1]
-            local = os.path.join(self.models_dir, short_name)
-            if os.path.isdir(local):
-                return local
-        return model_name
 
     def to_env_preview(self) -> str:
         lines = [
-            "# Выбор провайдера эмбеддингов: bge-m3 (по умолчанию), ollama, openrouter или openai-compatible",
-            f"EMBEDDING_MODEL={self.embedding_provider}",
+            "# Тип провайдера: openai-compatible | anthropic | ollama | sentence_transformer",
+            f"EMBEDDING_PROVIDER={self.embedding_provider}",
             "",
-            "# BGE-M3 настройки (локальная модель, sentence-transformers)",
-            f"BGE_MODEL_NAME={self.bge_model_name}",
+            "# Имя модели эмбеддингов",
+            f"EMBEDDING_MODEL={self.embedding_model_name}",
+            "",
+            "# Базовый URL API (для openai-compatible, anthropic, ollama)",
+            f"EMBEDDING_BASE_URL={self.embedding_base_url}",
+            "# API ключ (если требуется)",
+            f"EMBEDDING_API_KEY={self.embedding_api_key or ''}",
+            "# Размерность эмбеддингов",
             f"EMBEDDING_DIM={self.embedding_dim}",
+            "# Устройство (для sentence_transformer)",
             f"EMBEDDING_DEVICE={self.embedding_device}",
             "",
-            "# Ollama настройки",
-            f"OLLAMA_BASE_URL={self.ollama_base_url}",
-            f"OLLAMA_MODEL={self.ollama_model}",
-            "",
-            "# OpenRouter настройки (нужен API ключ)",
-            f"OPENROUTER_API_KEY={self.openrouter_api_key or ''}",
-            f"OPENROUTER_MODEL={self.openrouter_model}",
-            f"OPENROUTER_DIMENSION={self.openrouter_dimension}",
-            "",
-            "# OpenAI-compatible настройки (TEI, Infinity, vLLM, самописный сервер)",
-            f"EMBEDDING_BASE_URL={self.embedding_base_url}",
-            f"EMBEDDING_API_KEY={self.embedding_api_key or ''}",
-            f"EMBEDDING_MODEL_NAME={self.embedding_model_name}",
-            "",
-            "# Путь к хранилищу (embedded-режим: qdrant/ и store.db внутри)",
+            "# Путь к хранилищу",
             f"STORE_PATH={self.store_path}",
             "",
             "# Production-хранилища (пусто = embedded внутри STORE_PATH)",
@@ -209,7 +129,7 @@ class RAGConfig:
             f"CHUNK_SIZE={self.chunk_size}",
             f"CHUNK_OVERLAP={self.chunk_overlap}",
             "",
-            "# Reranker (Cross-encoder, ~1GB)",
+            "# Reranker (Cross-encoder)",
             f"RERANK_ENABLED={'true' if self.rerank_enabled else 'false'}",
             f"RERANK_MODEL={self.rerank_model}",
             f"RERANK_DEVICE={self.rerank_device}",
@@ -220,16 +140,24 @@ class RAGConfig:
             f"QUERY_EXPANSION_MODEL={self.query_expansion_model}",
             f"QUERY_EXPANSION_COUNT={self.query_expansion_count}",
             "",
-            "# HuggingFace: не обращаться к Hub при загрузке моделей (только локальный кеш)",
-            f"HF_HUB_OFFLINE={'true' if self.hf_offline else 'false'}",
-            "",
-            "# HuggingFace токен (для приватных моделей / rate limits)",
-            f"HF_TOKEN={self.hf_token}",
-            "",
-            "# Директория с локальными моделями (после scripts/setup_models.sh)",
-            f"MODELS_DIR={self.models_dir}",
-            "",
-            "# Прелоад моделей при старте (быстрый первый запрос, дольше стартап)",
+            "# Preload моделей при старте (только для sentence_transformer)",
             f"PRELOAD_MODELS={'true' if self.preload_models else 'false'}",
         ]
         return "\n".join(lines)
+
+    def resolve_qdrant_location(self) -> str:
+        """URL Qdrant-сервера или путь к embedded-хранилищу внутри store_path."""
+        return self.qdrant_url or f"{self.store_path}/qdrant"
+
+    def resolve_database_url(self) -> str:
+        """DSN Postgres или путь к SQLite-файлу внутри store_path."""
+        return self.database_url or f"{self.store_path}/store.db"
+
+    def resolve_model_path(self, model_name: str) -> str:
+        """Путь к модели: локальная директория (models/) или имя в HF Hub."""
+        if self.models_dir:
+            short_name = model_name.rsplit("/", 1)[-1]
+            local = os.path.join(self.models_dir, short_name)
+            if os.path.isdir(local):
+                return local
+        return model_name
