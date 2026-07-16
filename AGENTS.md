@@ -41,8 +41,7 @@ export QDRANT_URL=http://localhost:6333
 ### 2. Запуск
 
 ```bash
-# MCP-сервер (stdio)
-EMBEDDING_MODEL=bge-m3 python3 -m src.mcp_server
+EMBEDDING_PROVIDER=openai-compatible EMBEDDING_MODEL_NAME=vllm/bge-m3 python3 -m src.mcp_server
 
 # HTTP API (FastAPI)
 python3 -m src.cli --http
@@ -63,15 +62,15 @@ uv run python3 -m src.cli graph-viz -o rag_data/graph.html
 | `src/webui/index.html` | WebUI (graph + documents, vis.js) |
 | `src/http_api.py` | FastAPI HTTP REST API (порт 8765) |
 | `src/rag.py` | RAGSystem — оркестратор поиска |
- | `src/embeddings.py` | Эмбеддинги: sentence_transformer / Ollama / OpenAI-compatible |
-| `src/vector_store.py` | Qdrant (dense + sparse) |
-| `src/graph_store.py` | Граф: SQLite + NetworkX |
-| `src/document_store.py` | SQLite / Postgres (source of truth) |
-| `src/reranker.py` | CrossEncoder reranker (lazy load) |
-| `src/query_expander.py` | Multi-query expansion (Ollama LLM) |
-| `src/graph_extractor.py` | Авто-извлечение графа (LLM + NER) |
-| `src/structured_indexer.py` | Repomix JSON → чанки + sibling связи |
-| `src/config.py` | RAGConfig (из env) |
+ | `src/embeddings.py` | Эмбеддинги: sentence_transformer / Ollama / OpenAI-compatible / Anthropic |
+ | `src/vector_store.py` | Qdrant (dense + sparse) |
+ | `src/graph_store.py` | Граф: SQLite + NetworkX |
+ | `src/document_store.py` | SQLite / Postgres (source of truth) |
+ | `src/reranker.py` | Reranker: sentence_transformer (CrossEncoder) / OpenAI-compatible |
+ | `src/query_expander.py` | Query expansion: Ollama / OpenAI-compatible / Anthropic |
+ | `src/graph_extractor.py` | Авто-извлечение графа (LLM + NER) |
+ | `src/structured_indexer.py` | Repomix JSON → чанки + sibling связи |
+ | `src/config.py` | RAGConfig — pydantic-settings BaseSettings, автозагрузка .env |
 | `src/graph_viz.py` | Визуализация графа (vis.js) |
 | `src/cli.py` | CLI (argparse, console_script `rag-server`) |
 | `src/__init__.py` | init |
@@ -88,30 +87,32 @@ uv run python3 -m src.cli graph-viz -o rag_data/graph.html
 
 ## Провайдеры эмбеддингов
 
-Тип провайдера задаётся `EMBEDDING_PROVIDER`, имя модели — `EMBEDDING_MODEL`.
+Тип провайдера задаётся `EMBEDDING_PROVIDER`, имя модели — `EMBEDDING_MODEL_NAME`.
+.env загружается автоматически через pydantic-settings (`RAGConfig.from_env()`).
 
 ```bash
 # openai-compatible (TEI, Infinity, vLLM, OpenRouter, самописный сервер)
-export EMBEDDING_PROVIDER=openai-compatible
-export EMBEDDING_MODEL=BAAI/bge-m3
-export EMBEDDING_BASE_URL=http://localhost:8080/v1
+EMBEDDING_PROVIDER=openai-compatible
+EMBEDDING_MODEL_NAME=vllm/bge-m3
+EMBEDDING_BASE_URL=https://your-server/v1
+EMBEDDING_API_KEY=sk-...
 
 # Ollama (локальные эмбеддинги через /api/embed)
-export EMBEDDING_PROVIDER=ollama
-export EMBEDDING_MODEL=qwen3-embedding:8b
-export EMBEDDING_BASE_URL=http://localhost:11434
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_MODEL_NAME=qwen3-embedding:8b
+EMBEDDING_BASE_URL=http://localhost:11434
 
 # sentence_transformer (локально, sentence-transformers)
-export EMBEDDING_PROVIDER=sentence_transformer
-export EMBEDDING_MODEL=BAAI/bge-m3
-# export EMBEDDING_DEVICE=cpu
-# export MODELS_DIR=./models
-# export PRELOAD_MODELS=true
+EMBEDDING_PROVIDER=sentence_transformer
+EMBEDDING_MODEL_NAME=BAAI/bge-m3
+# EMBEDDING_DEVICE=cpu
+# MODELS_DIR=./models
+# PRELOAD_MODELS=true
 
-# Anthropic (если понадобится)
-# export EMBEDDING_PROVIDER=anthropic
-# export EMBEDDING_MODEL=<model>
-# export EMBEDDING_BASE_URL=<url>
+# Anthropic
+# EMBEDDING_PROVIDER=anthropic
+# EMBEDDING_MODEL_NAME=<model>
+# EMBEDDING_BASE_URL=https://api.anthropic.com
 ```
 
 ### Offline-режим (без обращения к HuggingFace Hub)

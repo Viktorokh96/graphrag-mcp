@@ -22,7 +22,7 @@ class TestRAGConfig:
                      "EMBEDDING_API_KEY", "STORE_PATH", "QDRANT_URL", "DATABASE_URL"]:
             monkeypatch.delenv(key, raising=False)
 
-        cfg = RAGConfig.from_env()
+        cfg = RAGConfig()
         assert cfg.embedding_provider == "openai-compatible"
         assert cfg.embedding_model_name == "BAAI/bge-m3"
 
@@ -36,11 +36,11 @@ class TestRAGConfig:
 
     def test_from_env_custom(self, monkeypatch):
         monkeypatch.setenv("EMBEDDING_PROVIDER", "ollama")
-        monkeypatch.setenv("EMBEDDING_MODEL", "qwen3-embedding:8b")
+        monkeypatch.setenv("EMBEDDING_MODEL_NAME", "qwen3-embedding:8b")
         monkeypatch.setenv("EMBEDDING_BASE_URL", "http://ollama:11434")
         monkeypatch.setenv("STORE_PATH", "/tmp/test_rag")
 
-        cfg = RAGConfig.from_env()
+        cfg = RAGConfig()
         assert cfg.embedding_provider == "ollama"
         assert cfg.embedding_model_name == "qwen3-embedding:8b"
         assert cfg.embedding_base_url == "http://ollama:11434"

@@ -3,13 +3,17 @@
 ## [0.3.0] — 2026-07-16
 
 ### Added
-- **Провайдеры эмбеддингов**: `EMBEDDING_PROVIDER` — тип протокола (`openai-compatible`, `anthropic`, `ollama`, `sentence_transformer`), `EMBEDDING_MODEL` — имя модели. Единая конфигурация для всех провайдеров.
+- **Провайдеры эмбеддингов**: `EMBEDDING_PROVIDER` — тип протокола (`openai-compatible`, `anthropic`, `ollama`, `sentence_transformer`), `EMBEDDING_MODEL_NAME` — имя модели. Единая конфигурация для всех провайдеров.
+- **pydantic-settings**: `RAGConfig` на `BaseSettings`, автозагрузка `.env` через `from_env()`. Наследует стандартное поведение: os.environ > .env > defaults.
 - **sentence_transformer**: локальные модели через sentence-transformers (BGE-M3, all-MiniLM-L6-v2, ...). Preload при `PRELOAD_MODELS=true`.
+
+### Changed
+- `EMBEDDING_MODEL` (env var) → `EMBEDDING_MODEL_NAME` (стандартное pydantic-settings имя). Старое имя поддерживается через model_validator для обратной совместимости.
 
 ### Removed
 - Удалены провайдеры `bge-m3` (локальный) и `openrouter` (покрывается `openai-compatible`)
-- Удалены специфичные конфиги: `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_DIMENSION`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `BGE_MODEL_NAME`, `BGE_DEVICE`
 - Удалён параметр `api_key` из `RAGSystem.__init__` (ключ задаётся через `EMBEDDING_API_KEY`)
+
 
 ## [0.2.0] — 2026-07-09
 

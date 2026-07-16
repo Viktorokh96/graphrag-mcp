@@ -1,11 +1,52 @@
-"""Общие фикстуры: RAGSystem на новом стеке (Qdrant + SQLite) с мок-эмбеддерами.
+"""Общие фикстуры."""
 
-Важно для Windows: Qdrant embedded и SQLite держат файловые локи — фикстуры
-обязаны вызывать rag.close() до удаления временной директории.
-"""
+import os
+
+import pytest
+
+_CONFIG_ENV_VARS = [
+    "EMBEDDING_PROVIDER",
+    "EMBEDDING_MODEL",
+    "EMBEDDING_MODEL_NAME",
+    "EMBEDDING_BASE_URL",
+    "EMBEDDING_API_KEY",
+    "EMBEDDING_DIM",
+    "EMBEDDING_DEVICE",
+    "OPENAI_MODEL",
+    "OPENAI_BASE_URL",
+    "OPENAI_API_KEY",
+    "HF_OFFLINE",
+    "HF_TOKEN",
+    "MODELS_DIR",
+    "PRELOAD_MODELS",
+    "STORE_PATH",
+    "QDRANT_URL",
+    "DATABASE_URL",
+    "RERANK_ENABLED",
+    "RERANK_PROVIDER",
+    "RERANK_MODEL",
+    "RERANK_BASE_URL",
+    "RERANK_API_KEY",
+    "RERANK_DEVICE",
+    "QUERY_EXPANSION_ENABLED",
+    "EXPANSION_PROVIDER",
+    "EXPANSION_MODEL",
+    "EXPANSION_BASE_URL",
+    "EXPANSION_API_KEY",
+    "EXPANSION_COUNT",
+    "QUERY_EXPANSION_OLLAMA_URL",
+    "QUERY_EXPANSION_MODEL",
+    "OLLAMA_BASE_URL",
+]
+
+
+@pytest.fixture(autouse=True)
+def clean_config_env(monkeypatch):
+    """Очистка env-переменных конфига перед каждым тестом."""
+    for key in _CONFIG_ENV_VARS:
+        monkeypatch.delenv(key, raising=False)
 
 import numpy as np
-import pytest
 
 from src.config import RAGConfig
 from src.rag import RAGSystem
