@@ -243,7 +243,10 @@ def add_document(req: AddDocumentRequest):
     existing = rag.is_duplicate(req.text)
     from src.mcp_server import _parse_meta
     meta = _parse_meta(req.meta)
-    doc_id = rag.add_document(req.text, meta, extract_graph=req.extract_graph)
+    try:
+        doc_id = rag.add_document(req.text, meta, extract_graph=req.extract_graph)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"doc_id": doc_id, "duplicate": existing is not None}
 
 
