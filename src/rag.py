@@ -116,14 +116,19 @@ class RAGSystem:
         self._chunker = Chunker(chunk_size=cfg.chunk_size, chunk_overlap=cfg.chunk_overlap)
         self._chunk_char_threshold = cfg.chunk_size * 4
         self._reranker_enabled = cfg.rerank_enabled
+        self._rerank_provider = cfg.rerank_provider
         self._reranker_model = cfg.rerank_model
+        self._reranker_base_url = cfg.rerank_base_url
+        self._reranker_api_key = cfg.rerank_api_key
         self._reranker_device = cfg.rerank_device
         self._reranker_top_k_multiplier = cfg.rerank_top_k_multiplier
         self._reranker = None
         self._query_expansion_enabled = cfg.query_expansion_enabled
-        self._query_expansion_model = cfg.query_expansion_model
-        self._query_expansion_count = cfg.query_expansion_count
-        self._query_expansion_ollama_url = cfg.query_expansion_ollama_url
+        self._expansion_provider = cfg.expansion_provider
+        self._expansion_model = cfg.expansion_model
+        self._expansion_base_url = cfg.expansion_base_url
+        self._expansion_api_key = cfg.expansion_api_key
+        self._expansion_count = cfg.expansion_count
         self._query_expander = None
         self._communities: list[dict] = []
         self._community_names: dict[int, str] = {}
@@ -154,25 +159,29 @@ class RAGSystem:
     def _compute_hash(self, text: str) -> str:
         """Compute SHA-256 hash of normalized text."""
         return hashlib.sha256(self._normalize_text(text).encode()).hexdigest()
-
     def _get_reranker(self):
-        """Lazy load reranker (CrossEncoder, ~1GB)."""
+        """Lazy load reranker."""
         if self._reranker is None:
             from src.reranker import Reranker
             self._reranker = Reranker(
+                provider=self._rerank_provider,
                 model_name=self.config.resolve_model_path(self._reranker_model),
                 device=self._reranker_device,
+                base_url=self._reranker_base_url,
+                api_key=self._reranker_api_key,
             )
         return self._reranker
 
     def _get_query_expander(self):
-        """Lazy load query expander (Ollama LLM)."""
+        """Lazy load query expander."""
         if self._query_expander is None:
             from src.query_expander import QueryExpander
             self._query_expander = QueryExpander(
-                model=self._query_expansion_model,
-                base_url=self._query_expansion_ollama_url,
-                count=self._query_expansion_count,
+                provider=self._expansion_provider,
+                model=self._expansion_model,
+                base_url=self._expansion_base_url,
+                api_key=self._expansion_api_key,
+                count=self._expansion_count,
             )
         return self._query_expander
 

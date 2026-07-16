@@ -1,26 +1,46 @@
-"""Reranker для переранжирования результатов поиска.
+"""Reranker — переранжирование результатов поиска.
 
-Модель: BAAI/bge-reranker-v2-m3 (CrossEncoder, ~1GB).
-Ленивая загрузка — модель поднимается только при первом вызове rerank().
-
-По умолчанию выключен (RERANK_ENABLED=False). Включается через
-`rerank=True` в запросе поиска или env RERANK_ENABLED=true.
+Провайдеры:
+  - sentence_transformer: локальный CrossEncoder (BAAI/bge-reranker-v2-m3)
+  - openai-compatible:   любой сервер с POST /v1/rerank
+  - anthropic, ollama:   NotImplementedError (пока нет API)
 """
 
+import logging
 from typing import Optional
+
+import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class Reranker:
-    """Cross-encoder reranker для уточнения топ-кандидатов.
+    """Переранжирование топ-кандидатов."""
 
-    Используется в `search_hybrid()` после RRF-слияния: берёт k×2 кандидатов,
-    вычисляет релевантность каждой пары (query, doc) и пересортировывает.
-    """
-
-    def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3", device: str = "cpu"):
+    def __init__(
+        self,
+        provider: str = "sentence_transformer",
+        model_name: str = "BAAI/bge-reranker-v2-m3",
+        device: str = "cpu",
+        base_url: str = "",
+        api_key: str = "",
+    ):
+        self.provider = provider
         self.model_name = model_name
         self.device = device
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
         self._model = None
+        self._client = None
+
+        if provider == "sentence_transformer":
+            pass  # lazy load CrossEncoder
+        elif provider == "openai-compatible":
+            self._client = httpx.Client(timeout=30.0)
+        elif provider in ("anthropic", "ollama"):
+            raise NotImplementedError(f"Reranker provider {provider!r} is not implemented yet")
+        else:
+            raise ValueError(f"Unknown reranker provider: {provider!r}")
 
     def _ensure_model(self):
         if self._model is None:
@@ -34,19 +54,19 @@ class Reranker:
         candidates: list[dict],
         top_k: Optional[int] = None,
     ) -> list[dict]:
-        """Переранжировать кандидатов по релевантности к запросу.
-
-        Args:
-            query: исходный поисковый запрос
-            candidates: список dict с полем `text`
-            top_k: сколько результатов вернуть (None = все)
-
-        Returns:
-            Тот же список, отсортированный по убыванию rerank_score,
-            с добавленным полем `rerank_score`.
-        """
         if not candidates:
             return []
+
+        if self.provider == "sentence_transformer":
+            return self._rerank_local(query, candidates, top_k)
+        elif self.provider == "openai-compatible":
+            return self._rerank_api(query, candidates, top_k)
+        else:
+            raise NotImplementedError(f"Reranker provider {self.provider!r}")
+
+    def _rerank_local(
+        self, query: str, candidates: list[dict], top_k: Optional[int]
+    ) -> list[dict]:
         model = self._ensure_model()
         pairs = [(query, d["text"]) for d in candidates]
         scores = model.predict(pairs)
@@ -56,3 +76,38 @@ class Reranker:
         if top_k is not None:
             return candidates[:top_k]
         return candidates
+
+    def _rerank_api(
+        self, query: str, candidates: list[dict], top_k: Optional[int]
+    ) -> list[dict]:
+        url = f"{self.base_url}/rerank"
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        payload = {
+            "model": self.model_name,
+            "query": query,
+            "documents": [d["text"] for d in candidates],
+        }
+        if top_k is not None:
+            payload["top_n"] = top_k
+
+        response = self._client.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+
+        # OpenAI-compatible rerank response: {"results": [{"index": 0, "relevance_score": 0.9}, ...]}
+        results = data.get("results", [])
+        for r in results:
+            idx = r["index"]
+            candidates[idx]["rerank_score"] = float(r["relevance_score"])
+
+        candidates.sort(key=lambda x: x.get("rerank_score", 0.0), reverse=True)
+        if top_k is not None:
+            return candidates[:top_k]
+        return candidates
+
+    def close(self):
+        if self._client:
+            self._client.close()

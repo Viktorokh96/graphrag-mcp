@@ -36,9 +36,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="RAG System CLI")
     parser.add_argument("--store", type=str, default="./rag_data", help="Path to vector store")
     parser.add_argument("--key", type=str, default=None, help="API key for embedding provider")
-    parser.add_argument("--provider", type=str, default=None, choices=["openai-compatible", "anthropic", "ollama"], help="Embedding provider type")
-    parser.add_argument("--model", type=str, default=None, help="Embedding model name (e.g. BAAI/bge-m3)")
-    parser.add_argument("--ollama-url", type=str, default=None, help="Ollama base URL")
+    parser.add_argument("--provider", type=str, default=None, choices=["openai-compatible", "anthropic", "ollama", "sentence_transformer"], help="Embedding provider type")
+    parser.add_argument("--model", type=str, default=None, help="Embedding model name")
+    parser.add_argument("--base-url", type=str, default=None, help="Embedding API base URL")
+    parser.add_argument("--device", type=str, default=None, help="Device for sentence_transformer (cpu/cuda)")
+    parser.add_argument("--rerank-provider", type=str, default=None, choices=["openai-compatible", "anthropic", "ollama", "sentence_transformer"], help="Reranker provider type")
+    parser.add_argument("--rerank-model", type=str, default=None, help="Reranker model name")
+    parser.add_argument("--rerank-base-url", type=str, default=None, help="Reranker API base URL")
+    parser.add_argument("--expansion-provider", type=str, default=None, choices=["openai-compatible", "anthropic", "ollama"], help="Query expansion provider type")
+    parser.add_argument("--expansion-model", type=str, default=None, help="Query expansion model name")
+    parser.add_argument("--expansion-url", type=str, default=None, help="Query expansion API base URL")
+    parser.add_argument("--expansion-count", type=int, default=None, help="Number of query variants")
     parser.add_argument("--http", action="store_true", help="Start HTTP REST API + MCP SSE server")
     parser.add_argument("--port", type=int, default=8765, help="HTTP server port (default: 8765)")
 
@@ -190,11 +198,26 @@ def main(argv: Optional[list[str]] = None) -> int:
             cfg.embedding_provider = args.provider
         if args.model:
             cfg.embedding_model_name = args.model
-        if args.ollama_url:
-            cfg.embedding_base_url = args.ollama_url
+        if args.base_url:
+            cfg.embedding_base_url = args.base_url
+        if args.device:
+            cfg.embedding_device = args.device
         if args.key:
             cfg.embedding_api_key = args.key
-
+        if args.rerank_provider:
+            cfg.rerank_provider = args.rerank_provider
+        if args.rerank_model:
+            cfg.rerank_model = args.rerank_model
+        if args.rerank_base_url:
+            cfg.rerank_base_url = args.rerank_base_url
+        if args.expansion_provider:
+            cfg.expansion_provider = args.expansion_provider
+        if args.expansion_model:
+            cfg.expansion_model = args.expansion_model
+        if args.expansion_url:
+            cfg.expansion_base_url = args.expansion_url
+        if args.expansion_count is not None:
+            cfg.expansion_count = args.expansion_count
         rag = RAGSystem(store_path=args.store, config=cfg)
 
         if args.command == "add-document":
@@ -357,12 +380,26 @@ def _start_http(args) -> int:
         os.environ["EMBEDDING_PROVIDER"] = args.provider
     if args.model:
         os.environ["EMBEDDING_MODEL"] = args.model
-    if args.ollama_url:
-        os.environ["EMBEDDING_BASE_URL"] = args.ollama_url
+    if args.base_url:
+        os.environ["EMBEDDING_BASE_URL"] = args.base_url
+    if args.device:
+        os.environ["EMBEDDING_DEVICE"] = args.device
     if args.key:
         os.environ["EMBEDDING_API_KEY"] = args.key
-    port = args.port or 8765
-    print(f"🌐 Starting HTTP server on http://localhost:{port}", file=sys.stderr)
+    if args.rerank_provider:
+        os.environ["RERANK_PROVIDER"] = args.rerank_provider
+    if args.rerank_model:
+        os.environ["RERANK_MODEL"] = args.rerank_model
+    if args.rerank_base_url:
+        os.environ["RERANK_BASE_URL"] = args.rerank_base_url
+    if args.expansion_provider:
+        os.environ["EXPANSION_PROVIDER"] = args.expansion_provider
+    if args.expansion_model:
+        os.environ["EXPANSION_MODEL"] = args.expansion_model
+    if args.expansion_url:
+        os.environ["EXPANSION_BASE_URL"] = args.expansion_url
+    if args.expansion_count is not None:
+        os.environ["EXPANSION_COUNT"] = str(args.expansion_count)
     print(f"   REST API: http://localhost:{port}/docs", file=sys.stderr)
     print(f"   MCP SSE:  http://localhost:{port}/mcp", file=sys.stderr)
     uvicorn.run("src.http_api:app", host="0.0.0.0", port=port, log_level="info")
