@@ -308,7 +308,8 @@ class RAGSystem:
         return results
 
     def search(
-        self, query: str, k: int = 5, metadata_filter: Optional[dict] = None
+        self, query: str, k: int = 5, metadata_filter: Optional[dict] = None,
+        rerank: Optional[bool] = None,
     ) -> list[tuple[str, str, float, dict]]:
         """Семантический поиск. Возвращает [(doc_id, text, score, metadata)]."""
         if self.vector_store.count() == 0:
@@ -317,12 +318,23 @@ class RAGSystem:
         store_dim = self.vector_store.get_dimension()
         if store_dim and len(query_embedding) != store_dim:
             return []
-        # Нулевой вектор запроса не несёт семантического сигнала — пусто,
-        # гибридный поиск обопрётся на BM25 (запросы-идентификаторы).
         if all(abs(v) < 1e-12 for v in query_embedding):
             return []
         hits = self.vector_store.search(query_embedding, k=k, metadata_filter=metadata_filter)
-        return self._join_texts(hits)
+        results = self._join_texts(hits)
+
+        do_rerank = rerank if rerank is not None else self._reranker_enabled
+        if do_rerank and len(results) > 1:
+            candidates = [
+                {"doc_id": doc_id, "text": text, "score": score, "metadata": meta}
+                for doc_id, text, score, meta in results
+            ]
+            reranked = self._get_reranker().rerank(query, candidates, top_k=k)
+            results = [
+                (d["doc_id"], d["text"], d["rerank_score"], d["metadata"])
+                for d in reranked
+            ]
+        return results
 
     def bm25_search(
         self, query: str, k: int = 5, metadata_filter: Optional[dict] = None

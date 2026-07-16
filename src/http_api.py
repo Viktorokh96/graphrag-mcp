@@ -226,7 +226,7 @@ def search(req: SearchRequest):
     mf = normalize_metadata_filter(req.metadata_filter)
 
     if mode == "semantic":
-        results = rag.search(req.query, k=req.k, metadata_filter=mf)
+        results = rag.search(req.query, k=req.k, metadata_filter=mf, rerank=req.rerank)
     elif mode == "bm25":
         results = rag.bm25_search(req.query, k=req.k, metadata_filter=mf)
     else:
