@@ -6,8 +6,7 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 COPY AGENTS.md LICENSE ./
-COPY src/ src/
-RUN uv sync --frozen --no-dev --no-editable
+RUN uv sync --frozen --no-dev --no-editable --extra postgres
 
 # Runtime stage
 FROM python:3.13-slim
