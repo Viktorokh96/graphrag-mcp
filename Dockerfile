@@ -6,7 +6,8 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 COPY AGENTS.md LICENSE ./
-RUN uv sync --frozen --no-dev
+COPY src/ src/
+RUN uv sync --frozen --no-dev --no-editable
 
 # Runtime stage
 FROM python:3.13-slim
@@ -17,10 +18,6 @@ COPY --from=builder /app/.venv /app/.venv
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
 
-COPY src/ src/
-
 EXPOSE 8765
 
-# По умолчанию HTTP MCP режим. Qdrant embedded + SQLite.
-# Для production: QDRANT_URL + DATABASE_URL (см. docker-compose.yml)
 CMD ["rag-server", "--http", "--port", "8765"]
