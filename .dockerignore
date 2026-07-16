@@ -39,4 +39,8 @@ lib/
 
 # Docs
 *.md
+!AGENTS.md
+!LICENSE
+!pyproject.toml
+!uv.lock
 specifications/
