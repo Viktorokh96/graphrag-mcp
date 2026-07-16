@@ -690,14 +690,11 @@ class RAGSystem:
             logger.warning("Store sync failed: %s", e)
 
     def reindex(self, force: bool = False) -> int:
-        """Пересчитать эмбеддинги всех документов (смена провайдера/модели).
-
-        Args:
-            force: принудительно пересоздать коллекцию Qdrant, даже если
-                   размерность не изменилась.
-        """
+        """Пересчитать эмбеддинги всех документов (смена провайдера/модели)."""
+        import time as _time
         items, total = self.doc_store.list(limit=self.doc_store.count() or 1, offset=0)
         if not items:
+            logger.info("Reindex: empty store, nothing to do")
             return 0
 
         self.embedding_generator.clear_cache()
@@ -706,11 +703,21 @@ class RAGSystem:
         old_dim = self.vector_store.get_dimension()
 
         if force or (old_dim and old_dim != new_dim):
+            logger.info("Reindex: recreating Qdrant collection (old_dim=%s, new_dim=%d, force=%s)",
+                        old_dim, new_dim, force)
             self.vector_store.dimension = new_dim
             self.vector_store.recreate_collection()
+        else:
+            logger.info("Reindex: dimension unchanged (%d), keeping collection", new_dim)
 
-        for record in items:
+        t0 = _time.monotonic()
+        for i, record in enumerate(items):
             self._index_vector(record["doc_id"], record["text"], record["metadata"])
+            if (i + 1) % 50 == 0 or i == 0:
+                logger.info("Reindex: %d/%d documents …", i + 1, len(items))
+        elapsed = _time.monotonic() - t0
+        logger.info("Reindex: %d documents in %.1fs (%.1f doc/s)",
+                    len(items), elapsed, len(items)/elapsed if elapsed else 0)
         return len(items)
 
     def stats(self) -> dict:
