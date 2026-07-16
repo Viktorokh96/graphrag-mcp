@@ -104,9 +104,8 @@ FastAPI без middleware. Любой в локальной сети может 
 | ~~add_file без extract_graph~~ | `extract_graph` параметр добавлен в add_file | 0.2.0 |
 | ~~Query expansion timeout~~ | 120с через Ollama `Client(timeout=120.0)` | 0.2.0 |
 | ~~Unicode нормализация~~ | SHA256 хэш нормализованного текста | 0.2.0 |
-| ~~Двойной `rstrip('/')` в embeddings.py~~ | Убран лишний вызов в URL-сборке | 0.3.0 |
 
----
+
 
 ## Summary
 
@@ -115,4 +114,4 @@ FastAPI без middleware. Любой в локальной сети может 
 | Strategic | 3 | MS догоняет, LightRAG лидирует, ниша узка |
 | Product | 4 | WebUI сырой, нет community reports, HTTP голый, anthropic stub |
 | Architecture | 10 | threading.Lock, неатомарность, OOM, cache без LRU, batch, BFS fan-out, graph desync, IDF scroll, meta import, dead TF-IDF |
-| Solved | 11 | см. архив выше |
+| Solved | 10 | см. архив выше |
