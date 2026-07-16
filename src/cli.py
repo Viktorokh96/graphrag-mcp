@@ -400,6 +400,7 @@ def _start_http(args) -> int:
         os.environ["EXPANSION_BASE_URL"] = args.expansion_url
     if args.expansion_count is not None:
         os.environ["EXPANSION_COUNT"] = str(args.expansion_count)
+    port = args.port or 8765
     print(f"   REST API: http://localhost:{port}/docs", file=sys.stderr)
     print(f"   MCP SSE:  http://localhost:{port}/mcp", file=sys.stderr)
     uvicorn.run("src.http_api:app", host="0.0.0.0", port=port, log_level="info")
