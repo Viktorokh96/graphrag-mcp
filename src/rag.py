@@ -132,7 +132,7 @@ class RAGSystem:
         self._query_expander = None
         # Preload моделей при старте
         if cfg.rerank_enabled and cfg.preload_models and cfg.rerank_provider == "sentence_transformer":
-            self._get_reranker()
+            self._get_reranker()._ensure_model()
             logger.info("Reranker model preloaded (sentence_transformer)")
         if cfg.query_expansion_enabled and cfg.preload_models:
             self._get_query_expander()
