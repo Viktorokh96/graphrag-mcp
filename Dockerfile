@@ -13,11 +13,10 @@ RUN uv sync --frozen --no-dev --no-editable
 FROM python:3.13-slim
 
 WORKDIR /app
-
 COPY --from=builder /app/.venv /app/.venv
+COPY src/webui/ src/webui/
 ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH"
-
 EXPOSE 8765
 
 CMD ["rag-server", "--http", "--port", "8765"]

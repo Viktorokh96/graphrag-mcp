@@ -40,6 +40,7 @@ lib/
 # Docs
 *.md
 !AGENTS.md
+!src/webui/**
 !LICENSE
 !pyproject.toml
 !uv.lock
