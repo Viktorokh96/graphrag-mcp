@@ -8,11 +8,6 @@ services:
       - ${QDRANT_DATA_DIR:-./rag_data/qdrant_storage}:/qdrant/storage
     environment:
       - QDRANT__LOG_LEVEL=INFO
-    healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/6333 && echo ok || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
 
   postgres:
     image: postgres:16-alpine
@@ -60,15 +55,7 @@ services:
       - EXPANSION_BASE_URL=${EXPANSION_BASE_URL:-http://localhost:11434}
       - EXPANSION_COUNT=3
     depends_on:
-      qdrant:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    volumes:
-      - ${STORE_DATA_DIR:-./rag_data_clean}:/data
-      - rag_data_models:/root/.cache
-
+      - postgres
 volumes:
   rag_data_pg:
   rag_data_models:
-  rag_data_store:
