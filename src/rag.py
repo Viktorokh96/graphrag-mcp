@@ -105,14 +105,6 @@ class RAGSystem:
         if cfg.embedding_provider == "sentence_transformer" and cfg.preload_models:
             self.embedding_generator._ensure_model()
             logger.info("Embedding model preloaded (sentence_transformer)")
-        # Preload reranker при старте (sentence_transformer only)
-        if cfg.rerank_enabled and cfg.preload_models and cfg.rerank_provider == "sentence_transformer":
-            self._get_reranker()
-            logger.info("Reranker model preloaded (sentence_transformer)")
-        # Preload query expander при старте (API call check — не грузит модель, но проверяет доступность)
-        if cfg.query_expansion_enabled and cfg.preload_models:
-            self._get_query_expander()
-            logger.info("Query expander initialized (preload)")
         self._default_alpha = cfg.default_alpha
         self._cyrillic_alpha = cfg.cyrillic_alpha
         self._hybrid_expand = cfg.hybrid_expand
@@ -138,6 +130,13 @@ class RAGSystem:
         self._expansion_api_key = cfg.expansion_api_key
         self._expansion_count = cfg.expansion_count
         self._query_expander = None
+        # Preload моделей при старте
+        if cfg.rerank_enabled and cfg.preload_models and cfg.rerank_provider == "sentence_transformer":
+            self._get_reranker()
+            logger.info("Reranker model preloaded (sentence_transformer)")
+        if cfg.query_expansion_enabled and cfg.preload_models:
+            self._get_query_expander()
+            logger.info("Query expander initialized (preload)")
         self._communities: list[dict] = []
         self._community_names: dict[int, str] = {}
         self._community_cache_path = Path(cfg.store_path) / "community_cache.json"
