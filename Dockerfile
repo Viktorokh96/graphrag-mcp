@@ -6,16 +6,16 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 COPY AGENTS.md LICENSE ./
-RUN uv sync --frozen --no-dev --no-editable --extra postgres
+RUN uv sync --frozen --no-dev --extra postgres
 
 # Runtime stage
 FROM python:3.13-slim
 
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
-COPY src/webui/ src/webui/
+COPY src/ src/
 ENV VIRTUAL_ENV=/app/.venv \
-    PATH="/app/.venv/bin:$PATH"
-EXPOSE 8765
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH=/app
 
 CMD ["rag-server", "--http", "--port", "8765"]
