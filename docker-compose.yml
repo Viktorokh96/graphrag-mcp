@@ -3,7 +3,7 @@ services:
     image: qdrant/qdrant:latest
     ports:
       - "${QDRANT_PORT:-6333}:6333"
-      - "6334:6334"
+      - "${QDRANT_GRPC_PORT:-6336}:6334"
     volumes:
       - ${QDRANT_DATA_DIR:-./rag_data/qdrant_storage}:/qdrant/storage
     environment:
