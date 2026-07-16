@@ -433,3 +433,86 @@ class OllamaEmbeddingGenerator:
             embedding = [v / norm for v in embedding]
 
         return embedding
+
+
+class OpenAICompatibleEmbeddingGenerator:
+    """Генератор эмбеддингов через OpenAI-compatible API (TEI, Infinity, vLLM и др.).
+    
+    Поддерживает POST /v1/embeddings с телом {model, input}.
+    Совместим с HuggingFace TEI, Infinity, vLLM (≥0.6.0) и самописными серверами.
+    """
+    
+    def __init__(
+        self,
+        base_url: str = "http://localhost:8080/v1",
+        api_key: str = "",
+        model: str = "BAAI/bge-m3",
+        dimension: int = 1024,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.model = model
+        self._dimension = dimension
+        self._cache: dict[str, list[float]] = {}
+        self._client = httpx.Client(timeout=120.0)
+    
+    def get_embedding(self, text: str) -> list[float]:
+        if text in self._cache:
+            return self._cache[text]
+        embedding = self.get_embeddings([text])[0]
+        return embedding
+    
+    def get_embeddings(self, texts: list[str]) -> list[list[float]]:
+        missing = list(dict.fromkeys(t for t in texts if t not in self._cache))
+        if missing:
+            try:
+                url = f"{self.base_url}/embeddings"
+                headers = {"Content-Type": "application/json"}
+                if self.api_key:
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+                payload = {"model": self.model, "input": missing if len(missing) > 1 else missing[0]}
+                response = self._client.post(url, headers=headers, json=payload, timeout=120.0)
+                response.raise_for_status()
+                data = response.json()
+                embeddings = [item["embedding"] for item in sorted(data["data"], key=lambda x: x["index"])]
+                if len(embeddings) != len(missing):
+                    raise ValueError(
+                        f"Server returned {len(embeddings)} embeddings for {len(missing)} inputs"
+                    )
+                for text, vec in zip(missing, embeddings):
+                    self._cache[text] = vec
+            except Exception:
+                for text in missing:
+                    self._cache[text] = self._fallback_embedding(text)
+        return [self._cache[t] for t in texts]
+    
+    def get_dimension(self) -> int:
+        for emb in self._cache.values():
+            return len(emb)
+        return self._dimension
+    
+    def clear_cache(self):
+        self._cache.clear()
+    
+    def close(self):
+        self._client.close()
+    
+    def _fallback_embedding(self, text: str) -> list[float]:
+        import hashlib
+        
+        embedding = [0.0] * self._dimension
+        words = text.lower().split()
+        
+        for word in words:
+            word = word.strip(".,!?;:'\"()[]{}")
+            if not word:
+                continue
+            hash_val = int(hashlib.md5(word.encode()).hexdigest(), 16)
+            index = hash_val % self._dimension
+            embedding[index] += 1.0 / len(words)
+        
+        norm = sum(v * v for v in embedding) ** 0.5
+        if norm > 0:
+            embedding = [v / norm for v in embedding]
+        
+        return embedding

@@ -63,7 +63,7 @@ uv run python3 -m src.cli graph-viz -o rag_data/graph.html
 | `src/webui/index.html` | WebUI (graph + documents, vis.js) |
 | `src/http_api.py` | FastAPI HTTP REST API (порт 8765) |
 | `src/rag.py` | RAGSystem — оркестратор поиска |
-| `src/embeddings.py` | Эмбеддинги: BGE-M3 / Ollama / OpenRouter |
+ | `src/embeddings.py` | Эмбеддинги: BGE-M3 / Ollama / OpenRouter / OpenAI-compatible |
 | `src/vector_store.py` | Qdrant (dense + sparse) |
 | `src/graph_store.py` | Граф: SQLite + NetworkX |
 | `src/document_store.py` | SQLite / Postgres (source of truth) |
@@ -89,7 +89,7 @@ uv run python3 -m src.cli graph-viz -o rag_data/graph.html
 ## Провайдеры эмбеддингов
 
 По умолчанию — **BGE-M3** (sentence-transformers, 1024d, lazy load).
-Альтернативы — Ollama (4096d) или OpenRouter.
+ Альтернативы — Ollama (4096d), OpenRouter или OpenAI-compatible (TEI, Infinity, vLLM).
 
 ```bash
 # BGE-M3 (по умолчанию)
@@ -103,6 +103,11 @@ export OLLAMA_MODEL=qwen3-embedding:8b
 # OpenRouter
 export EMBEDDING_MODEL=openrouter
 export OPENROUTER_API_KEY=sk-or-v1-...
+
+# OpenAI-compatible (TEI, Infinity, vLLM, самописный сервер)
+export EMBEDDING_MODEL=openai-compatible
+export EMBEDDING_BASE_URL=http://localhost:8080/v1
+export EMBEDDING_MODEL_NAME=BAAI/bge-m3
 ```
 
 ### Offline-режим (без обращения к HuggingFace Hub)

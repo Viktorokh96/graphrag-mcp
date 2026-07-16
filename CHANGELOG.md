@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.0] — 2026-07-16
+
+### Added
+- **OpenAI-compatible провайдер эмбеддингов**: `EMBEDDING_MODEL=openai-compatible` — внешние серверы с `POST /v1/embeddings` (TEI, Infinity, vLLM, самописные). Поддержка батчей, кеширования, fallback.
+- Конфигурация: `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL_NAME`, fallback на `OPENAI_BASE_URL`/`OPENAI_API_KEY`/`OPENAI_MODEL`.
+
+### Changed
+- `src/embeddings.py`: новый класс `OpenAICompatibleEmbeddingGenerator`
+
 ## [0.2.0] — 2026-07-09
 
 ### Added

@@ -32,6 +32,11 @@ class RAGConfig:
     openrouter_api_key: Optional[str] = None
     openrouter_model: str = "openai/text-embedding-3-small"
     openrouter_dimension: int = 1536
+    # OpenAI-compatible API (TEI, Infinity, vLLM, самописный сервер)
+    embedding_base_url: str = "http://localhost:8080/v1"
+    embedding_api_key: str = ""
+    embedding_model_name: str = "BAAI/bge-m3"
+    ollama_base_url: str = "http://localhost:11434"
     store_path: str = "./rag_data"
     # Хранилища (Фаза 2). Пустые значения → embedded-режим внутри store_path:
     #   qdrant_url:   URL Qdrant-сервера (prod) | "" → embedded {store_path}/qdrant
@@ -101,6 +106,16 @@ class RAGConfig:
             embedding_device=os.environ.get("EMBEDDING_DEVICE", "cpu"),
             ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
             ollama_model=os.environ.get("OLLAMA_MODEL", "qwen3-embedding:8b"),
+            embedding_base_url=os.environ.get(
+                "EMBEDDING_BASE_URL",
+                os.environ.get("OPENAI_BASE_URL", "http://localhost:8080/v1"),
+            ),
+            embedding_api_key=os.environ.get(
+                "EMBEDDING_API_KEY", os.environ.get("OPENAI_API_KEY", "")
+            ),
+            embedding_model_name=os.environ.get(
+                "EMBEDDING_MODEL_NAME", os.environ.get("OPENAI_MODEL", "BAAI/bge-m3")
+            ),
             ollama_dimension=_env_int("OLLAMA_DIMENSION", "4096"),
             openrouter_api_key=os.environ.get("OPENROUTER_API_KEY"),
             openrouter_model=os.environ.get("OPENROUTER_MODEL", "openai/text-embedding-3-small"),
@@ -155,7 +170,7 @@ class RAGConfig:
 
     def to_env_preview(self) -> str:
         lines = [
-            "# Выбор провайдера эмбеддингов: bge-m3 (по умолчанию), ollama или openrouter",
+            "# Выбор провайдера эмбеддингов: bge-m3 (по умолчанию), ollama, openrouter или openai-compatible",
             f"EMBEDDING_MODEL={self.embedding_provider}",
             "",
             "# BGE-M3 настройки (локальная модель, sentence-transformers)",
@@ -171,6 +186,11 @@ class RAGConfig:
             f"OPENROUTER_API_KEY={self.openrouter_api_key or ''}",
             f"OPENROUTER_MODEL={self.openrouter_model}",
             f"OPENROUTER_DIMENSION={self.openrouter_dimension}",
+            "",
+            "# OpenAI-compatible настройки (TEI, Infinity, vLLM, самописный сервер)",
+            f"EMBEDDING_BASE_URL={self.embedding_base_url}",
+            f"EMBEDDING_API_KEY={self.embedding_api_key or ''}",
+            f"EMBEDDING_MODEL_NAME={self.embedding_model_name}",
             "",
             "# Путь к хранилищу (embedded-режим: qdrant/ и store.db внутри)",
             f"STORE_PATH={self.store_path}",

@@ -20,6 +20,7 @@ from src.document_store import Database, DocumentStore
 from src.embeddings import (
     BgeM3EmbeddingGenerator,
     OllamaEmbeddingGenerator,
+    OpenAICompatibleEmbeddingGenerator,
     OpenRouterEmbeddingGenerator,
 )
 from src.graph_store import GraphStore
@@ -89,10 +90,17 @@ class RAGSystem:
                 local_files_only=cfg.hf_offline,
                 token=cfg.hf_token,
             )
+        elif cfg.embedding_provider == "openai-compatible":
+            self.embedding_generator = OpenAICompatibleEmbeddingGenerator(
+                base_url=cfg.embedding_base_url,
+                api_key=cfg.embedding_api_key,
+                model=cfg.embedding_model_name,
+                dimension=cfg.embedding_dim,
+            )
         else:
             raise ValueError(
                 f"Unknown embedding provider: {cfg.embedding_provider!r}. "
-                f"Supported: bge-m3, ollama, openrouter."
+                f"Supported: bge-m3, ollama, openrouter, openai-compatible."
             )
 
         self.db = Database(cfg.resolve_database_url())
