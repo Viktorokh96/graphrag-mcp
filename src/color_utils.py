@@ -87,3 +87,70 @@ def embedding_to_rgb(embedding: Union[list, np.ndarray]) -> tuple[int, int, int]
         int(round(g_srgb * 255)),
         int(round(b_srgb * 255)),
     )
+
+
+# -- Word-frequency based coloring (experimental) ------------------------------
+
+_WORD_RE = __import__("re").compile(r"[a-zа-яё0-9_]+", __import__("re").IGNORECASE)
+
+
+def text_to_rgb(text: str) -> tuple[int, int, int]:
+    """Раскраска по топ-10 самых частотных слов (≥3 символов, не чисто цифры).
+
+    Алгоритм:
+    1. Токенизация текста, lowercase.
+    2. Фильтр: длина ≥ 3, не ``isdigit()``.
+    3. Топ-10 по частоте, затем алфавитная сортировка для детерминизма.
+    4. MD5 от ``|``-склеенных слов → hue (0-360) → HSL → RGB.
+
+    Тексты с одинаковым набором топ-слов получат одинаковый цвет.
+    Тексты без слов (слишком короткие) — серый (128, 128, 128).
+    """
+    import collections
+    import hashlib
+
+    words = _WORD_RE.findall(text.lower())
+    # Фильтр: ≥ 3 символов, не чисто цифры
+    words = [w for w in words if len(w) >= 3 and not w.isdigit()]
+
+    if not words:
+        return (128, 128, 128)
+
+    counter = collections.Counter(words)
+    top = [w for w, _ in counter.most_common(10)]
+    top.sort()
+
+    seed = "|".join(top)
+    h = int(hashlib.md5(seed.encode()).hexdigest(), 16) % 360
+
+    return _hsl_to_rgb(h, 50, 28)
+
+
+def _hsl_to_rgb(h: int, s: int, l: int) -> tuple[int, int, int]:
+    """HSL (h: 0-360, s/l: 0-100) → RGB (0-255)."""
+    h_norm, s_norm, l_norm = h / 360, s / 100, l / 100
+
+    if s_norm == 0:
+        v = int(round(l_norm * 255))
+        return (v, v, v)
+
+    def _hue2rgb(p: float, q: float, t: float) -> float:
+        if t < 0:
+            t += 1
+        if t > 1:
+            t -= 1
+        if t < 1 / 6:
+            return p + (q - p) * 6 * t
+        if t < 1 / 2:
+            return q
+        if t < 2 / 3:
+            return p + (q - p) * (2 / 3 - t) * 6
+        return p
+
+    q = l_norm * (1 + s_norm) if l_norm < 0.5 else l_norm + s_norm - l_norm * s_norm
+    p = 2 * l_norm - q
+    r = _hue2rgb(p, q, h_norm + 1 / 3)
+    g = _hue2rgb(p, q, h_norm)
+    b = _hue2rgb(p, q, h_norm - 1 / 3)
+
+    return (int(round(r * 255)), int(round(g * 255)), int(round(b * 255)))

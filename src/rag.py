@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from src.color_utils import embedding_to_rgb
+from src.color_utils import text_to_rgb
 from src.config import RAGConfig
 from src.document_store import Database, DocumentStore
 from src.embeddings import (
@@ -550,36 +550,24 @@ class RAGSystem:
 ) -> dict:
         """Постраничный список документов (см. прежний контракт).
 
-        Каждый документ получает поле ``color`` — семантически осмысленный
-        RGB-цвет (R, G, B) от 0 до 255, вычисленный из эмбеддинга.
-        Если эмбеддинг недоступен, ``color`` отсутствует.
+        Каждый документ получает поле ``color`` — RGB-цвет (R, G, B) от 0 до 255,
+        вычисленный из топ-10 самых частотных слов текста (≥ 3 символов).
         """
         items, total = self.doc_store.list(limit=limit, offset=offset, metadata_filter=metadata_filter)
         documents = []
-        doc_ids = []
         for record in items:
             text = record["text"][:max_chars] if max_chars is not None else record["text"]
-            documents.append({"doc_id": record["doc_id"], "text": text, "metadata": record["metadata"]})
-            doc_ids.append(record["doc_id"])
+            doc = {"doc_id": record["doc_id"], "text": text, "metadata": record["metadata"]}
+            # Цвет из текста (топ-10 частотных слов) — без запросов к Qdrant
+            doc["color"] = text_to_rgb(record["text"])
+            documents.append(doc)
         self._enrich_with_links(
             documents,
             relations_load_depth=relations_load_depth,
             relations_load_type_filter=relations_load_type_filter,
             relations_load_meta_filter=relations_load_meta_filter,
         )
-
-        # Обогащаем цветом из эмбеддинга
-        if doc_ids:
-            embeddings = self.vector_store.get_embeddings(doc_ids)
-            for d in documents:
-                emb = embeddings.get(d["doc_id"])
-                if emb is not None:
-                    try:
-                        d["color"] = embedding_to_rgb(emb)
-                    except ValueError:
-                        pass  # некорректная размерность — пропускаем
         return {"documents": documents, "total": total, "limit": limit, "offset": offset}
-
     def _enrich_with_links(
         self,
         docs: list[dict],
