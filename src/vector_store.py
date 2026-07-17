@@ -391,6 +391,41 @@ class QdrantVectorStore:
             points=[models.PointVectors(id=_point_id(doc_id), vector={"dense": embedding})],
         )
 
+
+    def get_embeddings(self, doc_ids: list[str]) -> dict[str, list[float]]:
+        """Batch-получение dense-эмбеддингов по doc_id.
+
+        Для multi-chunk документов возвращает эмбеддинг первого чанка.
+        doc_id без эмбеддинга в Qdrant не включаются в результат.
+        """
+        if not doc_ids:
+            return {}
+
+        result: dict[str, list[float]] = {}
+        BATCH = 500
+        for i in range(0, len(doc_ids), BATCH):
+            batch = doc_ids[i:i + BATCH]
+            # Пробуем оба варианта point_id: single-chunk (_point_id(did))
+            # и multi-chunk first chunk (_point_id(did, 0))
+            point_ids = []
+            for did in batch:
+                point_ids.append(_point_id(did))
+                point_ids.append(_point_id(did, 0))
+            points = self._client.retrieve(
+                collection_name=COLLECTION,
+                ids=point_ids,
+                with_vectors=True,
+                with_payload=["doc_id"],
+            )
+            for p in points:
+                did = p.payload.get("doc_id") if p.payload else None
+                if did is None or did in result:
+                    continue
+                vec = p.vector.get("dense") if isinstance(p.vector, dict) else p.vector
+                if vec is not None:
+                    result[did] = vec
+        return result
+
     # -- search ---------------------------------------------------------------
 
     def search(

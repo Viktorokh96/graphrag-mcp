@@ -297,11 +297,27 @@ function hashCode(str){
 }
 
 function docColor(doc){
+  // Server-provided embedding-based color (perceptual Oklab)
+  if(doc.color&&Array.isArray(doc.color)&&doc.color.length===3){
+    return embeddingColor(doc.color);
+  }
+  // Fallback: hash-based HSL (legacy)
   const meta=doc.metadata;
   const hasMeta=meta!==null&&meta!==undefined&&typeof meta==='object'&&Object.keys(meta).length>0;
   const src=hasMeta?JSON.stringify(meta):(doc.text||'').slice(0,30);
   const h=hashCode(src)%360;
   return {background:'hsl('+h+',50%,28%)',border:'hsl('+h+',55%,50%)',highlight:{background:'hsl('+h+',55%,34%)',border:'hsl('+h+',70%,58%)'},hover:{background:'hsl('+h+',50%,32%)',border:'hsl('+h+',60%,52%)'}};
+}
+
+function embeddingColor(rgb){
+  const[r,g,b]=rgb;
+  const lighten=function(v,add){return Math.min(255,v+add);};
+  return{
+    background:'rgb('+r+','+g+','+b+')',
+    border:'rgb('+lighten(r,40)+','+lighten(g,40)+','+lighten(b,40)+')',
+    highlight:{background:'rgb('+lighten(r,55)+','+lighten(g,55)+','+lighten(b,55)+')',border:'rgb('+lighten(r,75)+','+lighten(g,75)+','+lighten(b,75)+')'},
+    hover:{background:'rgb('+lighten(r,30)+','+lighten(g,30)+','+lighten(b,30)+')',border:'rgb('+lighten(r,40)+','+lighten(g,40)+','+lighten(b,40)+')'},
+  };
 }
 
 function makeLabel(text){
