@@ -95,35 +95,40 @@ _WORD_RE = __import__("re").compile(r"[a-zа-яё0-9_]+", __import__("re").IGNOR
 
 
 def text_to_rgb(text: str) -> tuple[int, int, int]:
-    """Раскраска по топ-10 самых частотных слов (≥3 символов, не чисто цифры).
+    """Раскраска по топ-словам: circular weighted mean per-word hues.
 
-    Алгоритм:
-    1. Токенизация текста, lowercase.
-    2. Фильтр: длина ≥ 3, не ``isdigit()``.
-    3. Топ-10 по частоте, затем алфавитная сортировка для детерминизма.
-    4. MD5 от ``|``-склеенных слов → hue (0-360) → HSL → RGB.
+    Каждое слово ≥ 3 символов получает детерминированный hue (crc32 % 360).
+    Итоговый hue документа — взвешенное по частоте круговое среднее
+    (circular mean). Похожие наборы слов → плавно близкие оттенки,
+    а не разрывные скачки как у MD5.
 
-    Тексты с одинаковым набором топ-слов получат одинаковый цвет.
     Тексты без слов (слишком короткие) — серый (128, 128, 128).
     """
     import collections
-    import hashlib
+    import math
+    import zlib
 
     words = _WORD_RE.findall(text.lower())
-    # Фильтр: ≥ 3 символов, не чисто цифры
     words = [w for w in words if len(w) >= 3 and not w.isdigit()]
 
     if not words:
         return (128, 128, 128)
 
     counter = collections.Counter(words)
-    top = [w for w, _ in counter.most_common(10)]
-    top.sort()
+    # Больше топ-слов → стабильнее среднее при добавлении/удалении слов
+    top = counter.most_common(20)
 
-    seed = "|".join(top)
-    h = int(hashlib.md5(seed.encode()).hexdigest(), 16) % 360
+    sum_x = sum_y = 0.0
+    for word, freq in top:
+        word_hue = zlib.crc32(word.encode("utf-8")) % 360
+        rad = word_hue * math.pi / 180.0
+        sum_x += freq * math.cos(rad)
+        sum_y += freq * math.sin(rad)
 
-    return _hsl_to_rgb(h, 50, 28)
+    mean_angle = math.atan2(sum_y, sum_x)
+    mean_hue = int(round(mean_angle * 180.0 / math.pi)) % 360
+
+    return _hsl_to_rgb(mean_hue, 50, 28)
 
 
 def _hsl_to_rgb(h: int, s: int, l: int) -> tuple[int, int, int]:
