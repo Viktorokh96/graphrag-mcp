@@ -1,7 +1,7 @@
 """Тесты для фильтрации по метаданным (metadata_filter) на стеке Qdrant + SQLite.
 
 Покрывают:
-- src/_meta_filter.py: matches_metadata_filter(), normalize_metadata_filter()
+- src/_meta_filter.py: matches_metadata_filter(), normalize_metadata_filter(), to_chroma_where()
 - src/vector_store.py: to_qdrant_filter() — преобразование в нативный Qdrant Filter
 - src/rag.py: search/bm25_search/search_hybrid/list_documents/get_related с фильтром
 - src/mcp_server.py: handle_tool_call пробрасывает metadata_filter
@@ -10,6 +10,7 @@
 (RAGSystem + HashEmbeddingGenerator, tmp store, авто-close для Windows).
 """
 
+import pytest
 
 
 # ===========================================================================
@@ -104,6 +105,52 @@ class TestNormalizeMetadataFilter:
         from src._meta_filter import normalize_metadata_filter
         assert normalize_metadata_filter(42) is None
         assert normalize_metadata_filter(["a", "b"]) is None
+
+
+# ===========================================================================
+# src/_meta_filter.py — to_chroma_where (legacy ChromaDB where-клауза)
+# ===========================================================================
+
+class TestToChromaWhere:
+    """Unit-тесты для to_chroma_where(): metadata_filter → ChromaDB where."""
+
+    def test_none_returns_none(self):
+        from src._meta_filter import to_chroma_where
+        assert to_chroma_where(None) is None
+
+    def test_empty_returns_none(self):
+        from src._meta_filter import to_chroma_where
+        assert to_chroma_where({}) is None
+
+    @pytest.mark.parametrize("value", ["spec", 1, 1.5, True, None])
+    def test_single_scalar_passthrough(self, value):
+        from src._meta_filter import to_chroma_where
+        assert to_chroma_where({"key": value}) == {"key": value}
+
+    def test_list_becomes_in_operator(self):
+        from src._meta_filter import to_chroma_where
+        assert to_chroma_where({"tag": ["a", "b"]}) == {"tag": {"$in": ["a", "b"]}}
+
+    def test_list_elements_of_container_type_dropped(self):
+        from src._meta_filter import to_chroma_where
+        assert to_chroma_where({"tag": ["a", {"x": 1}, ["y"]]}) == {"tag": {"$in": ["a"]}}
+
+    def test_empty_list_dropped(self):
+        from src._meta_filter import to_chroma_where
+        assert to_chroma_where({"tag": []}) is None
+
+    def test_dict_value_ignored(self):
+        from src._meta_filter import to_chroma_where
+        assert to_chroma_where({"tag": {"x": 1}}) is None
+
+    def test_multiple_keys_joined_with_and(self):
+        from src._meta_filter import to_chroma_where
+        where = to_chroma_where({"source": "spec", "tag": ["a", "b"]})
+        assert where == {"$and": [{"source": "spec"}, {"tag": {"$in": ["a", "b"]}}]}
+
+    def test_ignored_key_dropped_from_and(self):
+        from src._meta_filter import to_chroma_where
+        assert to_chroma_where({"source": "spec", "bad": {"x": 1}}) == {"source": "spec"}
 
 
 # ===========================================================================
