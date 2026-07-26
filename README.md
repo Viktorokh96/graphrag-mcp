@@ -217,6 +217,8 @@ MCP Client (stdio)         HTTP Client (REST)        WebUI (browser)
 | `QDRANT_URL` | URL Qdrant HTTP (опц., иначе embedded) | — |
 | `DATABASE_URL` | Postgres DSN (опц., иначе SQLite) | — |
 | `STORE_PATH` | Путь к хранилищу | `./rag_data` |
+| `API_TOKEN` | Bearer-токен для REST/MCP (пусто — аутентификация выключена) | — |
+| `CORS_ALLOW_ORIGINS` | Разрешённые CORS-origin'ы через запятую (пусто — cross-origin запрещён) | — |
 | `RAG_DEFAULT_ALPHA` | Баланс гибрида (0=BM25, 1=семантика) | `0.5` |
 | `RAG_CYRILLIC_ALPHA` | Для кириллических запросов | `0.85` |
 | `RAG_HYBRID_EXPAND` | Candidate expansion factor | `3` |
@@ -250,6 +252,20 @@ uv run python3 -m pytest tests/test_search_quality.py -v
 uv run ruff check src/ tests/
 ```
 
+## Безопасность HTTP API
+
+* Сервер по умолчанию слушает `127.0.0.1`. Для внешнего доступа передайте
+  `--host 0.0.0.0` — при этом обязателен `API_TOKEN`, иначе запуск прерывается.
+* С заданным `API_TOKEN` все эндпоинты (REST и MCP SSE), кроме `/health`,
+  требуют заголовок `Authorization: Bearer <token>` (или `X-API-Key`).
+* CORS выключен по умолчанию; разрешённые origin'ы задаются `CORS_ALLOW_ORIGINS`.
+* `.env` не коммитится — используйте `.env.example` как шаблон.
+
+```bash
+API_TOKEN=$(openssl rand -hex 32) rag-server --http --host 0.0.0.0
+curl -H "Authorization: Bearer $API_TOKEN" http://localhost:8765/stats
+```
+
 ## Docker
 
 ```bash
@@ -257,7 +273,8 @@ uv run ruff check src/ tests/
 docker compose up -d qdrant
 
 # Полный стек: Qdrant + Postgres + RAG HTTP API
-docker compose up --build
+# API_TOKEN и POSTGRES_PASSWORD обязательны
+API_TOKEN=... POSTGRES_PASSWORD=... docker compose up --build
 # HTTP API на порту 8765, OpenAPI: http://localhost:8765/docs
 ```
 

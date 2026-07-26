@@ -18,4 +18,4 @@ ENV VIRTUAL_ENV=/app/.venv \
     PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH=/app
 
-CMD ["rag-server", "--http", "--port", "8765"]
+CMD ["rag-server", "--http", "--host", "0.0.0.0", "--port", "8765"]
