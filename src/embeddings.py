@@ -2,10 +2,59 @@
 import logging
 import re
 import httpx
-import os
 import numpy as np
 
+from src.http_utils import json_headers
+
 logger = logging.getLogger(__name__)
+
+
+class CachedEmbeddingGenerator:
+    """Базовый класс с кешем эмбеддингов по тексту.
+
+    Наследники реализуют `_embed(texts)` — генерацию векторов для текстов,
+    которых ещё нет в кеше.
+    """
+
+    #: имя провайдера в сообщении об ошибке несовпадения количества векторов
+    provider_label = "Provider"
+
+    def __init__(self, dimension: int):
+        self._dimension = dimension
+        self._cache: dict[str, list[float]] = {}
+
+    def _embed(self, texts: list[str]) -> list[list[float]]:
+        """Сгенерировать эмбеддинги для текстов (без кеша)."""
+        raise NotImplementedError
+
+    def get_embedding(self, text: str) -> list[float]:
+        if text in self._cache:
+            return self._cache[text]
+        return self.get_embeddings([text])[0]
+
+    def get_embeddings(self, texts: list[str]) -> list[list[float]]:
+        # Дедуплицируем missing, сохраняя порядок: батч возвращает по одному
+        # эмбеддингу на каждый элемент input, поэтому дубликаты сместили бы
+        # соответствие text↔embedding.
+        missing = list(dict.fromkeys(t for t in texts if t not in self._cache))
+        if missing:
+            embeddings = self._embed(missing)
+            if len(embeddings) != len(missing):
+                raise ValueError(
+                    f"{self.provider_label} returned {len(embeddings)} embeddings "
+                    f"for {len(missing)} inputs"
+                )
+            for text, vec in zip(missing, embeddings):
+                self._cache[text] = vec
+        return [self._cache[t] for t in texts]
+
+    def get_dimension(self) -> int:
+        for emb in self._cache.values():
+            return len(emb)
+        return self._dimension
+
+    def clear_cache(self) -> None:
+        self._cache.clear()
 
 
 class EmbeddingGenerator:
@@ -117,11 +166,13 @@ class EmbeddingGenerator:
         return vector
 
 
-class SentenceTransformerEmbeddingGenerator:
+class SentenceTransformerEmbeddingGenerator(CachedEmbeddingGenerator):
     """Локальные эмбеддинги через sentence-transformers (BGE-M3, all-MiniLM-L6-v2 и др.).
 
     Модель загружается лениво при первом вызове get_embedding/get_embeddings.
     """
+
+    provider_label = "Model"
 
     def __init__(
         self,
@@ -131,13 +182,12 @@ class SentenceTransformerEmbeddingGenerator:
         local_files_only: bool = False,
         token: str = "",
     ):
+        super().__init__(dimension)
         self.model_name = model_name
         self.device = device
-        self._dimension = dimension
         self._local_files_only = local_files_only
         self._token = token or None
         self._model = None
-        self._cache: dict[str, list[float]] = {}
 
     def _ensure_model(self):
         if self._model is None:
@@ -158,32 +208,29 @@ class SentenceTransformerEmbeddingGenerator:
             logger.info("Embedding model loaded in %.1fs", _time.monotonic() - t0)
         return self._model
 
-    def get_embedding(self, text: str) -> list[float]:
-        if text in self._cache:
-            return self._cache[text]
-        embedding = self.get_embeddings([text])[0]
-        return embedding
-
-    def get_embeddings(self, texts: list[str]) -> list[list[float]]:
-        missing = [t for t in texts if t not in self._cache]
-        if missing:
-            model = self._ensure_model()
-            vectors = model.encode(missing, normalize_embeddings=True)
-            for text, vec in zip(missing, vectors):
-                self._cache[text] = vec.tolist()
-        return [self._cache[t] for t in texts]
-
-    def get_dimension(self) -> int:
-        for emb in self._cache.values():
-            return len(emb)
-        return self._dimension
-
-    def clear_cache(self):
-        self._cache.clear()
+    def _embed(self, texts: list[str]) -> list[list[float]]:
+        vectors = self._ensure_model().encode(texts, normalize_embeddings=True)
+        return [vec.tolist() for vec in vectors]
 
 
-class OllamaEmbeddingGenerator:
+class _HttpEmbeddingGenerator(CachedEmbeddingGenerator):
+    """Базовый класс для провайдеров эмбеддингов поверх HTTP."""
+
+    def __init__(self, base_url: str, model: str, dimension: int, api_key: str = ""):
+        super().__init__(dimension)
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.api_key = api_key
+        self._client = httpx.Client(timeout=120.0)
+
+    def close(self):
+        self._client.close()
+
+
+class OllamaEmbeddingGenerator(_HttpEmbeddingGenerator):
     """Генератор эмбеддингов через Ollama API (локально)."""
+
+    provider_label = "Ollama"
 
     def __init__(
         self,
@@ -191,51 +238,25 @@ class OllamaEmbeddingGenerator:
         model: str = "qwen3-embedding:8b",
         dimension: int = 4096,
     ):
-        self.base_url = base_url.rstrip("/")
-        self.model = model
-        self._dimension = dimension
-        self._cache: dict[str, list[float]] = {}
-        self._client = httpx.Client(timeout=120.0)
+        super().__init__(base_url=base_url, model=model, dimension=dimension)
 
-    def get_embedding(self, text: str) -> list[float]:
-        if text in self._cache:
-            return self._cache[text]
-        return self.get_embeddings([text])[0]
-    def get_embeddings(self, texts: list[str]) -> list[list[float]]:
-        # Дедуплицируем missing, сохраняя порядок: батч в Ollama возвращает по
-        # одному эмбеддингу на каждый элемент input, поэтому дубликаты сместили бы
-        # соответствие text↔embedding.
-        missing = list(dict.fromkeys(t for t in texts if t not in self._cache))
-        if missing:
-            url = f"{self.base_url}/api/embed"
-            payload = {"model": self.model, "input": missing}
-            response = self._client.post(url, json=payload, timeout=120.0)
-            response.raise_for_status()
-            embeddings = response.json().get("embeddings", [])
-            if len(embeddings) != len(missing):
-                raise ValueError(
-                    f"Ollama returned {len(embeddings)} embeddings for {len(missing)} inputs"
-                )
-            for text, vec in zip(missing, embeddings):
-                self._cache[text] = vec
-        return [self._cache[t] for t in texts]
-
-    def get_dimension(self) -> int:
-        for emb in self._cache.values():
-            return len(emb)
-        return self._dimension
-
-    def clear_cache(self):
-        self._cache.clear()
+    def _embed(self, texts: list[str]) -> list[list[float]]:
+        url = f"{self.base_url}/api/embed"
+        payload = {"model": self.model, "input": texts}
+        response = self._client.post(url, json=payload, timeout=120.0)
+        response.raise_for_status()
+        return response.json().get("embeddings", [])
 
 
-class OpenAICompatibleEmbeddingGenerator:
+class OpenAICompatibleEmbeddingGenerator(_HttpEmbeddingGenerator):
     """Генератор эмбеддингов через OpenAI-compatible API (TEI, Infinity, vLLM и др.).
-    
+
     Поддерживает POST /v1/embeddings с телом {model, input}.
     Совместим с HuggingFace TEI, Infinity, vLLM (≥0.6.0) и самописными серверами.
     """
-    
+
+    provider_label = "Server"
+
     def __init__(
         self,
         base_url: str = "http://localhost:8080/v1",
@@ -243,47 +264,13 @@ class OpenAICompatibleEmbeddingGenerator:
         model: str = "BAAI/bge-m3",
         dimension: int = 1024,
     ):
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
-        self.model = model
-        self._dimension = dimension
-        self._cache: dict[str, list[float]] = {}
-        self._client = httpx.Client(timeout=120.0)
-    
-    def get_embedding(self, text: str) -> list[float]:
-        if text in self._cache:
-            return self._cache[text]
-        embedding = self.get_embeddings([text])[0]
-        return embedding
-    
-    def get_embeddings(self, texts: list[str]) -> list[list[float]]:
-        missing = list(dict.fromkeys(t for t in texts if t not in self._cache))
-        if missing:
-            url = f"{self.base_url.rstrip('/')}/embeddings"
-            headers = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
-            payload = {"model": self.model, "input": missing if len(missing) > 1 else missing[0]}
-            response = self._client.post(url, headers=headers, json=payload, timeout=120.0)
-            response.raise_for_status()
-            data = response.json()
-            embeddings = [item["embedding"] for item in sorted(data["data"], key=lambda x: x["index"])]
-            if len(embeddings) != len(missing):
-                raise ValueError(
-                    f"Server returned {len(embeddings)} embeddings for {len(missing)} inputs"
-                )
-            for text, vec in zip(missing, embeddings):
-                self._cache[text] = vec
-        return [self._cache[t] for t in texts]
-    
-    def get_dimension(self) -> int:
-        for emb in self._cache.values():
-            return len(emb)
-        return self._dimension
-    
-    def clear_cache(self):
-        self._cache.clear()
-    
-    def close(self):
-        self._client.close()
-    
+        super().__init__(base_url=base_url, model=model, dimension=dimension, api_key=api_key)
+
+    def _embed(self, texts: list[str]) -> list[list[float]]:
+        url = f"{self.base_url}/embeddings"
+        payload = {"model": self.model, "input": texts if len(texts) > 1 else texts[0]}
+        response = self._client.post(url, headers=json_headers(self.api_key), json=payload, timeout=120.0)
+        response.raise_for_status()
+        data = response.json()
+        return [item["embedding"] for item in sorted(data["data"], key=lambda x: x["index"])]
+

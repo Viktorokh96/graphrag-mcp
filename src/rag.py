@@ -28,6 +28,9 @@ from src.vector_store import QdrantVectorStore
 
 logger = logging.getLogger(__name__)
 
+#: Константа RRF (не классическая 60) — шире разброс скоров на малых корпусах
+RRF_K = 20
+
 
 class RAGSystem:
     """RAG система с гибридным поиском (семантический + BM25)."""
@@ -323,19 +326,33 @@ class RAGSystem:
             return []
         hits = self.vector_store.search(query_embedding, k=k, metadata_filter=metadata_filter)
         results = self._join_texts(hits)
+        return self._maybe_rerank(query, results, k=k, rerank=rerank)
 
+    def _maybe_rerank(
+        self,
+        query: str,
+        results: list[tuple[str, str, float, dict]],
+        k: int,
+        rerank: Optional[bool],
+        candidate_k: Optional[int] = None,
+    ) -> list[tuple[str, str, float, dict]]:
+        """Переранжировать выдачу через CrossEncoder, если reranker включён.
+
+        Args:
+            candidate_k: сколько топ-кандидатов отдать reranker'у (None — все).
+        """
         do_rerank = rerank if rerank is not None else self._reranker_enabled
-        if do_rerank and len(results) > 1:
-            candidates = [
-                {"doc_id": doc_id, "text": text, "score": score, "metadata": meta}
-                for doc_id, text, score, meta in results
-            ]
-            reranked = self._get_reranker().rerank(query, candidates, top_k=k)
-            results = [
-                (d["doc_id"], d["text"], d["rerank_score"], d["metadata"])
-                for d in reranked
-            ]
-        return results
+        if not do_rerank or len(results) <= 1:
+            return results
+        candidates = [
+            {"doc_id": doc_id, "text": text, "score": score, "metadata": meta}
+            for doc_id, text, score, meta in results[:candidate_k]
+        ]
+        reranked = self._get_reranker().rerank(query, candidates, top_k=k)
+        return [
+            (d["doc_id"], d["text"], d["rerank_score"], d["metadata"])
+            for d in reranked
+        ]
 
     def bm25_search(
         self, query: str, k: int = 5, metadata_filter: Optional[dict] = None
@@ -377,7 +394,6 @@ class RAGSystem:
         if not semantic_results and not bm25_results:
             return []
 
-        RRF_K = 20
         text_by_id: dict[str, str] = {}
         meta_by_id: dict[str, dict] = {}
         rank_sem: dict[str, int] = {}
@@ -423,7 +439,6 @@ class RAGSystem:
         if len(results) == 1:
             return results[0][:k]
 
-        RRF_K = 20
         text_by_id: dict[str, str] = {}
         meta_by_id: dict[str, dict] = {}
         rrf_score: dict[str, float] = {}
@@ -480,21 +495,10 @@ class RAGSystem:
         if not merged:
             return []
 
-        do_rerank = rerank if rerank is not None else self._reranker_enabled
-        if do_rerank and len(merged) > 1:
-            top_k = k
-            candidate_k = min(len(merged), k * self._reranker_top_k_multiplier)
-            candidates = [
-                {"doc_id": doc_id, "text": text, "score": score, "metadata": meta}
-                for doc_id, text, score, meta in merged[:candidate_k]
-            ]
-            reranked = self._get_reranker().rerank(query, candidates, top_k=top_k)
-            merged = [
-                (d["doc_id"], d["text"], d["rerank_score"], d["metadata"])
-                for d in reranked
-            ]
-
-        return merged
+        return self._maybe_rerank(
+            query, merged, k=k, rerank=rerank,
+            candidate_k=min(len(merged), k * self._reranker_top_k_multiplier),
+        )
 
     # -- retrieval / management ---------------------------------------------------
 

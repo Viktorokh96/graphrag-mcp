@@ -9,11 +9,47 @@ logger = logging.getLogger(__name__)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mcp.server import Server, NotificationOptions
-from mcp.server.models import InitializationOptions
-from mcp.types import TextContent, Tool
+from mcp.server import Server, NotificationOptions  # noqa: E402
+from mcp.server.models import InitializationOptions  # noqa: E402
+from mcp.types import TextContent, Tool  # noqa: E402
 
-from src._meta_filter import normalize_metadata_filter
+from src._meta_filter import normalize_metadata_filter, parse_meta  # noqa: E402
+from src.logging_utils import configure_logging  # noqa: E402
+from src.result_utils import enrich_with_links, format_results  # noqa: E402
+
+MCP_SERVER_NAME = "rag-knowledge-base"
+MCP_SERVER_VERSION = "1.0.0"
+
+
+def _metadata_filter_prop(subject: str = "document metadata") -> dict:
+    """Схема поля metadata_filter (одинаковая во всех инструментах)."""
+    return {
+        "description": (
+            f"Optional filter on {subject}. A dict of key->value pairs; "
+            "ALL must match (AND). Value may be a scalar (exact match) or a list "
+            "(membership/$in). null/omitted = no filter. Example: "
+            "{\"source\": \"specification\", \"type\": [\"bug\",\"feature\"]}."
+        ),
+        "default": None,
+    }
+
+
+def _relations_load_props() -> dict:
+    """Схема полей relations_load_* (загрузка графовых связей в `links`)."""
+    return {
+        "relations_load_depth": {
+            "type": "integer",
+            "description": "BFS depth for loading graph relations into each result's `links` field. 0 = no relations loaded. 1 (default) = direct neighbours.",
+            "default": 1,
+        },
+        "relations_load_type_filter": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Only load relations of these types. null/omitted = all types.",
+            "default": None,
+        },
+        "relations_load_meta_filter": _metadata_filter_prop("neighbour node metadata, applied when loading relations"),
+    }
 
 
 TOOL_DEFS = [
@@ -135,33 +171,8 @@ TOOL_DEFS = [
                     "description": "Truncate each result's text to at most this many characters. Default 2000. Pass null for full text.",
                     "default": 2000,
                 },
-                "metadata_filter": {
-                    "description": (
-                        "Optional filter on document metadata. A dict of key->value pairs; "
-                        "ALL must match (AND). Value may be a scalar (exact match) or a list "
-                        "(membership/$in). null/omitted = no filter. Example: "
-                        "{\"source\": \"specification\", \"type\": [\"bug\",\"feature\"]}."
-                    ),
-                    "default": None,
-                },
-                "relations_load_depth": {
-                    "type": "integer",
-                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 = no relations loaded. 1 (default) = direct neighbours.",
-                    "default": 1,
-                },
-                "relations_load_type_filter": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Only load relations of these types. null/omitted = all types.",
-                    "default": None,
-                },
-                "relations_load_meta_filter": {
-                    "description": (
-                        "Optional filter on neighbour node metadata, applied when loading relations. "
-                        "Same format as metadata_filter. null/omitted = no filter."
-                    ),
-                    "default": None,
-                },
+                "metadata_filter": _metadata_filter_prop(),
+                **_relations_load_props(),
             },
             "required": ["query"],
         },
@@ -195,30 +206,8 @@ TOOL_DEFS = [
                     "description": "Truncate each result's text to at most this many characters. null or omitted = full text.",
                     "default": None,
                 },
-                "metadata_filter": {
-                    "description": (
-                        "Optional filter on document metadata. A dict of key->value pairs; "
-                        "ALL must match (AND). Value may be a scalar (exact match) or a list "
-                        "(membership/$in). null/omitted = no filter. Example: "
-                        "{\"source\": \"specification\", \"type\": [\"bug\",\"feature\"]}."
-                    ),
-                    "default": None,
-                },
-                "relations_load_depth": {
-                    "type": "integer",
-                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 = no relations loaded. 1 (default) = direct neighbours.",
-                    "default": 1,
-                },
-                "relations_load_type_filter": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Only load relations of these types. null/omitted = all types.",
-                    "default": None,
-                },
-                "relations_load_meta_filter": {
-                    "description": "Optional filter on neighbour node metadata for relations. null/omitted = no filter.",
-                    "default": None,
-                },
+                "metadata_filter": _metadata_filter_prop(),
+                **_relations_load_props(),
             },
             "required": ["query"],
         },
@@ -275,30 +264,8 @@ TOOL_DEFS = [
                     "description": "Truncate each result's text to at most this many characters. null or omitted = full text.",
                     "default": None,
                 },
-                "metadata_filter": {
-                    "description": (
-                        "Optional filter on document metadata. A dict of key->value pairs; "
-                        "ALL must match (AND). Value may be a scalar (exact match) or a list "
-                        "(membership/$in). null/omitted = no filter. Example: "
-                        "{\"source\": \"specification\", \"type\": [\"bug\",\"feature\"]}."
-                    ),
-                    "default": None,
-                },
-                "relations_load_depth": {
-                    "type": "integer",
-                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 = no relations loaded. 1 (default) = direct neighbours.",
-                    "default": 1,
-                },
-                "relations_load_type_filter": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Only load relations of these types. null/omitted = all types.",
-                    "default": None,
-                },
-                "relations_load_meta_filter": {
-                    "description": "Optional filter on neighbour node metadata for relations. null/omitted = no filter.",
-                    "default": None,
-                },
+                "metadata_filter": _metadata_filter_prop(),
+                **_relations_load_props(),
                 "rerank": {
                     "type": "boolean",
                     "description": "Re-rank final candidates via CrossEncoder (BGE-reranker-v2-m3). null/omitted = use RERANK_ENABLED env.",
@@ -357,15 +324,9 @@ TOOL_DEFS = [
             "properties": {
                 "node_id": {"type": "string", "description": "doc_id of the node to start BFS from."},
                 "max_depth": {"type": "integer", "default": 1, "description": "Maximum BFS hop count (1 = direct neighbours, 2 = neighbours-of-neighbours, ...)."},
-                "metadata_filter": {
-                    "description": (
-                        "Optional filter on neighbour metadata. A dict of key->value pairs; "
-                        "ALL must match (AND). Value may be a scalar (exact match) or a list "
-                        "(membership/$in). null/omitted = no filter. Edges whose neighbour "
-                        "node does not pass the filter are excluded."
-                    ),
-                    "default": None,
-                },
+                "metadata_filter": _metadata_filter_prop(
+                    "neighbour metadata; edges whose neighbour node does not pass the filter are excluded"
+                ),
             },
             "required": ["node_id"],
         },
@@ -440,21 +401,7 @@ TOOL_DEFS = [
                 "doc_id": {"type": "string", "description": "doc_id (UUID4) of the document to retrieve."},
                 "offset": {"type": "integer", "description": "Character offset to start reading from (default 0).", "default": 0},
                 "limit": {"type": "integer", "description": "Maximum characters to return from offset. null or omitted = full text from offset to end.", "default": None},
-                "relations_load_depth": {
-                    "type": "integer",
-                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 = no relations loaded. 1 (default) = direct neighbours.",
-                    "default": 1,
-                },
-                "relations_load_type_filter": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Only load relations of these types. null/omitted = all types.",
-                    "default": None,
-                },
-                "relations_load_meta_filter": {
-                    "description": "Optional filter on neighbour node metadata for relations. null/omitted = no filter.",
-                    "default": None,
-                },
+                **_relations_load_props(),
             },
             "required": ["doc_id"],
         },
@@ -486,30 +433,8 @@ TOOL_DEFS = [
                     "description": "Truncate each result's text to at most this many characters. null or omitted = return full text. Recommended for context budget control.",
                     "default": None,
                 },
-                "metadata_filter": {
-                    "description": (
-                        "Optional filter on document metadata. A dict of key->value pairs; "
-                        "ALL must match (AND). Value may be a scalar (exact match) or a list "
-                        "(membership/$in). null/omitted = no filter. Example: "
-                        "{\"source\": \"specification\", \"type\": [\"bug\",\"feature\"]}."
-                    ),
-                    "default": None,
-                },
-                "relations_load_depth": {
-                    "type": "integer",
-                    "description": "BFS depth for loading graph relations into each result's `links` field. 0 = no relations loaded. 1 (default) = direct neighbours.",
-                    "default": 1,
-                },
-                "relations_load_type_filter": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Only load relations of these types. null/omitted = all types.",
-                    "default": None,
-                },
-                "relations_load_meta_filter": {
-                    "description": "Optional filter on neighbour node metadata for relations. null/omitted = no filter.",
-                    "default": None,
-                },
+                "metadata_filter": _metadata_filter_prop(),
+                **_relations_load_props(),
             },
         },
     ),
@@ -691,46 +616,9 @@ TOOL_DEFS = [
 ]
 
 
-def _fmt(results, max_chars=None):
-    if max_chars is not None:
-        return [
-            {
-                "doc_id": r[0],
-                "text": r[1][:max_chars],
-                "score": round(r[2], 4),
-                "metadata": r[3] if isinstance(r[3], dict) else {},
-            }
-            for r in results
-        ]
-    return [
-        {
-            "doc_id": r[0],
-            "text": r[1],
-            "score": round(r[2], 4),
-            "metadata": r[3] if isinstance(r[3], dict) else {},
-        }
-        for r in results
-    ]
-
-
-def _parse_meta(value):
-    """Нормализовать значение поля `meta` из аргументов MCP-вызова.
-
-    Допускает: dict (проходит как есть), None/"", строку с JSON (парсится),
-    любую строку без JSON (оборачивается в {"_raw": value}).
-    Возвращает None для отсутствующего/пустого значения.
-    """
-    if value is None or value == "":
-        return None
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-            return parsed if isinstance(parsed, dict) else {"_raw": value}
-        except (json.JSONDecodeError, TypeError):
-            return {"_raw": value}
-    return {"_raw": value}
+# Обратная совместимость имён, используемых в тестах и внешних вызовах
+_fmt = format_results
+_parse_meta = parse_meta
 
 
 def handle_tool_call(rag, name: str, arguments: dict) -> dict:
@@ -747,42 +635,34 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
     if arguments is None:
         arguments = {}
 
-    def _add_document_handler(p):
-        text = p["text"]
-        meta = _parse_meta(p.get("meta"))
+    def _add_text(p, text):
+        """Общий путь для rag_add_document / rag_add_file."""
         existing = rag.is_duplicate(text)
-        doc_id = rag.add_document(text, meta, extract_graph=p.get("extract_graph", False))
+        doc_id = rag.add_document(
+            text, parse_meta(p.get("meta")), extract_graph=p.get("extract_graph", False)
+        )
         return {"doc_id": doc_id, "duplicate": existing is not None}
 
     def _add_file_handler(p):
-        filepath = p["filepath"]
-        meta = _parse_meta(p.get("meta"))
-        with open(filepath, "r", encoding="utf-8-sig") as f:
+        with open(p["filepath"], "r", encoding="utf-8-sig") as f:
             text = f.read()
-        existing = rag.is_duplicate(text)
-        doc_id = rag.add_document(text, meta, extract_graph=p.get("extract_graph", False))
-        return {"doc_id": doc_id, "duplicate": existing is not None}
+        return _add_text(p, text)
 
     def _enrich(p, docs):
-        return rag._enrich_with_links(
-            docs,
-            relations_load_depth=p.get("relations_load_depth", 1),
-            relations_load_type_filter=p.get("relations_load_type_filter"),
-            relations_load_meta_filter=normalize_metadata_filter(p.get("relations_load_meta_filter")),
-        )
+        return enrich_with_links(rag, docs, p)
 
     handlers = {
-        "rag_add_document": _add_document_handler,
+        "rag_add_document": lambda p: _add_text(p, p["text"]),
         "rag_add_file": _add_file_handler,
-        "rag_search": lambda p: _enrich(p, _fmt(
+        "rag_search": lambda p: _enrich(p, format_results(
             rag.search(p.get("query", ""), k=p.get("k", 5), metadata_filter=normalize_metadata_filter(p.get("metadata_filter"))),
             max_chars=p.get("max_chars"),
         )),
-        "rag_bm25_search": lambda p: _enrich(p, _fmt(
+        "rag_bm25_search": lambda p: _enrich(p, format_results(
             rag.bm25_search(p.get("query", ""), k=p.get("k", 5), metadata_filter=normalize_metadata_filter(p.get("metadata_filter"))),
             max_chars=p.get("max_chars"),
         )),
-        "rag_search_hybrid": lambda p: _enrich(p, _fmt(
+        "rag_search_hybrid": lambda p: _enrich(p, format_results(
             rag.search_hybrid(
                 p.get("query", ""), k=p.get("k", 5), alpha=p.get("alpha"),
                 metadata_filter=normalize_metadata_filter(p.get("metadata_filter")),
@@ -839,7 +719,7 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
         "rag_update_document": lambda p: rag.update_document(
             p["doc_id"],
             text=p.get("text"),
-            meta=_parse_meta(p.get("meta")),
+            meta=parse_meta(p.get("meta")),
         ),
         "rag_delete_relation": lambda p: rag.delete_relation(
             p["source_id"], p["target_id"], p["relation"],
@@ -857,17 +737,36 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
     return fn(arguments)
 
 
-def main():
-    import logging as _logging
-    _log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
-    _logging.basicConfig(
-        level=getattr(_logging, _log_level, _logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        stream=sys.stderr,
+def build_mcp_server(rag) -> Server:
+    """Создать MCP Server, связанный с данным RAGSystem (stdio и SSE-транспорты)."""
+    server = Server(MCP_SERVER_NAME)
+
+    @server.list_tools()
+    async def list_tools() -> list[Tool]:
+        return TOOL_DEFS
+
+    @server.call_tool()
+    async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+        result = handle_tool_call(rag, name, arguments)
+        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+
+    return server
+
+
+def initialization_options(server: Server) -> InitializationOptions:
+    """InitializationOptions для server.run() (общие для stdio и SSE)."""
+    return InitializationOptions(
+        server_name=MCP_SERVER_NAME,
+        server_version=MCP_SERVER_VERSION,
+        capabilities=server.get_capabilities(
+            notification_options=NotificationOptions(),
+            experimental_capabilities={},
+        ),
     )
-    # Приглушаем библиотечные логгеры — они только шумят на INFO
-    for _lib in ("httpx", "huggingface_hub", "sentence_transformers", "httpcore"):
-        _logging.getLogger(_lib).setLevel(_logging.WARNING)
+
+
+def main():
+    configure_logging()
     from src.rag import RAGSystem
     from src.config import RAGConfig
     from src.migrate import has_old_data
@@ -892,35 +791,14 @@ def main():
         )
     rag = RAGSystem(config=config)
     logger.info("RAGSystem initialized in %.1fs", __import__("time").monotonic() - t_start)
-    server = Server("rag-knowledge-base")
-
-    @server.list_tools()
-    async def list_tools() -> list[Tool]:
-        return TOOL_DEFS
-
-    @server.call_tool()
-    async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-        result = handle_tool_call(rag, name, arguments)
-        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+    server = build_mcp_server(rag)
 
     import asyncio
     from mcp.server.stdio import stdio_server
 
     async def _run():
         async with stdio_server() as (read_stream, write_stream):
-            await server.run(
-                read_stream,
-                write_stream,
-                InitializationOptions(
-                    server_name="rag-knowledge-base",
-                    server_version="1.0.0",
-                    capabilities=server.get_capabilities(
-
-                        notification_options=NotificationOptions(),
-                        experimental_capabilities={},
-                    ),
-                ),
-            )
+            await server.run(read_stream, write_stream, initialization_options(server))
 
     logger.info("MCP server ready (total startup: %.1fs)", __import__("time").monotonic() - t_start)
 
