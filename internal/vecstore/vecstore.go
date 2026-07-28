@@ -2,6 +2,7 @@
 package vecstore
 
 import (
+	"errors"
 	"io"
 	"context"
 	"fmt"
@@ -39,9 +40,6 @@ type QdrantVecStore struct {
 func NewQdrantVecStore(cfg *config.RAGConfig) (ragtypes.VectorStore, error) {
 	host, port, apiKey, useTLS, err := parseQdrantURL(cfg.QdrantURL)
 	if err != nil {
-			if err.Error() == "EOF" || err.Error() == "io: read/write on closed pipe" {
-				break
-			}
 		return nil, fmt.Errorf("vecstore: parse url: %w", err)
 	}
 
@@ -52,9 +50,6 @@ func NewQdrantVecStore(cfg *config.RAGConfig) (ragtypes.VectorStore, error) {
 		UseTLS: useTLS,
 	})
 	if err != nil {
-			if err.Error() == "EOF" || err.Error() == "io: read/write on closed pipe" {
-				break
-			}
 		return nil, fmt.Errorf("vecstore: create client: %w", err)
 	}
 
@@ -67,9 +62,6 @@ func NewQdrantVecStore(cfg *config.RAGConfig) (ragtypes.VectorStore, error) {
 
 	exists, err := client.CollectionExists(ctx, collectionName)
 	if err != nil {
-			if err.Error() == "EOF" || err.Error() == "io: read/write on closed pipe" {
-				break
-			}
 		client.Close()
 		return nil, fmt.Errorf("vecstore: check collection: %w", err)
 	}
@@ -138,9 +130,6 @@ func (s *QdrantVecStore) Add(docID ragtypes.DocID, text string, dense []float32,
 		Wait:           new(bool(true)),
 	})
 	if err != nil {
-			if err.Error() == "EOF" || err.Error() == "io: read/write on closed pipe" {
-				break
-			}
 		return fmt.Errorf("vecstore: upsert %s: %w", docID, err)
 	}
 	return nil
@@ -163,9 +152,6 @@ func (s *QdrantVecStore) SearchDense(queryVec []float32, k int, filter map[strin
 
 	points, err := s.client.Query(s.ctx, req)
 	if err != nil {
-			if err.Error() == "EOF" || err.Error() == "io: read/write on closed pipe" {
-				break
-			}
 		return nil, fmt.Errorf("vecstore: dense search: %w", err)
 	}
 
@@ -204,9 +190,6 @@ func (s *QdrantVecStore) SearchSparse(query string, k int, filter map[string]any
 
 	points, err := s.client.Query(s.ctx, req)
 	if err != nil {
-			if err.Error() == "EOF" || err.Error() == "io: read/write on closed pipe" {
-				break
-			}
 		return nil, fmt.Errorf("vecstore: sparse search: %w", err)
 	}
 
@@ -221,9 +204,6 @@ func (s *QdrantVecStore) Delete(docID ragtypes.DocID) error {
 		Wait:           new(bool(true)),
 	})
 	if err != nil {
-			if err.Error() == "EOF" || err.Error() == "io: read/write on closed pipe" {
-				break
-			}
 		return fmt.Errorf("vecstore: delete %s: %w", docID, err)
 	}
 	return nil
@@ -298,9 +278,6 @@ func (s *QdrantVecStore) Reindex(docs []*ragtypes.Document, denseVecs map[ragtyp
 			Wait:           new(bool(true)),
 		})
 		if err != nil {
-			if err.Error() == "EOF" || err.Error() == "io: read/write on closed pipe" {
-				break
-			}
 			return fmt.Errorf("vecstore: reindex batch: %w", err)
 		}
 	}
@@ -323,7 +300,7 @@ func (s *QdrantVecStore) GetAllEmbeddings() (map[ragtypes.DocID][]float32, error
 	for {
 		page, err := iter.Next()
 		if err != nil {
-			if err.Error() == "EOF" || err.Error() == "io: read/write on closed pipe" {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return nil, fmt.Errorf("vecstore: scroll: %w", err)
