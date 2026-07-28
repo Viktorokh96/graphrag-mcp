@@ -20,9 +20,9 @@ import (
 )
 
 const (
-	collectionName  = "documents"
+	collectionName  = "rag_docs"
 	denseVecName    = "dense"
-	sparseVecName   = "sparse"
+	sparseVecName   = "bm25"
 	payloadTextKey  = "text"
 	payloadDocIDKey = "doc_id"
 )
@@ -333,7 +333,7 @@ func (s *QdrantVecStore) Close() error {
 
 func parseQdrantURL(raw string) (host string, port int, apiKey string, useTLS bool, err error) {
 	if raw == "" {
-		return "", 0, "", false, fmt.Errorf("QDRANT_URL is empty")
+		return "localhost", 6334, "", false, nil
 	}
 
 	// Try full URL first.
