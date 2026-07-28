@@ -175,14 +175,19 @@ class QdrantVectorStore:
         self._did_load_token_df = True
 
     def get_dimension(self) -> int:
-        """Размерность dense-векторов коллекции (из конфига коллекции)."""
-        try:
-            info = self._client.get_collection(COLLECTION)
-            params = info.config.params.vectors
-            if isinstance(params, dict) and "dense" in params:
-                return params["dense"].size
-        except Exception:
-            pass
+        """Размерность dense-векторов коллекции (из конфига коллекции).
+
+        0 — коллекции ещё нет либо у неё нет dense-вектора. Сбои связи
+        с Qdrant пробрасываются: раньше они маскировались под «размерность 0»
+        и давали пустую выдачу поиска вместо ошибки.
+        """
+        if not self._client.collection_exists(COLLECTION):
+            return 0
+        info = self._client.get_collection(COLLECTION)
+        params = info.config.params.vectors
+        if isinstance(params, dict) and "dense" in params:
+            return params["dense"].size
+        logger.warning("Qdrant collection '%s' has no 'dense' vector config", COLLECTION)
         return 0
 
     def _load_token_df(self) -> None:

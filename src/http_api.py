@@ -29,8 +29,8 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from mcp.server import NotificationOptions, Server
@@ -163,6 +163,18 @@ app.add_middleware(
 app.mount("/ui", StaticFiles(directory="src/webui", html=True), name="webui")
 
 
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
+    """ValueError из доменного слоя — это невалидный запрос, а не 500.
+
+    Без этого обработчика предсказуемые ошибки валидации (несуществующий
+    узел в /relations, битый JSON в /structured, нечисловой id сообщества)
+    возвращались клиенту как Internal Server Error.
+    """
+    logger.warning("%s %s → 400: %s", request.method, request.url.path, exc)
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 # -- helpers -----------------------------------------------------------------
 
 
@@ -243,10 +255,7 @@ def add_document(req: AddDocumentRequest):
     existing = rag.is_duplicate(req.text)
     from src.mcp_server import _parse_meta
     meta = _parse_meta(req.meta)
-    try:
-        doc_id = rag.add_document(req.text, meta, extract_graph=req.extract_graph)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    doc_id = rag.add_document(req.text, meta, extract_graph=req.extract_graph)
     return {"doc_id": doc_id, "duplicate": existing is not None}
 
 

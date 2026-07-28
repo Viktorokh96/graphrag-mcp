@@ -180,8 +180,10 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     try:
         args = parser.parse_args(argv)
-    except SystemExit:
-        return 1
+    except SystemExit as e:
+        # argparse выходит с кодом 0 для --help/--version и 2 для ошибок разбора:
+        # возвращать 1 для всех случаев — значит ломать `rag-server --help` в скриптах.
+        return 0 if e.code in (0, None) else 1
 
     if args.http:
         return _start_http(args)
@@ -190,6 +192,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.print_help()
         return 1
 
+    rag = None
     try:
         from src.config import RAGConfig
         cfg = RAGConfig.from_env()
@@ -366,9 +369,20 @@ def main(argv: Optional[list[str]] = None) -> int:
                 )
             return 0
 
-    except Exception as e:
-        print(f"❌ Ошибка: {e}", file=sys.stderr)
+    except json.JSONDecodeError as e:
+        print(f"❌ Невалидный JSON в аргументах: {e}", file=sys.stderr)
         return 1
+    except Exception as e:
+        # Стек — в лог (виден при LOG_LEVEL=DEBUG), короткое сообщение — пользователю.
+        _logging.getLogger(__name__).debug("Command %s failed", args.command, exc_info=True)
+        print(f"❌ Ошибка ({type(e).__name__}): {e}", file=sys.stderr)
+        return 1
+    finally:
+        if rag is not None:
+            try:
+                rag.close()
+            except Exception:
+                _logging.getLogger(__name__).debug("Failed to close RAGSystem", exc_info=True)
 
     return 0
 

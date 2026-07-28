@@ -11,9 +11,12 @@
 """
 
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 _OLD_CHROMA = "chroma.sqlite3"
 _OLD_BM25 = "bm25_index.json"
@@ -38,16 +41,23 @@ def _read_chroma_documents(store_path: str) -> list[dict]:
     """Прочитать все документы из старой ChromaDB: [{doc_id, text, metadata}]."""
     try:
         import chromadb
-    except ImportError:
+    except ImportError as e:
         raise RuntimeError(
             "chromadb не установлен. Для миграции: uv sync --extra migrate "
             "(или pip install 'graphrag[migrate]')"
-        )
+        ) from e
     client = chromadb.PersistentClient(path=store_path)
     try:
         collection = client.get_collection("rag_docs")
-    except Exception:
-        return []
+    except Exception as e:
+        # Отсутствие коллекции — штатная ситуация (мигрировать нечего);
+        # любая другая ошибка (битая база, нет прав) раньше тихо давала
+        # «0 документов» и молчаливо теряла данные при миграции.
+        message = str(e).lower()
+        if "does not exist" in message or "not found" in message:
+            logger.info("ChromaDB collection 'rag_docs' not found in %s — nothing to migrate", store_path)
+            return []
+        raise RuntimeError(f"Failed to open ChromaDB collection 'rag_docs' in {store_path}: {e}") from e
     result = collection.get(include=["documents", "metadatas"])
     ids = result.get("ids") or []
     docs = result.get("documents") or []

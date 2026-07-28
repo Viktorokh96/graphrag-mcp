@@ -757,8 +757,13 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
     def _add_file_handler(p):
         filepath = p["filepath"]
         meta = _parse_meta(p.get("meta"))
-        with open(filepath, "r", encoding="utf-8-sig") as f:
-            text = f.read()
+        try:
+            with open(filepath, "r", encoding="utf-8-sig") as f:
+                text = f.read()
+        except OSError as e:
+            raise ValueError(f"Cannot read file {filepath!r}: {e}") from e
+        except UnicodeDecodeError as e:
+            raise ValueError(f"File {filepath!r} is not valid UTF-8 text: {e}") from e
         existing = rag.is_duplicate(text)
         doc_id = rag.add_document(text, meta, extract_graph=p.get("extract_graph", False))
         return {"doc_id": doc_id, "duplicate": existing is not None}
@@ -853,8 +858,17 @@ def handle_tool_call(rag, name: str, arguments: dict) -> dict:
     }
     fn = handlers.get(name)
     if not fn:
-        raise ValueError(f"Unknown tool: {name}")
-    return fn(arguments)
+        raise ValueError(f"Unknown tool: {name}. Available: {', '.join(sorted(handlers))}")
+    try:
+        return fn(arguments)
+    except KeyError as e:
+        # Отсутствующий обязательный аргумент: голый KeyError не говорит клиенту,
+        # что именно нужно добавить в вызов.
+        logger.warning("Tool %s called without required argument %s", name, e)
+        raise ValueError(f"Tool {name!r} requires argument {e.args[0]!r}") from e
+    except Exception:
+        logger.exception("Tool %s failed (arguments: %s)", name, sorted(arguments))
+        raise
 
 
 def main():
@@ -930,7 +944,10 @@ def main():
     try:
         asyncio.run(_run())
     except KeyboardInterrupt:
-        pass
+        logger.info("Interrupted, shutting down")
+    except Exception:
+        logger.exception("MCP server terminated with an error")
+        raise
     finally:
         rag.close()
 

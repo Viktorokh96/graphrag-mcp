@@ -2,6 +2,7 @@
 
 import http.server
 import json
+import logging
 import sys
 import webbrowser
 from collections import Counter
@@ -10,6 +11,8 @@ from typing import Optional
 
 from src.graph_store import GraphStore
 from src.rag import RAGSystem
+
+logger = logging.getLogger(__name__)
 
 RELATION_COLORS = [
     "#4CAF50", "#2196F3", "#FF9800", "#E91E63", "#9C27B0",
@@ -147,6 +150,7 @@ def _render_html(
     try:
         communities = list(louvain_communities(G, seed=42))
     except Exception:
+        logger.warning("Louvain community detection failed, colouring all nodes as one community", exc_info=True)
         communities = [set(G.nodes())]
 
     node_comm: dict[str, int] = {}
@@ -946,10 +950,13 @@ def serve_graph(
                     self.end_headers()
                     self.wfile.write(json.dumps({"query": q, "k": len(items), "results": items}, ensure_ascii=False).encode())
                 except Exception as e:
+                    logger.exception("Graph API search failed for query %r", q)
                     self.send_response(500)
                     self.send_header("Content-Type", "application/json")
                     self.end_headers()
-                    self.wfile.write(json.dumps({"error": str(e)}, ensure_ascii=False).encode())
+                    self.wfile.write(
+                        json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False).encode()
+                    )
                 return
             if self.path == "/":
                 self.send_response(200)

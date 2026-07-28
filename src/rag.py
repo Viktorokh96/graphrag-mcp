@@ -224,6 +224,8 @@ class RAGSystem:
 
         Raises:
             ValueError: если текст короче MIN_CONTENT_LENGTH
+            RuntimeError: если extract_graph=True и извлечение графа не удалось
+                          (документ при этом уже проиндексирован)
         """
         if not _skip_length_check and len(text.strip()) < self.MIN_CONTENT_LENGTH:
             raise ValueError(
@@ -246,7 +248,14 @@ class RAGSystem:
         if extract_graph:
             from src.graph_extractor import GraphExtractor
             extractor = GraphExtractor(self)
-            extractor.extract_and_link(doc_id, text, mode=extract_graph_mode)
+            try:
+                extractor.extract_and_link(doc_id, text, mode=extract_graph_mode)
+            except Exception as e:
+                self._invalidate_community_cache()
+                raise RuntimeError(
+                    f"Document {doc_id} was indexed, but graph extraction "
+                    f"(mode={extract_graph_mode!r}) failed: {e}"
+                ) from e
 
         self._invalidate_community_cache()
         return doc_id
@@ -263,8 +272,8 @@ class RAGSystem:
             try:
                 if self._chunker.needs_chunking(text):
                     chunks = self._chunker.chunk(text, doc_id=doc_id, metadata=metadata)
-            except Exception as e:
-                logger.warning("Tokenizer unavailable, indexing whole doc: %s", e)
+            except Exception:
+                logger.warning("Tokenizer unavailable for doc %s, indexing whole document", doc_id, exc_info=True)
                 chunks = None
 
         if not chunks or len(chunks) == 1:
@@ -318,8 +327,14 @@ class RAGSystem:
         query_embedding = self.embedding_generator.get_embedding(query)
         store_dim = self.vector_store.get_dimension()
         if store_dim and len(query_embedding) != store_dim:
+            logger.warning(
+                "Embedding dimension mismatch: query=%d, collection=%d. "
+                "Search returns no results until `rag-server reindex --force` is run.",
+                len(query_embedding), store_dim,
+            )
             return []
         if all(abs(v) < 1e-12 for v in query_embedding):
+            logger.warning("Embedding provider returned a zero vector for the query; skipping semantic search")
             return []
         hits = self.vector_store.search(query_embedding, k=k, metadata_filter=metadata_filter)
         results = self._join_texts(hits)
@@ -576,8 +591,8 @@ class RAGSystem:
                 if emb is not None:
                     try:
                         d["color"] = embedding_to_rgb(emb)
-                    except ValueError:
-                        pass  # некорректная размерность — пропускаем
+                    except ValueError as e:
+                        logger.debug("No color for doc %s: %s", d["doc_id"], e)
         return {"documents": documents, "total": total, "limit": limit, "offset": offset}
 
     def _enrich_with_links(
@@ -694,38 +709,47 @@ class RAGSystem:
 
         Удаляет фантомные точки из Qdrant (нет документа) и переиндексирует
         документы, отсутствующие в Qdrant (например, после сбоя записи).
+
+        Ошибки чтения сторов пробрасываются наверх: работать с недоступным
+        Qdrant/SQLite бессмысленно, а тихий откат превращал бы это в пустую
+        выдачу поиска. Сбой реиндексации отдельного документа не фатален —
+        он логируется и считается в сводке.
         """
-        try:
-            doc_ids = self.doc_store.all_ids()
-            vector_ids = self.vector_store.get_all_ids()
-            phantom_count = len(vector_ids - doc_ids)
-            missing = doc_ids - vector_ids
-            total = len(missing) + len(doc_ids)
-            logger.info(
-                "Store sync: %d docs in SQLite, %d points in Qdrant (%d unique doc_ids). "
-                "Phantoms: %d, missing in Qdrant: %d",
-                len(doc_ids), len(vector_ids), len(set(vector_ids)),
-                phantom_count, len(missing),
-            )
+        doc_ids = self.doc_store.all_ids()
+        vector_ids = self.vector_store.get_all_ids()
+        phantom_count = len(vector_ids - doc_ids)
+        missing = doc_ids - vector_ids
+        logger.info(
+            "Store sync: %d docs in SQLite, %d points in Qdrant (%d unique doc_ids). "
+            "Phantoms: %d, missing in Qdrant: %d",
+            len(doc_ids), len(vector_ids), len(set(vector_ids)),
+            phantom_count, len(missing),
+        )
 
-            for phantom in vector_ids - doc_ids:
-                self.vector_store.remove(phantom)
+        for phantom in vector_ids - doc_ids:
+            self.vector_store.remove(phantom)
 
-            if missing:
-                logger.info("Reindexing %d docs (this loads the embedding model on first call) …", len(missing))
-            for idx, doc_id in enumerate(missing):
-                record = self.doc_store.get(doc_id)
-                if record is None:
-                    logger.warning("  [%d/%d] doc %s vanished, skipping", idx + 1, len(missing), doc_id)
-                    continue
-                if (idx + 1) % 10 == 0 or idx == 0:
-                    logger.info("  reindex [%d/%d] %s …", idx + 1, len(missing), doc_id[:8])
+        if missing:
+            logger.info("Reindexing %d docs (this loads the embedding model on first call) …", len(missing))
+        failed = 0
+        for idx, doc_id in enumerate(missing):
+            record = self.doc_store.get(doc_id)
+            if record is None:
+                logger.warning("  [%d/%d] doc %s vanished, skipping", idx + 1, len(missing), doc_id)
+                continue
+            if (idx + 1) % 10 == 0 or idx == 0:
+                logger.info("  reindex [%d/%d] %s …", idx + 1, len(missing), doc_id[:8])
+            try:
                 self._index_vector(doc_id, record["text"], record["metadata"])
+            except Exception:
+                failed += 1
+                logger.exception("  reindex of doc %s failed", doc_id)
 
-            if phantom_count or len(missing):
-                logger.info("Sync done: removed %d phantoms, reindexed %d docs", phantom_count, len(missing))
-        except Exception as e:
-            logger.warning("Store sync failed: %s", e)
+        if phantom_count or missing:
+            logger.info(
+                "Sync done: removed %d phantoms, reindexed %d docs, %d failed",
+                phantom_count, len(missing) - failed, failed,
+            )
 
     def reindex(self, force: bool = False) -> int:
         """Пересчитать эмбеддинги всех документов (смена провайдера/модели)."""
@@ -803,8 +827,8 @@ class RAGSystem:
             self._communities = data.get("communities", [])
             # JSON хранит ключи как строки → конвертируем в int
             self._community_names = {int(k): v for k, v in data.get("names", {}).items()}
-        except (json.JSONDecodeError, KeyError, ValueError):
-            logger.warning("Failed to load community cache, starting fresh")
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            logger.warning("Failed to load community cache %s (%s), starting fresh", self._community_cache_path, e)
             self._communities = []
             self._community_names = {}
 
@@ -928,7 +952,11 @@ class RAGSystem:
         """
         converted = {}
         for k, v in names.items():
-            converted[int(k)] = v
+            try:
+                community_id = int(k)
+            except (TypeError, ValueError):
+                raise ValueError(f"Community id must be an integer, got {k!r}") from None
+            converted[community_id] = v
         self._community_names.update(converted)
         self._save_community_cache()
         return {"status": "ok", "updated": len(converted)}

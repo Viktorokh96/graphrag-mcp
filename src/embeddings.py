@@ -211,7 +211,10 @@ class OllamaEmbeddingGenerator:
             payload = {"model": self.model, "input": missing}
             response = self._client.post(url, json=payload, timeout=120.0)
             response.raise_for_status()
-            embeddings = response.json().get("embeddings", [])
+            try:
+                embeddings = response.json().get("embeddings", [])
+            except ValueError as e:
+                raise ValueError(f"Ollama returned a non-JSON response from {url}: {e}") from e
             if len(embeddings) != len(missing):
                 raise ValueError(
                     f"Ollama returned {len(embeddings)} embeddings for {len(missing)} inputs"
@@ -227,6 +230,9 @@ class OllamaEmbeddingGenerator:
 
     def clear_cache(self):
         self._cache.clear()
+
+    def close(self):
+        self._client.close()
 
 
 class OpenAICompatibleEmbeddingGenerator:
@@ -266,8 +272,14 @@ class OpenAICompatibleEmbeddingGenerator:
             payload = {"model": self.model, "input": missing if len(missing) > 1 else missing[0]}
             response = self._client.post(url, headers=headers, json=payload, timeout=120.0)
             response.raise_for_status()
-            data = response.json()
-            embeddings = [item["embedding"] for item in sorted(data["data"], key=lambda x: x["index"])]
+            try:
+                data = response.json()
+                embeddings = [item["embedding"] for item in sorted(data["data"], key=lambda x: x["index"])]
+            except (KeyError, TypeError, ValueError) as e:
+                raise ValueError(
+                    f"Unexpected embeddings response from {url}: {e}. "
+                    f"Expected OpenAI-compatible {{'data': [{{'index': int, 'embedding': [...]}}]}}"
+                ) from e
             if len(embeddings) != len(missing):
                 raise ValueError(
                     f"Server returned {len(embeddings)} embeddings for {len(missing)} inputs"

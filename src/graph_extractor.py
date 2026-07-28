@@ -47,7 +47,13 @@ class GraphExtractor:
 
         Returns:
             [{triple: (entity_a, relation, entity_b) | entity, status, doc_id}]
+
+        Raises:
+            ValueError: неизвестный mode
+            RuntimeError: NER-режим недоступен (нет spaCy или модели)
         """
+        if mode not in ("llm", "ner"):
+            raise ValueError(f"Unknown graph extraction mode: {mode!r}. Supported: 'llm', 'ner'.")
         if mode == "ner":
             return self._extract_ner(doc_id, text)
         return self._extract_llm(doc_id, text)
@@ -109,13 +115,18 @@ class GraphExtractor:
         """NER-based (spaCy) — только сущности, без отношений."""
         import importlib
         if importlib.util.find_spec("spacy") is None:
-            return [{"error": "spaCy not installed, run: pip install spacy && python -m spacy download en_core_web_sm"}]
+            raise RuntimeError(
+                "spaCy is not installed. Run: pip install spacy && python -m spacy download en_core_web_sm"
+            )
 
         import spacy
         try:
             nlp_en = spacy.load("en_core_web_sm")
-        except OSError:
-            return [{"error": "spaCy model 'en_core_web_sm' not downloaded. Run: python -m spacy download en_core_web_sm"}]
+        except OSError as e:
+            raise RuntimeError(
+                "spaCy model 'en_core_web_sm' is not downloaded. "
+                "Run: python -m spacy download en_core_web_sm"
+            ) from e
         doc = nlp_en(text[:10000])
         results = []
         seen = set()
