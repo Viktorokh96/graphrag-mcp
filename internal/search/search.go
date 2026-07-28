@@ -389,7 +389,6 @@ func (s *Service) Clear() error {
 	}
 	return nil
 }
-
 // Reindex rebuilds all Qdrant vectors from the document store.
 func (s *Service) Reindex() (int, error) {
 	docs, count, err := s.docs.List(100000, 0, nil)
@@ -400,48 +399,37 @@ func (s *Service) Reindex() (int, error) {
 		return 0, nil
 	}
 
-	// Build embeddings
-	texts := make([]string, len(docs))
-	for i, d := range docs {
-		texts[i] = d.Text
-	}
-	embeddings, err := s.embed.EmbedBatch(texts)
-	if err != nil {
-		return 0, fmt.Errorf("reindex: embed: %w", err)
-	}
+	batchSize := 8
+	denseVecs := make(map[ragtypes.DocID][]float32, count)
+	sparseVecs := make(map[ragtypes.DocID]map[string]float32, count)
 
-	denseVecs := make(map[ragtypes.DocID][]float32, len(docs))
-	sparseVecs := make(map[ragtypes.DocID]map[string]float32, len(docs))
-	for i, d := range docs {
-		denseVecs[d.ID] = embeddings[i]
-		sparseVecs[d.ID] = buildSparseVector(d.Text)
+	for start := 0; start < len(docs); start += batchSize {
+		end := start + batchSize
+		if end > len(docs) {
+			end = len(docs)
+		}
+		batch := docs[start:end]
+		texts := make([]string, len(batch))
+		for i, d := range batch {
+			texts[i] = d.Text
+		}
+		embeddings, err := s.embed.EmbedBatch(texts)
+		if err != nil {
+			return 0, fmt.Errorf("reindex: embed batch %d-%d: %w", start, end, err)
+		}
+		if len(embeddings) != len(batch) {
+			return 0, fmt.Errorf("reindex: embed returned %d vectors for %d texts", len(embeddings), len(batch))
+		}
+		for i, d := range batch {
+			denseVecs[d.ID] = embeddings[i]
+			sparseVecs[d.ID] = buildSparseVector(d.Text)
+		}
 	}
 
 	if err := s.vec.Reindex(docs, denseVecs, sparseVecs); err != nil {
 		return 0, fmt.Errorf("reindex: vecstore: %w", err)
 	}
 	return count, nil
-}
-
-// buildSparseVector creates a simple word-frequency sparse vector.
-func buildSparseVector(text string) map[string]float32 {
-	words := strings.Fields(strings.ToLower(text))
-	vec := make(map[string]float32, len(words))
-	for _, w := range words {
-		vec[w]++
-	}
-	// normalize
-	var sum float32
-	for _, v := range vec {
-		sum += v * v
-	}
-	if sum > 0 {
-		norm := float32(math.Sqrt(float64(sum)))
-		for k := range vec {
-			vec[k] /= norm
-		}
-	}
-	return vec
 }
 
 // ── Community detection ────────────────────────────────────────────────────
@@ -660,4 +648,24 @@ func (s *Service) Close() error {
 		return fmt.Errorf("search: close errors: %v", errs)
 	}
 	return nil
+}
+
+// buildSparseVector creates a simple word-frequency sparse vector.
+func buildSparseVector(text string) map[string]float32 {
+	words := strings.Fields(strings.ToLower(text))
+	vec := make(map[string]float32, len(words))
+	for _, w := range words {
+		vec[w]++
+	}
+	var sum float32
+	for _, v := range vec {
+		sum += v * v
+	}
+	if sum > 0 {
+		norm := float32(math.Sqrt(float64(sum)))
+		for k := range vec {
+			vec[k] /= norm
+		}
+	}
+	return vec
 }

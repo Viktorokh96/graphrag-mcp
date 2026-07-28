@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/Viktorokh96/graphrag-mcp/internal/config"
@@ -111,7 +112,7 @@ func (p *OpenAIProvider) EmbedBatch(texts []string) ([][]float32, error) {
 		return nil, fmt.Errorf("embedding: openai marshal: %w", err)
 	}
 
-	url := p.baseURL + "/v1/embeddings"
+	url := strings.TrimRight(p.baseURL, "/") + "/embeddings"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(raw))
 	if err != nil {
 		return nil, fmt.Errorf("embedding: openai request: %w", err)
