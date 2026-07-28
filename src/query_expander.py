@@ -12,6 +12,8 @@ from typing import Optional
 
 import httpx
 
+from src.http_utils import json_headers, split_lines
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,11 +35,7 @@ class QueryExpander:
         self.count = count
         self._client = None
 
-        if provider == "ollama":
-            self._client = httpx.Client(timeout=120.0)
-        elif provider == "openai-compatible":
-            self._client = httpx.Client(timeout=120.0)
-        elif provider == "anthropic":
+        if provider in ("ollama", "openai-compatible", "anthropic"):
             self._client = httpx.Client(timeout=120.0)
         elif provider == "sentence_transformer":
             raise NotImplementedError(
@@ -73,16 +71,13 @@ class QueryExpander:
         response = self._client.post(url, json=payload)
         response.raise_for_status()
         text = response.json().get("response", "")
-        variants = [q.strip() for q in text.split("\n") if q.strip()]
-        return [query] + variants[:n]
+        return [query] + split_lines(text)[:n]
 
     # -- openai-compatible -----------------------------------------------------
 
     def _expand_openai(self, query: str, n: int) -> list[str]:
         url = f"{self.base_url}/chat/completions"
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        headers = json_headers(self.api_key)
 
         prompt = self._build_prompt(query, n)
         payload = {
@@ -94,8 +89,7 @@ class QueryExpander:
         response = self._client.post(url, headers=headers, json=payload)
         response.raise_for_status()
         text = response.json()["choices"][0]["message"]["content"]
-        variants = [q.strip() for q in text.split("\n") if q.strip()]
-        return [query] + variants[:n]
+        return [query] + split_lines(text)[:n]
 
     # -- anthropic -------------------------------------------------------------
 
@@ -116,8 +110,7 @@ class QueryExpander:
         response = self._client.post(url, headers=headers, json=payload)
         response.raise_for_status()
         text = response.json()["content"][0]["text"]
-        variants = [q.strip() for q in text.split("\n") if q.strip()]
-        return [query] + variants[:n]
+        return [query] + split_lines(text)[:n]
 
     # -- prompt ----------------------------------------------------------------
 

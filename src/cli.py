@@ -6,7 +6,39 @@ import os
 import sys
 from typing import Optional
 
+from src.logging_utils import configure_logging
 from src.rag import RAGSystem
+from src.result_utils import enrich_with_links, format_results
+
+#: (атрибут argparse, поле RAGConfig, env-переменная) — глобальные опции провайдеров
+PROVIDER_OPTIONS = [
+    ("provider", "embedding_provider", "EMBEDDING_PROVIDER"),
+    ("model", "embedding_model_name", "EMBEDDING_MODEL"),
+    ("base_url", "embedding_base_url", "EMBEDDING_BASE_URL"),
+    ("device", "embedding_device", "EMBEDDING_DEVICE"),
+    ("key", "embedding_api_key", "EMBEDDING_API_KEY"),
+    ("rerank_provider", "rerank_provider", "RERANK_PROVIDER"),
+    ("rerank_model", "rerank_model", "RERANK_MODEL"),
+    ("rerank_base_url", "rerank_base_url", "RERANK_BASE_URL"),
+    ("expansion_provider", "expansion_provider", "EXPANSION_PROVIDER"),
+    ("expansion_model", "expansion_model", "EXPANSION_MODEL"),
+    ("expansion_url", "expansion_base_url", "EXPANSION_BASE_URL"),
+    ("expansion_count", "expansion_count", "EXPANSION_COUNT"),
+]
+
+
+def _add_search_arguments(subparser, *, with_alpha: bool = False) -> None:
+    """Общие опции команд поиска (search / bm25-search / hybrid-search)."""
+    subparser.add_argument("--query", type=str, required=True, help="Search query")
+    subparser.add_argument("--k", type=int, default=5, help="Number of results")
+    if with_alpha:
+        subparser.add_argument("--alpha", type=float, default=None, help="Hybrid alpha (0=BM25, 1=semantic; default=language-aware)")
+        subparser.add_argument("--rerank", action="store_true", default=None, help="Enable CrossEncoder reranker")
+        subparser.add_argument("--query-expansion", action="store_true", default=None, help="Enable query expansion via LLM")
+    subparser.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
+    subparser.add_argument("--relations-load-depth", type=int, default=1, help="BFS depth for graph relations (0=off, 1=direct neighbours)")
+    subparser.add_argument("--relations-load-type-filter", type=str, default=None, help='Comma-separated relation types, e.g. "related_to,similar_to"')
+    subparser.add_argument("--relations-load-meta-filter", type=str, default=None, help='Neighbour metadata filter JSON')
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -20,15 +52,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     Returns:
         int: exit code (0 — успех, 1 — ошибка)
     """
-    import logging as _logging
-    _log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
-    _logging.basicConfig(
-        level=getattr(_logging, _log_level, _logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        stream=sys.stderr,
-    )
-    for _lib in ("httpx", "huggingface_hub", "sentence_transformers", "httpcore"):
-        _logging.getLogger(_lib).setLevel(_logging.WARNING)
+    configure_logging()
 
     if argv is None:
         argv = sys.argv[1:]
@@ -62,35 +86,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser_add_file.add_argument("--path", type=str, required=True, help="File path")
     parser_add_file.add_argument("--meta", type=str, default=None, help="Metadata JSON")
 
-    # search
-    parser_search = subparsers.add_parser("search", help="Semantic search")
-    parser_search.add_argument("--query", type=str, required=True, help="Search query")
-    parser_search.add_argument("--k", type=int, default=5, help="Number of results")
-    parser_search.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
-    parser_search.add_argument("--relations-load-depth", type=int, default=1, help="BFS depth for graph relations (0=off, 1=direct neighbours)")
-    parser_search.add_argument("--relations-load-type-filter", type=str, default=None, help='Comma-separated relation types, e.g. "related_to,similar_to"')
-    parser_search.add_argument("--relations-load-meta-filter", type=str, default=None, help='Neighbour metadata filter JSON')
-
-    # bm25-search
-    parser_bm25 = subparsers.add_parser("bm25-search", help="BM25 keyword search")
-    parser_bm25.add_argument("--query", type=str, required=True, help="Search query")
-    parser_bm25.add_argument("--k", type=int, default=5, help="Number of results")
-    parser_bm25.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
-    parser_bm25.add_argument("--relations-load-depth", type=int, default=1, help="BFS depth for graph relations (0=off, 1=direct neighbours)")
-    parser_bm25.add_argument("--relations-load-type-filter", type=str, default=None, help='Comma-separated relation types')
-    parser_bm25.add_argument("--relations-load-meta-filter", type=str, default=None, help='Neighbour metadata filter JSON')
-
-    # hybrid-search
-    parser_hybrid = subparsers.add_parser("hybrid-search", help="Hybrid search")
-    parser_hybrid.add_argument("--query", type=str, required=True, help="Search query")
-    parser_hybrid.add_argument("--k", type=int, default=5, help="Number of results")
-    parser_hybrid.add_argument("--alpha", type=float, default=None, help="Hybrid alpha (0=BM25, 1=semantic; default=language-aware)")
-    parser_hybrid.add_argument("--rerank", action="store_true", default=None, help="Enable CrossEncoder reranker")
-    parser_hybrid.add_argument("--query-expansion", action="store_true", default=None, help="Enable query expansion via LLM")
-    parser_hybrid.add_argument("--meta-filter", type=str, default=None, help='Metadata filter JSON, e.g. \'{"source":"spec"}\'')
-    parser_hybrid.add_argument("--relations-load-depth", type=int, default=1, help="BFS depth for graph relations (0=off, 1=direct neighbours)")
-    parser_hybrid.add_argument("--relations-load-type-filter", type=str, default=None, help='Comma-separated relation types')
-    parser_hybrid.add_argument("--relations-load-meta-filter", type=str, default=None, help='Neighbour metadata filter JSON')
+    # search / bm25-search / hybrid-search
+    _add_search_arguments(subparsers.add_parser("search", help="Semantic search"))
+    _add_search_arguments(subparsers.add_parser("bm25-search", help="BM25 keyword search"))
+    _add_search_arguments(subparsers.add_parser("hybrid-search", help="Hybrid search"), with_alpha=True)
 
     # add-structured
     parser_add_structured = subparsers.add_parser("add-structured", help="Index structured code (repomix JSON)")
@@ -198,30 +197,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         cfg = RAGConfig.from_env()
         if args.store:
             cfg.store_path = args.store
-        if args.provider:
-            cfg.embedding_provider = args.provider
-        if args.model:
-            cfg.embedding_model_name = args.model
-        if args.base_url:
-            cfg.embedding_base_url = args.base_url
-        if args.device:
-            cfg.embedding_device = args.device
-        if args.key:
-            cfg.embedding_api_key = args.key
-        if args.rerank_provider:
-            cfg.rerank_provider = args.rerank_provider
-        if args.rerank_model:
-            cfg.rerank_model = args.rerank_model
-        if args.rerank_base_url:
-            cfg.rerank_base_url = args.rerank_base_url
-        if args.expansion_provider:
-            cfg.expansion_provider = args.expansion_provider
-        if args.expansion_model:
-            cfg.expansion_model = args.expansion_model
-        if args.expansion_url:
-            cfg.expansion_base_url = args.expansion_url
-        if args.expansion_count is not None:
-            cfg.expansion_count = args.expansion_count
+        for arg_name, cfg_field, _env in PROVIDER_OPTIONS:
+            value = getattr(args, arg_name)
+            if value is not None:
+                setattr(cfg, cfg_field, value)
         rag = RAGSystem(store_path=args.store, config=cfg)
 
         if args.command == "add-document":
@@ -238,32 +217,29 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         elif args.command == "search":
             meta_filter = json.loads(args.meta_filter) if args.meta_filter else None
-            rtype = args.relations_load_type_filter.split(",") if args.relations_load_type_filter else None
-            rmeta = json.loads(args.relations_load_meta_filter) if args.relations_load_meta_filter else None
-            results = rag.search(args.query, args.k, metadata_filter=meta_filter)
-            docs = [{"doc_id": r[0], "text": r[1], "score": r[2], "metadata": r[3]} for r in results]
-            rag._enrich_with_links(docs, relations_load_depth=args.relations_load_depth, relations_load_type_filter=rtype, relations_load_meta_filter=rmeta)
-            _print_dict_results("Семантический поиск", docs)
+            _run_search(
+                rag, args, "Семантический поиск",
+                rag.search(args.query, args.k, metadata_filter=meta_filter),
+            )
             return 0
 
         elif args.command == "bm25-search":
             meta_filter = json.loads(args.meta_filter) if args.meta_filter else None
-            rtype = args.relations_load_type_filter.split(",") if args.relations_load_type_filter else None
-            rmeta = json.loads(args.relations_load_meta_filter) if args.relations_load_meta_filter else None
-            results = rag.bm25_search(args.query, args.k, metadata_filter=meta_filter)
-            docs = [{"doc_id": r[0], "text": r[1], "score": r[2], "metadata": r[3]} for r in results]
-            rag._enrich_with_links(docs, relations_load_depth=args.relations_load_depth, relations_load_type_filter=rtype, relations_load_meta_filter=rmeta)
-            _print_dict_results("BM25 поиск", docs)
+            _run_search(
+                rag, args, "BM25 поиск",
+                rag.bm25_search(args.query, args.k, metadata_filter=meta_filter),
+            )
             return 0
 
         elif args.command == "hybrid-search":
             meta_filter = json.loads(args.meta_filter) if args.meta_filter else None
-            rtype = args.relations_load_type_filter.split(",") if args.relations_load_type_filter else None
-            rmeta = json.loads(args.relations_load_meta_filter) if args.relations_load_meta_filter else None
-            results = rag.search_hybrid(args.query, args.k, args.alpha, metadata_filter=meta_filter, rerank=args.rerank, query_expansion=args.query_expansion)
-            docs = [{"doc_id": r[0], "text": r[1], "score": r[2], "metadata": r[3]} for r in results]
-            rag._enrich_with_links(docs, relations_load_depth=args.relations_load_depth, relations_load_type_filter=rtype, relations_load_meta_filter=rmeta)
-            _print_dict_results("Гибридный поиск", docs)
+            _run_search(
+                rag, args, "Гибридный поиск",
+                rag.search_hybrid(
+                    args.query, args.k, args.alpha, metadata_filter=meta_filter,
+                    rerank=args.rerank, query_expansion=args.query_expansion,
+                ),
+            )
             return 0
 
         elif args.command == "add-structured":
@@ -387,34 +363,27 @@ def main(argv: Optional[list[str]] = None) -> int:
     return 0
 
 
+def _run_search(rag, args, title: str, results: list) -> None:
+    """Общий хвост команд поиска: формат, загрузка связей и вывод."""
+    docs = format_results(results)
+    enrich_with_links(rag, docs, {
+        "relations_load_depth": args.relations_load_depth,
+        "relations_load_type_filter": (
+            args.relations_load_type_filter.split(",") if args.relations_load_type_filter else None
+        ),
+        "relations_load_meta_filter": args.relations_load_meta_filter,
+    })
+    _print_dict_results(title, docs)
+
+
 def _start_http(args) -> int:
     """Запустить HTTP REST API + MCP SSE сервер."""
     import uvicorn
     os.environ.setdefault("STORE_PATH", args.store or "./rag_data")
-    if args.provider:
-        os.environ["EMBEDDING_PROVIDER"] = args.provider
-    if args.model:
-        os.environ["EMBEDDING_MODEL"] = args.model
-    if args.base_url:
-        os.environ["EMBEDDING_BASE_URL"] = args.base_url
-    if args.device:
-        os.environ["EMBEDDING_DEVICE"] = args.device
-    if args.key:
-        os.environ["EMBEDDING_API_KEY"] = args.key
-    if args.rerank_provider:
-        os.environ["RERANK_PROVIDER"] = args.rerank_provider
-    if args.rerank_model:
-        os.environ["RERANK_MODEL"] = args.rerank_model
-    if args.rerank_base_url:
-        os.environ["RERANK_BASE_URL"] = args.rerank_base_url
-    if args.expansion_provider:
-        os.environ["EXPANSION_PROVIDER"] = args.expansion_provider
-    if args.expansion_model:
-        os.environ["EXPANSION_MODEL"] = args.expansion_model
-    if args.expansion_url:
-        os.environ["EXPANSION_BASE_URL"] = args.expansion_url
-    if args.expansion_count is not None:
-        os.environ["EXPANSION_COUNT"] = str(args.expansion_count)
+    for arg_name, _cfg_field, env_name in PROVIDER_OPTIONS:
+        value = getattr(args, arg_name)
+        if value is not None:
+            os.environ[env_name] = str(value)
     port = args.port or 8765
     print(f"   REST API: http://localhost:{port}/docs", file=sys.stderr)
     print(f"   MCP SSE:  http://localhost:{port}/mcp", file=sys.stderr)

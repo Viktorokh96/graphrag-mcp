@@ -454,22 +454,25 @@ function fitGraph() {{
   network.fit({{ animation: {{ duration: 600, easingFunction: 'easeInOutQuad' }} }});
 }}
 function esc(str) {{ return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
+function restoreNodeStyle(n) {{
+  if (n._origBorder) {{
+    n.color.border = n._origBorder;
+    delete n._origBorder;
+  }}
+  if (n._origLabel) {{
+    n.label = n._origLabel;
+    delete n._origLabel;
+  }}
+  if (n._origFontSize) {{
+    n.font = n.font || {{}};
+    n.font.size = n._origFontSize;
+    delete n._origFontSize;
+  }}
+}}
 function clearAllHighlights() {{
   nodes.forEach(n => {{
     n.hidden = false;
-    if (n._origBorder) {{
-      n.color.border = n._origBorder;
-      delete n._origBorder;
-    }}
-    if (n._origLabel) {{
-      n.label = n._origLabel;
-      delete n._origLabel;
-    }}
-    if (n._origFontSize) {{
-      n.font = n.font || {{}};
-      n.font.size = n._origFontSize;
-      delete n._origFontSize;
-    }}
+    restoreNodeStyle(n);
     nodes.update(n);
   }});
   document.getElementById('search-results').innerHTML = '';
@@ -569,19 +572,7 @@ function searchNodes(query) {{
               matchCount++;
             }} else {{
               n.hidden = true;
-              if (n._origBorder) {{
-                n.color.border = n._origBorder;
-                delete n._origBorder;
-              }}
-              if (n._origLabel) {{
-                n.label = n._origLabel;
-                delete n._origLabel;
-              }}
-              if (n._origFontSize) {{
-                n.font = n.font || {{}};
-                n.font.size = n._origFontSize;
-                delete n._origFontSize;
-              }}
+              restoreNodeStyle(n);
             }}
             nodes.update(n);
           }});

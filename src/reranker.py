@@ -11,6 +11,8 @@ from typing import Optional
 
 import httpx
 
+from src.http_utils import json_headers
+
 logger = logging.getLogger(__name__)
 
 
@@ -80,11 +82,7 @@ class Reranker:
     def _rerank_api(
         self, query: str, candidates: list[dict], top_k: Optional[int]
     ) -> list[dict]:
-        url = f"{self.base_url.rstrip('/')}/rerank"
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-
+        url = f"{self.base_url}/rerank"
         payload = {
             "model": self.model_name,
             "query": query,
@@ -93,7 +91,7 @@ class Reranker:
         if top_k is not None:
             payload["top_n"] = top_k
 
-        response = self._client.post(url, headers=headers, json=payload)
+        response = self._client.post(url, headers=json_headers(self.api_key), json=payload)
         response.raise_for_status()
         data = response.json()
 

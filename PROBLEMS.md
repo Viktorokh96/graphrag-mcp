@@ -78,11 +78,7 @@ FastAPI без middleware. Любой в локальной сети может 
 
 `_load_token_df()` загружает `text_hashes` из всех точек через scroll при старте. Для 10K+ документов — заметная задержка первого BM25-запроса. После постройки кэш обновляется инкрементально.
 
-### 16. `http_api.py` импортирует `_parse_meta` из `mcp_server.py`
-
-Два эндпоинта делают `from src.mcp_server import _parse_meta` — циклическая зависимость на уровне импорта не возникает, но логически неверно: бизнес-логика парсинга меты лежит в модуле транспорта.
-
-### 17. `EmbeddingGenerator` (TF-IDF) — мёртвый код
+### 16. `EmbeddingGenerator` (TF-IDF) — мёртвый код
 
 Класс не используется нигде кроме тестов. Занимает ~50 строк, не экспортируется в rag.py.
 
@@ -104,6 +100,7 @@ FastAPI без middleware. Любой в локальной сети может 
 | ~~add_file без extract_graph~~ | `extract_graph` параметр добавлен в add_file | 0.2.0 |
 | ~~Query expansion timeout~~ | 120с через Ollama `Client(timeout=120.0)` | 0.2.0 |
 | ~~Unicode нормализация~~ | SHA256 хэш нормализованного текста | 0.2.0 |
+| ~~`http_api.py` импортирует `_parse_meta` из `mcp_server.py`~~ | `parse_meta` вынесен в `src/_meta_filter.py` | 0.2.0 |
 
 
 
@@ -113,5 +110,5 @@ FastAPI без middleware. Любой в локальной сети может 
 |----------|------|-----|
 | Strategic | 3 | MS догоняет, LightRAG лидирует, ниша узка |
 | Product | 4 | WebUI сырой, нет community reports, HTTP голый, anthropic stub |
-| Architecture | 10 | threading.Lock, неатомарность, OOM, cache без LRU, batch, BFS fan-out, graph desync, IDF scroll, meta import, dead TF-IDF |
-| Solved | 10 | см. архив выше |
+| Architecture | 9 | threading.Lock, неатомарность, OOM, cache без LRU, batch, BFS fan-out, graph desync, IDF scroll, dead TF-IDF |
+| Solved | 11 | см. архив выше |

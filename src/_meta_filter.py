@@ -41,6 +41,26 @@ def normalize_metadata_filter(value: Any) -> Optional[dict]:
     return None
 
 
+def parse_meta(value: Any) -> Optional[dict]:
+    """Нормализовать значение поля `meta` из аргументов вызова.
+
+    Допускает: dict (проходит как есть), None/"", строку с JSON (парсится),
+    любую строку без JSON (оборачивается в {"_raw": value}).
+    Возвращает None для отсутствующего/пустого значения.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {"_raw": value}
+        except (json.JSONDecodeError, TypeError):
+            return {"_raw": value}
+    return {"_raw": value}
+
+
 def matches_metadata_filter(meta: Optional[dict], filt: Optional[dict]) -> bool:
     """Проверить, проходит ли документ с метаданными `meta` фильтр `filt`.
 

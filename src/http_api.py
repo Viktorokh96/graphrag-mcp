@@ -24,7 +24,6 @@ MCP:
     POST    /mcp    (JSON-RPC messages)
 """
 
-import json
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, Optional
@@ -33,16 +32,15 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from mcp.server import NotificationOptions, Server
-from mcp.server.models import InitializationOptions
+from mcp.server import Server
 from mcp.server.sse import SseServerTransport
-from mcp.types import TextContent
 from pydantic import BaseModel
 
-from src._meta_filter import normalize_metadata_filter
+from src._meta_filter import normalize_metadata_filter, parse_meta
 from src.config import RAGConfig
-from src.mcp_server import TOOL_DEFS, handle_tool_call
+from src.mcp_server import build_mcp_server, initialization_options
 from src.rag import RAGSystem
+from src.result_utils import enrich_with_links, format_results
 
 logger = logging.getLogger(__name__)
 
@@ -184,27 +182,19 @@ def _rag() -> RAGSystem:
     return rag_holder.instance
 
 
-def _enrich(docs: list[dict], p: dict) -> list[dict]:
-    if not docs:
-        return docs
-    return _rag()._enrich_with_links(
-        docs,
-        relations_load_depth=p.get("relations_load_depth", 1),
-        relations_load_type_filter=p.get("relations_load_type_filter"),
-        relations_load_meta_filter=normalize_metadata_filter(p.get("relations_load_meta_filter")),
-    )
-
-
-def _fmt(results, max_chars=None):
-    if max_chars is not None:
-        return [
-            {"doc_id": r[0], "text": r[1][:max_chars], "score": round(r[2], 4), "metadata": r[3] if isinstance(r[3], dict) else {}}
-            for r in results
-        ]
-    return [
-        {"doc_id": r[0], "text": r[1], "score": round(r[2], 4), "metadata": r[3] if isinstance(r[3], dict) else {}}
-        for r in results
-    ]
+def _relations_query_params(
+    relations_load_depth: int,
+    relations_load_type_filter: Optional[str],
+    relations_load_meta_filter: Optional[str],
+) -> dict:
+    """Query-параметры relations_load_* → аргументы RAGSystem."""
+    return {
+        "relations_load_depth": relations_load_depth,
+        "relations_load_type_filter": (
+            relations_load_type_filter.split(",") if relations_load_type_filter else None
+        ),
+        "relations_load_meta_filter": normalize_metadata_filter(relations_load_meta_filter),
+    }
 
 
 # -- REST endpoints ----------------------------------------------------------
@@ -244,8 +234,8 @@ def search(req: SearchRequest):
     else:
         results = rag.search_hybrid(req.query, k=req.k, alpha=req.alpha, metadata_filter=mf, rerank=req.rerank, query_expansion=req.query_expansion)
 
-    docs = _fmt(results, max_chars=req.max_chars)
-    _enrich(docs, req.model_dump())
+    docs = format_results(results, max_chars=req.max_chars)
+    enrich_with_links(rag, docs, req.model_dump())
     return {"query": req.query, "k": len(docs), "results": docs}
 
 
@@ -253,9 +243,11 @@ def search(req: SearchRequest):
 def add_document(req: AddDocumentRequest):
     rag = _rag()
     existing = rag.is_duplicate(req.text)
-    from src.mcp_server import _parse_meta
-    meta = _parse_meta(req.meta)
-    doc_id = rag.add_document(req.text, meta, extract_graph=req.extract_graph)
+    meta = parse_meta(req.meta)
+    try:
+        doc_id = rag.add_document(req.text, meta, extract_graph=req.extract_graph)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"doc_id": doc_id, "duplicate": existing is not None}
 
 
@@ -269,15 +261,12 @@ def list_documents(
     relations_load_type_filter: Optional[str] = Query(None),
     relations_load_meta_filter: Optional[str] = Query(None),
 ):
-    mf = None
-    if metadata_filter:
-        mf = normalize_metadata_filter(metadata_filter)
-    rtype = relations_load_type_filter.split(",") if relations_load_type_filter else None
-    rmeta = normalize_metadata_filter(relations_load_meta_filter) if relations_load_meta_filter else None
     return _rag().list_documents(
-        limit=limit, offset=offset, max_chars=max_chars, metadata_filter=mf,
-        relations_load_depth=relations_load_depth, relations_load_type_filter=rtype,
-        relations_load_meta_filter=rmeta,
+        limit=limit, offset=offset, max_chars=max_chars,
+        metadata_filter=normalize_metadata_filter(metadata_filter),
+        **_relations_query_params(
+            relations_load_depth, relations_load_type_filter, relations_load_meta_filter
+        ),
     )
 
 
@@ -290,12 +279,11 @@ def get_document(
     relations_load_type_filter: Optional[str] = Query(None),
     relations_load_meta_filter: Optional[str] = Query(None),
 ):
-    rtype = relations_load_type_filter.split(",") if relations_load_type_filter else None
-    rmeta = normalize_metadata_filter(relations_load_meta_filter) if relations_load_meta_filter else None
     doc = _rag().get_document(
         doc_id, offset=offset, limit=limit,
-        relations_load_depth=relations_load_depth, relations_load_type_filter=rtype,
-        relations_load_meta_filter=rmeta,
+        **_relations_query_params(
+            relations_load_depth, relations_load_type_filter, relations_load_meta_filter
+        ),
     )
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -320,8 +308,9 @@ def get_related(
     max_depth: int = Query(1, ge=1),
     metadata_filter: Optional[str] = Query(None),
 ):
-    mf = normalize_metadata_filter(metadata_filter) if metadata_filter else None
-    relations = _rag().get_related(node_id, max_depth=max_depth, metadata_filter=mf)
+    relations = _rag().get_related(
+        node_id, max_depth=max_depth, metadata_filter=normalize_metadata_filter(metadata_filter)
+    )
     return {
         "relations": [
             {"source": r[0], "target": r[1], "relation": r[2], "weight": r[3], "direction": r[4]}
@@ -350,8 +339,7 @@ def add_structured(req: StructuredRequest):
 
 @app.put("/documents/{doc_id}")
 def update_document(doc_id: str, req: UpdateDocumentRequest):
-    from src.mcp_server import _parse_meta
-    meta = _parse_meta(req.meta)
+    meta = parse_meta(req.meta)
     try:
         result = _rag().update_document(doc_id, text=req.text, meta=meta)
         return result
@@ -389,22 +377,6 @@ async def get_communities():
 # -- MCP SSE transport -------------------------------------------------------
 
 
-def _make_mcp_server(rag_instance) -> Server:
-    """Создать MCP Server, связанный с данным RAGSystem."""
-    server = Server("rag-knowledge-base")
-
-    @server.list_tools()
-    async def list_tools() -> list:
-        return TOOL_DEFS
-
-    @server.call_tool()
-    async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-        result = handle_tool_call(rag_instance, name, arguments)
-        return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
-
-    return server
-
-
 class _MCPSSEApp:
     """ASGI-приложение MCP over SSE.
 
@@ -421,16 +393,7 @@ class _MCPSSEApp:
             async with self._transport.connect_sse(scope, receive, send) as streams:
                 read_stream, write_stream = streams
                 await self._server.run(
-                    read_stream,
-                    write_stream,
-                    InitializationOptions(
-                        server_name="rag-knowledge-base",
-                        server_version="1.0.0",
-                        capabilities=self._server.get_capabilities(
-                            notification_options=NotificationOptions(),
-                            experimental_capabilities={},
-                        ),
-                    ),
+                    read_stream, write_stream, initialization_options(self._server)
                 )
         elif scope["method"] == "POST":
             await self._transport.handle_post_message(scope, receive, send)
@@ -439,5 +402,4 @@ class _MCPSSEApp:
 def _mount_mcp(app: FastAPI, rag_instance) -> None:
     """Создать и смонтировать MCP SSE хендлер."""
     transport = SseServerTransport("/mcp")
-    server = _make_mcp_server(rag_instance)
-    app.mount("/mcp", _MCPSSEApp(transport, server))
+    app.mount("/mcp", _MCPSSEApp(transport, build_mcp_server(rag_instance)))
