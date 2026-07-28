@@ -32,12 +32,12 @@ func NewGraphStore(db *sql.DB, getMeta func(ragtypes.DocID) (map[string]any, boo
 		return nil, fmt.Errorf("graphstore: nil database handle")
 	}
 
-	stmt := `CREATE TABLE IF NOT EXISTS edges (
+	stmt := `CREATE TABLE IF NOT EXISTS graph_edges (
 		source   TEXT NOT NULL,
 		target   TEXT NOT NULL,
 		relation TEXT NOT NULL,
 		weight   REAL NOT NULL DEFAULT 1.0,
-		PRIMARY KEY (source, target, relation)
+		PRIMARY KEY (source_id, target_id, relation)
 	)`
 	if _, err := db.Exec(stmt); err != nil {
 		return nil, fmt.Errorf("graphstore: create edges table: %w", err)
@@ -62,7 +62,7 @@ func (gs *SQLGraphStore) loadCache() error {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 
-	rows, err := gs.db.Query(`SELECT source, target, relation, weight FROM edges`)
+	rows, err := gs.db.Query(`SELECT source_id, target_id, relation, weight FROM graph_edges`)
 	if err != nil {
 		return err
 	}
@@ -91,8 +91,8 @@ func (gs *SQLGraphStore) AddEdge(source, target ragtypes.DocID, relation string,
 	}
 
 	_, err := gs.db.Exec(
-		`INSERT INTO edges (source, target, relation, weight) VALUES (?, ?, ?, ?)
-		 ON CONFLICT(source, target, relation) DO UPDATE SET weight = ?`,
+		`INSERT INTO graph_edges (source_id, target_id, relation, weight) VALUES (?, ?, ?, ?)
+		 ON CONFLICT(source_id, target_id, relation) DO UPDATE SET weight = ?`,
 		source, target, relation, weight, weight,
 	)
 	if err != nil {
@@ -123,7 +123,7 @@ func (gs *SQLGraphStore) AddEdge(source, target ragtypes.DocID, relation string,
 
 func (gs *SQLGraphStore) DeleteEdge(source, target ragtypes.DocID, relation string) (bool, error) {
 	res, err := gs.db.Exec(
-		`DELETE FROM edges WHERE source = ? AND target = ? AND relation = ?`,
+		`DELETE FROM graph_edges WHERE source = ? AND target = ? AND relation = ?`,
 		source, target, relation,
 	)
 	if err != nil {
@@ -171,7 +171,7 @@ func (gs *SQLGraphStore) rebuildNodeSet() {
 
 func (gs *SQLGraphStore) DeleteNode(docID ragtypes.DocID) error {
 	_, err := gs.db.Exec(
-		`DELETE FROM edges WHERE source = ? OR target = ?`,
+		`DELETE FROM graph_edges WHERE source = ? OR target = ?`,
 		docID, docID,
 	)
 	if err != nil {

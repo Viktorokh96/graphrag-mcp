@@ -71,16 +71,15 @@ func main() {
 }
 
 func buildService(cfg *config.RAGConfig) *search.Service {
-	// Open SQLite database for graph store
-	dbPath := cfg.StorePath + "/graph.sqlite"
-	graphDB, err := sql.Open("sqlite3", dbPath)
+	dbPath := cfg.StorePath + "/store.db"
+	sqlDB, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL")
 	if err != nil {
-		log.Fatalf("graphstore: cannot open %s: %v", dbPath, err)
+		log.Fatalf("sqlite: %v", err)
 	}
+	sqlDB.SetMaxOpenConns(1)
 
 	// Document store
-	docPath := cfg.StorePath + "/docs.sqlite"
-	docs, err := docstore.NewSQLiteDocStore(docPath)
+	docs, err := docstore.NewSQLiteDocStore(dbPath)
 	if err != nil {
 		log.Fatalf("docstore: %v", err)
 	}
@@ -91,8 +90,8 @@ func buildService(cfg *config.RAGConfig) *search.Service {
 		log.Fatalf("vecstore: %v", err)
 	}
 
-	// Graph store
-	graph, err := graphstore.NewGraphStore(graphDB, func(docID ragtypes.DocID) (map[string]any, bool) {
+	// Graph store (same store.db, different tables)
+	graph, err := graphstore.NewGraphStore(sqlDB, func(docID ragtypes.DocID) (map[string]any, bool) {
 		doc, err := docs.Get(docID)
 		if err != nil || doc == nil {
 			return nil, false
