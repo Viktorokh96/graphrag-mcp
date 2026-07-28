@@ -37,6 +37,10 @@ func NewServer(svc *search.Service, cfg *config.RAGConfig) *http.Server {
 	s := &Server{svc: svc, cfg: cfg}
 
 	// ── API endpoints ─────────────────────────────────────────────────────
+	// ── Root redirect ────────────────────────────────────────────────────
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
+	})
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 
 	mux.HandleFunc("POST /api/documents", s.handleAddDocument)
