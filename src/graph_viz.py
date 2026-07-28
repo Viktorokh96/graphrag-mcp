@@ -952,13 +952,18 @@ def serve_graph(
                     self.send_header("Content-Type", "application/json")
                     self.end_headers()
                     self.wfile.write(json.dumps({"query": q, "k": len(items), "results": items}, ensure_ascii=False).encode())
+                except Exception:
+                    logger.exception("Search failed for query %r", q)
+                    self.send_response(500)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "internal error"}, ensure_ascii=False).encode())
                 return
             if self.path == "/":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(graph_html.encode("utf-8"))
-                return
             self.send_response(404)
             self.send_header("Content-Type", "application/json")
             self.end_headers()

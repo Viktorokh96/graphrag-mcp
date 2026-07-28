@@ -133,8 +133,8 @@ class TestExtractNer:
     def test_returns_error_when_spacy_missing(self):
         ex = _extractor()
         with patch("importlib.util.find_spec", return_value=None):
-            result = ex.extract_and_link("doc-1", "text", mode="ner")
-        assert "spaCy not installed" in result[0]["error"]
+            with pytest.raises(RuntimeError, match="spaCy is not installed"):
+                ex.extract_and_link("doc-1", "text", mode="ner")
 
     def test_returns_error_when_model_not_downloaded(self):
         ex = _extractor()
@@ -142,9 +142,8 @@ class TestExtractNer:
         fake_spacy.load = MagicMock(side_effect=OSError("missing"))
         with patch("importlib.util.find_spec", return_value=object()), \
                 patch.dict(sys.modules, {"spacy": fake_spacy}):
-            result = ex.extract_and_link("doc-1", "text", mode="ner")
-        assert "en_core_web_sm" in result[0]["error"]
-
+            with pytest.raises(RuntimeError, match="en_core_web_sm"):
+                ex.extract_and_link("doc-1", "text", mode="ner")
     def test_links_supported_entities_and_deduplicates(self):
         rag = FakeRAG()
         ex = _extractor(rag)

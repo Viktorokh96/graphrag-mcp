@@ -100,7 +100,8 @@ class TestReadChromaDocuments:
     def test_missing_collection_returns_empty(self, tmp_path):
         module = self._fake_chromadb(Exception("no collection"))
         with patch.dict(sys.modules, {"chromadb": module}):
-            assert migrate._read_chroma_documents(str(tmp_path)) == []
+            with pytest.raises(RuntimeError, match="Failed to open ChromaDB"):
+                migrate._read_chroma_documents(str(tmp_path))
 
     def test_maps_ids_texts_and_metadata(self, tmp_path):
         collection = MagicMock()

@@ -1,5 +1,6 @@
 """CLI интерфейс для RAG системы."""
 
+import logging
 import argparse
 import json
 import os
@@ -353,7 +354,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 1
     except Exception as e:
         # Стек — в лог (виден при LOG_LEVEL=DEBUG), короткое сообщение — пользователю.
-        _logging.getLogger(__name__).debug("Command %s failed", args.command, exc_info=True)
+        logging.getLogger(__name__).debug("Command %s failed", args.command, exc_info=True)
         print(f"❌ Ошибка ({type(e).__name__}): {e}", file=sys.stderr)
         return 1
     finally:
@@ -361,7 +362,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             try:
                 rag.close()
             except Exception:
-                _logging.getLogger(__name__).debug("Failed to close RAGSystem", exc_info=True)
+                logging.getLogger(__name__).debug("Failed to close RAGSystem", exc_info=True)
 
     return 0
 

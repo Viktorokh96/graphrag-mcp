@@ -25,7 +25,6 @@ MCP:
 """
 
 import hmac
-import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -38,7 +37,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
-from mcp.types import TextContent
 from pydantic import BaseModel, Field
 
 from src._meta_filter import normalize_metadata_filter, parse_meta
