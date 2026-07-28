@@ -35,3 +35,4 @@ qdrant/
 
 # Vendored web libs (too large for repo)
 lib/
+rag_data*/
