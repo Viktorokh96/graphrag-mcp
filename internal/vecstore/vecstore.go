@@ -377,32 +377,26 @@ func parseQdrantURL(raw string) (host string, port int, apiKey string, useTLS bo
 // sparseToIndicesValues converts a map[string]float32 term-weight map into
 // sorted indices and parallel values slices for the Qdrant sparse vector.
 func sparseToIndicesValues(sparse map[string]float32) ([]uint32, []float32) {
-	n := len(sparse)
-	indices := make([]uint32, 0, n)
-	values := make([]float32, 0, n)
-	terms := make([]string, 0, n)
+	// Group by index, summing weights for collisions
+	merged := make(map[uint32]float32, len(sparse))
 	for term, weight := range sparse {
-		indices = append(indices, wordIndex(term))
-		values = append(values, weight)
-		terms = append(terms, term)
+		idx := wordIndex(term)
+		merged[idx] += weight
+	}
+	indices := make([]uint32, 0, len(merged))
+	for idx := range merged {
+		indices = append(indices, idx)
 	}
 	sort.Slice(indices, func(i, j int) bool { return indices[i] < indices[j] })
-	// Reorder values to match sorted indices.
-	sorted := make([]float32, n)
+	values := make([]float32, len(indices))
 	for i, idx := range indices {
-		for j, term := range terms {
-			if wordIndex(term) == idx {
-				sorted[i] = values[j]
-				break
-			}
-		}
+		values[i] = merged[idx]
 	}
-	return indices, sorted
+	return indices, values
 }
 
 // wordIndex produces a deterministic uint32 index from a term string using
-// FNV-1a hashing, keeping the result in a 24-bit range to avoid extreme
-// sparse vector sizes.
+// FNV-1a hashing, keeping the result in a 24-bit range.
 func wordIndex(term string) uint32 {
 	h := fnv.New32a()
 	h.Write([]byte(term))

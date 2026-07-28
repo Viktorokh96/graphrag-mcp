@@ -54,6 +54,7 @@ func NewServer(svc *search.Service, cfg *config.RAGConfig) *http.Server {
 
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/graph", s.handleGraphData)
+	mux.HandleFunc("POST /api/reindex", s.handleReindex)
 	mux.HandleFunc("GET /api/graph/stats", s.handleGraphStats)
 	mux.HandleFunc("GET /api/communities", s.handleCommunities)
 	mux.HandleFunc("POST /api/extract", s.handleExtract)
@@ -489,4 +490,20 @@ func (s *Server) handleExtract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ── Handlers: Reindex ──────────────────────────────────────────────────────
+
+type reindexResponse struct {
+	Status    string `json:"status"`
+	Reindexed int    `json:"reindexed"`
+}
+
+func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
+	count, err := s.svc.Reindex()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, reindexResponse{Status: "ok", Reindexed: count})
 }
