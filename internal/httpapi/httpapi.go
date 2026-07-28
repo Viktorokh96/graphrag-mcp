@@ -55,6 +55,7 @@ func NewServer(svc *search.Service, cfg *config.RAGConfig) *http.Server {
 	mux.HandleFunc("POST /api/extract", s.handleExtract)
 
 	// ── Static file server ────────────────────────────────────────────────
+
 	mux.Handle("GET /ui/", http.StripPrefix("/ui/", http.FileServer(http.Dir("webui"))))
 
 	// ── Middleware chain (outermost first) ─────────────────────────────────
