@@ -289,12 +289,21 @@ func (s *Service) GraphData() ([]ragtypes.Edge, []ragtypes.DocID, error) {
 
 // ListDocuments returns a paginated, optionally filtered list of documents.
 func (s *Service) ListDocuments(limit, offset int, filter map[string]any) ([]*ragtypes.Document, int, error) {
-	return s.docs.List(limit, offset, filter)
+	docs, total, err := s.docs.List(limit, offset, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+	s.enrichDocs(docs)
+	return docs, total, nil
 }
 
-// GetDocument retrieves a single document by ID.
 func (s *Service) GetDocument(docID ragtypes.DocID) (*ragtypes.Document, error) {
-	return s.docs.Get(docID)
+	doc, err := s.docs.Get(docID)
+	if err != nil || doc == nil {
+		return doc, err
+	}
+	s.enrichDocs([]*ragtypes.Document{doc})
+	return doc, nil
 }
 
 // UpdateDocument updates text and/or metadata for an existing document.
@@ -551,6 +560,18 @@ func (s *Service) enrichWithLinks(results []ragtypes.SearchResult) []ragtypes.Se
 		}
 	}
 	return results
+}
+
+// enrichDocs attaches graph links to Document structs.
+func (s *Service) enrichDocs(docs []*ragtypes.Document) {
+	ids := make([]ragtypes.DocID, len(docs))
+	for i, d := range docs {
+		ids[i] = d.ID
+	}
+	linksMap := s.graph.GetEdgesBatch(ids)
+	for _, d := range docs {
+		d.Links = linksMap[d.ID]
+	}
 }
 
 // roundTo rounds f to the given number of decimal places.

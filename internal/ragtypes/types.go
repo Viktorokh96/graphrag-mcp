@@ -11,10 +11,11 @@ type DocID = string
 
 // Document represents a stored text document with metadata.
 type Document struct {
-	ID        DocID            `json:"doc_id"`
-	Text      string           `json:"text"`
-	Metadata  map[string]any   `json:"metadata,omitempty"`
-	CreatedAt time.Time        `json:"created_at"`
+	ID        DocID          `json:"doc_id"`
+	Text      string         `json:"text"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	Links     []Link         `json:"links,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
 }
 
 // SearchResult is a single ranked hit from any search method.
