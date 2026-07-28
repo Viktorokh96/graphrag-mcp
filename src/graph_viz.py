@@ -1,5 +1,6 @@
 """Визуализация графа знаний: HTML (vis.js), DOT, JSON, ASCII."""
 
+import html as html_escaping
 import http.server
 import json
 import logging
@@ -30,6 +31,8 @@ GROUP_PALETTE = [
 
 SHAPE_CYCLE = ["box", "diamond", "ellipse", "hexagon", "star", "square",
                "triangle", "triangleDown", "circle", "database"]
+
+logger = logging.getLogger(__name__)
 
 
 class _VizGraph:
@@ -69,6 +72,16 @@ class _VizGraph:
 def _as_viz(graph) -> _VizGraph:
     """Обернуть GraphStore в адаптер (идемпотентно)."""
     return graph if isinstance(graph, _VizGraph) else _VizGraph(graph)
+
+
+def _json_for_script(data) -> str:
+    """JSON для вставки в <script>: содержимое документов не должно закрывать тег."""
+    return (
+        json.dumps(data, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
 
 
 def _get_relation_color(relation: str, color_map: dict[str, str]) -> str:
@@ -239,18 +252,18 @@ def _render_html(
     for i, comm in enumerate(communities):
         bg, border = GROUP_PALETTE[i % len(GROUP_PALETTE)]
         sample = graph._nodes.get(next(iter(comm)), {})
-        lbl = sample.get("text", "").split("\n")[0].strip()[:30]
+        lbl = html_escaping.escape(sample.get("text", "").split("\n")[0].strip()[:30], quote=True)
         sz = len(comm)
         legend_rows.append(
             f'<div class="row"><span class="dot" style="background:{bg};border-color:{border}"></span> '
             f'<span title="{lbl}">C{i+1}: {lbl}</span> <span class="count">{sz}</span></div>'
         )
 
-    nodes_json_raw = json.dumps(nodes_js, ensure_ascii=False)
-    edges_json_raw = json.dumps(edges_js, ensure_ascii=False)
-    groups_json_raw = json.dumps(groups_js, ensure_ascii=False)
+    nodes_json_raw = _json_for_script(nodes_js)
+    edges_json_raw = _json_for_script(edges_js)
+    groups_json_raw = _json_for_script(groups_js)
     stats_line = f"<strong>{len(included)}</strong> узлов · <strong>{len(edges)}</strong> связей · <span id='vis-nodes'>0</span> видимых"
-    api_base_js = json.dumps(api_base_url or "")
+    api_base_js = _json_for_script(api_base_url or "")
 
     html = f"""<!DOCTYPE html>
 <html lang="ru">
@@ -453,7 +466,7 @@ network.on('afterDrawing', function() {{
 function fitGraph() {{
   network.fit({{ animation: {{ duration: 600, easingFunction: 'easeInOutQuad' }} }});
 }}
-function esc(str) {{ return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
+function esc(str) {{ return String(str == null ? '' : str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }}
 function restoreNodeStyle(n) {{
   if (n._origBorder) {{
     n.color.border = n._origBorder;
@@ -529,7 +542,7 @@ function searchNodes(query) {{
       const r = results[i];
       const label = esc(r.label || r.text.split('\\n')[0].trim().slice(0, 40));
       parts.push(
-        '<div class="sresult" data-id="' + r.doc_id + '">' +
+        '<div class="sresult" data-id="' + esc(r.doc_id) + '">' +
         '<span class="sr-label">' + label + '</span>' +
         '<span class="sr-score">' + (r.score != null ? r.score.toFixed(3) : '') + '</span></div>'
       );
@@ -686,10 +699,10 @@ function renderLinks(links, el) {{
   for (const l of links) {{
     const arrow = l.direction === 'out' ? '→' : '←';
     parts.push(
-      '<div class="lrow" data-id="' + l.id + '">' +
+      '<div class="lrow" data-id="' + esc(l.id) + '">' +
       '<span class="arrow">' + arrow + '</span>' +
       '<span>' + esc(l.label || l.id) + '</span>' +
-      '<span class="rtype">' + l.relation + '</span>' +
+      '<span class="rtype">' + esc(l.relation) + '</span>' +
       '</div>'
     );
   }}
@@ -855,6 +868,7 @@ def serve_graph(
     max_depth: int = 2,
     layout: str = "kamada_kawai",
     open_browser: bool = True,
+    host: str = "127.0.0.1",
 ) -> None:
     """Generate graph HTML with live RAG fetch and serve via HTTP.
 
@@ -880,7 +894,7 @@ def serve_graph(
 
     graph_html = out.read_text(encoding="utf-8")
 
-    class _Handler(http.server.SimpleHTTPRequestHandler):
+    class _Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path.startswith("/api/document/"):
                 doc_id = self.path[len("/api/document/"):]
@@ -906,7 +920,6 @@ def serve_graph(
                         })
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps({
                     "id": doc_id,
@@ -937,17 +950,8 @@ def serve_graph(
                     items = [{"doc_id": r[0], "text": r[1], "score": r[2], "label": _make_label(r[1])} for r in results]
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
-                    self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
                     self.wfile.write(json.dumps({"query": q, "k": len(items), "results": items}, ensure_ascii=False).encode())
-                except Exception as e:
-                    logger.exception("Graph API search failed for query %r", q)
-                    self.send_response(500)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    self.wfile.write(
-                        json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False).encode()
-                    )
                 return
             if self.path == "/":
                 self.send_response(200)
@@ -963,8 +967,8 @@ def serve_graph(
         def log_message(self, format, *args):
             print(f"[graph] {args[0]} {args[1]} {args[2] if len(args) > 2 else ''}", file=sys.stderr)
 
-    server = http.server.HTTPServer(("", port), _Handler)
-    url = f"http://localhost:{port}"
+    server = http.server.HTTPServer((host, port), _Handler)
+    url = f"http://{host}:{port}"
 
     print(f"🌐 Graph server: {url}", file=sys.stderr)
     print(f"   API:          {url}/api/document/<id>", file=sys.stderr)

@@ -24,8 +24,12 @@ MCP:
     POST    /mcp    (JSON-RPC messages)
 """
 
+import hmac
+import json
 import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -34,7 +38,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
-from pydantic import BaseModel
+from mcp.types import TextContent
+from pydantic import BaseModel, Field
 
 from src._meta_filter import normalize_metadata_filter, parse_meta
 from src.config import RAGConfig
@@ -48,31 +53,34 @@ logger = logging.getLogger(__name__)
 # -- Pydantic models ---------------------------------------------------------
 
 
+MAX_TEXT_BYTES = 10 * 1024 * 1024
+
+
 class SearchRequest(BaseModel):
-    query: str
-    k: int = 5
-    mode: str = "hybrid"  # semantic | bm25 | hybrid
-    alpha: Optional[float] = None
+    query: str = Field(min_length=1, max_length=8192)
+    k: int = Field(5, ge=1, le=100)
+    mode: str = Field("hybrid", pattern="^(semantic|bm25|hybrid)$")
+    alpha: Optional[float] = Field(None, ge=0.0, le=1.0)
     metadata_filter: Optional[dict] = None
-    max_chars: Optional[int] = None
+    max_chars: Optional[int] = Field(None, ge=1)
     rerank: Optional[bool] = None
     query_expansion: Optional[bool] = None
-    relations_load_depth: int = 1
+    relations_load_depth: int = Field(1, ge=0, le=5)
     relations_load_type_filter: Optional[list[str]] = None
     relations_load_meta_filter: Optional[dict] = None
 
 
 class AddDocumentRequest(BaseModel):
-    text: str
+    text: str = Field(min_length=1, max_length=MAX_TEXT_BYTES)
     meta: Any = None
     extract_graph: bool = False
 
 
 class AddRelationRequest(BaseModel):
-    source_id: str
-    target_id: str
-    relation: str
-    weight: float = 1.0
+    source_id: str = Field(min_length=1, max_length=256)
+    target_id: str = Field(min_length=1, max_length=256)
+    relation: str = Field(min_length=1, max_length=256)
+    weight: float = Field(1.0, ge=0.0, le=1e6)
 
 
 class ClearResponse(BaseModel):
@@ -80,24 +88,24 @@ class ClearResponse(BaseModel):
 
 
 class StructuredRequest(BaseModel):
-    content: str
+    content: str = Field(min_length=1, max_length=MAX_TEXT_BYTES)
     extract_graph: bool = False
 
 
 class UpdateDocumentRequest(BaseModel):
-    text: Optional[str] = None
+    text: Optional[str] = Field(None, min_length=1, max_length=MAX_TEXT_BYTES)
     meta: Any = None
 
 
 class DeleteRelationRequest(BaseModel):
-    source_id: str
-    target_id: str
-    relation: str
+    source_id: str = Field(min_length=1, max_length=256)
+    target_id: str = Field(min_length=1, max_length=256)
+    relation: str = Field(min_length=1, max_length=256)
 
 
 class FindCommunitiesRequest(BaseModel):
-    resolution: float = 1.0
-    k_nn: int = 15
+    resolution: float = Field(1.0, gt=0.0, le=100.0)
+    k_nn: int = Field(15, ge=1, le=1000)
 
 
 class SetCommunityNamesRequest(BaseModel):
@@ -147,18 +155,50 @@ app = FastAPI(
     description="Production-grade RAG MCP server with hybrid search, knowledge graph, and HTTP API",
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    # allow_credentials=False: по CORS-спецификации wildcard-origin несовместим с
-    # credentials (браузер отбрасывает такой ответ). API не использует куки/сессии,
-    # поэтому отключаем credentials и оставляем открытый origin.
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# -- Security ----------------------------------------------------------------
 
-app.mount("/ui", StaticFiles(directory="src/webui", html=True), name="webui")
+PUBLIC_PATHS = frozenset({"/health"})
+
+
+def _api_token() -> str:
+    """Токен из окружения (читается на каждый запрос — удобно для тестов)."""
+    return os.environ.get("API_TOKEN", "")
+
+
+def _presented_token(request: Request) -> str:
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return request.headers.get("x-api-key", "")
+
+
+@app.middleware("http")
+async def require_api_token(request: Request, call_next):
+    """Bearer-аутентификация всех эндпоинтов, если задан API_TOKEN.
+
+    Без токена в окружении аутентификация выключена — рассчитано на локальный
+    (loopback) запуск; при биндинге на внешний интерфейс CLI требует токен.
+    """
+    token = _api_token()
+    if token and request.url.path not in PUBLIC_PATHS and request.method != "OPTIONS":
+        if not hmac.compare_digest(_presented_token(request), token):
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
+_cors_origins = RAGConfig.from_env().resolve_cors_origins()
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        # allow_credentials=False: API не использует куки/сессии, авторизация —
+        # через заголовок, поэтому браузерные креденшелы не нужны.
+        allow_origins=_cors_origins,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+app.mount("/ui", StaticFiles(directory=str(Path(__file__).parent / "webui"), html=True), name="webui")
 
 
 @app.exception_handler(ValueError)
@@ -255,9 +295,9 @@ def add_document(req: AddDocumentRequest):
 def list_documents(
     limit: int = Query(20, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    max_chars: Optional[int] = Query(None),
+    max_chars: Optional[int] = Query(None, ge=1),
     metadata_filter: Optional[str] = Query(None),
-    relations_load_depth: int = Query(1, ge=0),
+    relations_load_depth: int = Query(1, ge=0, le=5),
     relations_load_type_filter: Optional[str] = Query(None),
     relations_load_meta_filter: Optional[str] = Query(None),
 ):
@@ -275,7 +315,7 @@ def get_document(
     doc_id: str,
     offset: int = Query(0, ge=0),
     limit: Optional[int] = Query(None, ge=1),
-    relations_load_depth: int = Query(1, ge=0),
+    relations_load_depth: int = Query(1, ge=0, le=5),
     relations_load_type_filter: Optional[str] = Query(None),
     relations_load_meta_filter: Optional[str] = Query(None),
 ):
@@ -305,7 +345,7 @@ def add_relation(req: AddRelationRequest):
 @app.get("/relations/{node_id}")
 def get_related(
     node_id: str,
-    max_depth: int = Query(1, ge=1),
+    max_depth: int = Query(1, ge=1, le=5),
     metadata_filter: Optional[str] = Query(None),
 ):
     relations = _rag().get_related(

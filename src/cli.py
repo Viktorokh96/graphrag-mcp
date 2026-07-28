@@ -73,6 +73,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--expansion-count", type=int, default=None, help="Number of query variants")
     parser.add_argument("--http", action="store_true", help="Start HTTP REST API + MCP SSE server")
     parser.add_argument("--port", type=int, default=8765, help="HTTP server port (default: 8765)")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="HTTP bind address (default: 127.0.0.1; use 0.0.0.0 only with API_TOKEN set)")
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -176,6 +177,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                               choices=["kamada_kawai", "spring", "circular", "hierarchical"],
                               help="Layout algorithm")
     parser_serve.add_argument("--no-browser", action="store_true", help="Don't open browser")
+    parser_serve.add_argument("--bind", type=str, default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
 
     try:
         args = parser.parse_args(argv)
@@ -331,6 +333,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     max_depth=args.max_depth,
                     layout=args.layout,
                     open_browser=not getattr(args, 'no_browser', False),
+                    host=args.bind,
                 )
             else:
                 render_graph_viz(
@@ -385,10 +388,29 @@ def _start_http(args) -> int:
         if value is not None:
             os.environ[env_name] = str(value)
     port = args.port or 8765
-    print(f"   REST API: http://localhost:{port}/docs", file=sys.stderr)
-    print(f"   MCP SSE:  http://localhost:{port}/mcp", file=sys.stderr)
-    uvicorn.run("src.http_api:app", host="0.0.0.0", port=port, log_level="info")
+    host = args.host or "127.0.0.1"
+    if not _is_loopback(host) and not os.environ.get("API_TOKEN"):
+        print(
+            f"❌ Отказ запускать API на {host} без аутентификации: задайте API_TOKEN "
+            "(или биндите на 127.0.0.1)",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"   REST API: http://{host}:{port}/docs", file=sys.stderr)
+    print(f"   MCP SSE:  http://{host}:{port}/mcp", file=sys.stderr)
+    uvicorn.run("src.http_api:app", host=host, port=port, log_level="info")
     return 0
+
+
+def _is_loopback(host: str) -> bool:
+    import ipaddress
+
+    if host in ("localhost", ""):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _print_results(title: str, results: list) -> None:

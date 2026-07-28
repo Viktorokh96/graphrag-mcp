@@ -5,6 +5,13 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _mask_secret(value: str) -> str:
+    """Показать только последние 4 символа секрета (или пусто)."""
+    if not value:
+        return ""
+    return f"***{value[-4:]}" if len(value) > 4 else "***"
+
+
 class RAGConfig(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
@@ -43,6 +50,14 @@ class RAGConfig(BaseSettings):
     rerank_api_key: str = ""
     rerank_device: str = "cpu"
     rerank_top_k_multiplier: int = 2
+
+    # -- HTTP API security -------------------------------------------------
+    # Bearer-токен для REST/MCP-эндпоинтов. Пустая строка — аутентификация
+    # выключена (допустимо только для loopback-биндинга).
+    api_token: str = ""
+    # Разрешённые CORS-origin'ы (через запятую). Пусто — cross-origin запрещён,
+    # работает только same-origin UI. "*" разрешает любой origin.
+    cors_allow_origins: str = ""
 
     # -- Query expansion ---------------------------------------------------
     query_expansion_enabled: bool = False
@@ -111,7 +126,7 @@ class RAGConfig(BaseSettings):
             f"EMBEDDING_PROVIDER={self.embedding_provider}",
             f"EMBEDDING_MODEL={self.embedding_model_name}",
             f"EMBEDDING_BASE_URL={self.embedding_base_url}",
-            f"EMBEDDING_API_KEY={self.embedding_api_key or ''}",
+            f"EMBEDDING_API_KEY={_mask_secret(self.embedding_api_key)}",
             f"EMBEDDING_DIM={self.embedding_dim}",
             f"EMBEDDING_DEVICE={self.embedding_device}",
             f"STORE_PATH={self.store_path}",
@@ -126,6 +141,9 @@ class RAGConfig(BaseSettings):
             f"EXPANSION_BASE_URL={self.expansion_base_url}",
             f"PRELOAD_MODELS={'true' if self.preload_models else 'false'}",
         ])
+
+    def resolve_cors_origins(self) -> list[str]:
+        return [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
 
     def resolve_qdrant_location(self) -> str:
         return self.qdrant_url or f"{self.store_path}/qdrant"
