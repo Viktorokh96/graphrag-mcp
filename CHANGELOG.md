@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+- **Тесты**: покрытие `graph_extractor` (+NER, LLM dispatch), `migrate` (ChromaDB, dry-run, force), `color_utils` (Oklab-проекция, документное окрашивание), `embedding_providers` (sentence_transformer/Ollama/OpenAI-compatible), `query_expander` (провайдеры, краевые случаи), `reranker` (CrossEncoder/OpenAI API). +1095 строк тестов.
+- **Безопасность HTTP API**: Bearer-аутентификация через `API_TOKEN` (hmac constant-time), настраиваемые CORS-origin'ы (`CORS_ALLOW_ORIGINS`), loopback-only биндинг по умолчанию (`--host 127.0.0.1`), маскирование секретов в `RAGConfig.__repr__`, валидация входных данных через pydantic `Field` (bounds на query/depth/ids), `.env` удалён из трекинга.
+- **XSS-защита графа**: `esc()` в vis.js экранирует `"` и `'`, JSON в `<script>` эскейпится в Python (`_json_for_script`), метки узлов эскейпятся через `html.escape`, ошибки поиска не раскрывают внутренние детали.
+
+### Changed
+- **DRY-рефакторинг**: выделены `http_utils` (`json_headers`), `logging_utils` (`configure_logging`), `result_utils` (`format_results`, `enrich_with_links`); `parse_meta` перенесён в `_meta_filter`; `CachedEmbeddingGenerator` — базовый класс для всех HTTP-провайдеров эмбеддингов. −587 строк дублирования.
+
 ### Fixed
 - **Ошибки больше не теряются молча**: `_sync_stores` пробрасывает недоступность Qdrant/SQLite вместо `logger.warning`, сбой реиндексации отдельного документа логируется с трейсбеком; `QdrantVectorStore.get_dimension()` не маскирует ошибки связи под «размерность 0»; кеш сообществ логирует причину сброса.
 - **HTTP API**: доменные `ValueError` (несуществующий узел в `POST /relations`, битый JSON в `POST /structured`, нечисловой id в `PUT /communities/names`) возвращают 400 вместо 500.
