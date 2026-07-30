@@ -419,7 +419,6 @@ type toolSchema map[string]prop
 
 func buildJSONSchema(s toolSchema) map[string]any {
 	props := map[string]any{}
-	required := []string{}
 	for name, p := range s {
 		propObj := map[string]any{}
 		if p.Type != "" {
@@ -432,18 +431,11 @@ func buildJSONSchema(s toolSchema) map[string]any {
 			propObj["default"] = p.Default
 		}
 		props[name] = propObj
-		if p.Default == nil && p.Type != "" {
-			required = append(required, name)
-		}
 	}
-	schema := map[string]any{
+	return map[string]any{
 		"type":       "object",
 		"properties": props,
 	}
-	if len(required) > 0 {
-		schema["required"] = required
-	}
-	return schema
 }
 
 // ── Argument helpers ──────────────────────────────────────────────────────
