@@ -26,17 +26,8 @@
   },
   "mcp": {
     "rag-server": {
-      "type": "local",
-      "command": "/home/viktorokh96/Work/graphrag/ragserver",
-      "env": {
-        "EMBEDDING_PROVIDER": "openai-compatible",
-        "EMBEDDING_DIMENSION": "1024",
-        "RAG_STORE_PATH": "/home/viktorokh96/Work/graphrag/rag_data",
-        "QDRANT_URL": "http://localhost:6334",
-        "EMBEDDING_MODEL_NAME": "bge-m3",
-        "EMBEDDING_BASE_URL": "https://bifrost.k8s.rnd.perfectlab.com",
-        "EMBEDDING_API_KEY": "sk-bf-44180494-8f5d-4bc0-8427-7a46d4c3d162"
-      },
+      "type": "remote",
+      "url": "http://localhost:8765/mcp",
       "enabled": true
     }
   },
