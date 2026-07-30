@@ -20,17 +20,21 @@
     }
   },
   "skills": {
-    "paths": [".opencode/skills"]
+    "paths": [
+      ".opencode/skills"
+    ]
   },
   "mcp": {
     "rag-server": {
       "type": "local",
       "command": "/home/viktorokh96/Work/graphrag/ragserver",
       "env": {
-        "EMBEDDING_PROVIDER": "sentence_transformer",
-        "EMBEDDING_DIMENSION": "128",
+        "EMBEDDING_PROVIDER": "ollama",
+        "EMBEDDING_DIMENSION": "768",
         "RAG_STORE_PATH": "/home/viktorokh96/Work/graphrag/rag_data",
-        "QDRANT_URL": "http://localhost:6334"
+        "QDRANT_URL": "http://localhost:6334",
+        "EMBEDDING_MODEL_NAME": "nomic-embed-text:latest",
+        "EMBEDDING_BASE_URL": "http://localhost:11434"
       },
       "enabled": true
     }
