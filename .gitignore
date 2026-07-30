@@ -16,6 +16,7 @@ rag_data/
 models/
 *.bak
 *.html
+!webui/index.html
 
 # uv
 # uv.lock коммитим — воспроизводимость окружения
