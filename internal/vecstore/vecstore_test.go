@@ -268,7 +268,7 @@ func TestParseQdrantURL(t *testing.T) {
 		{"localhost", "localhost", 6334, "", false, false},
 		{"https://qdrant.example.com:6333?api_key=secret", "qdrant.example.com", 6333, "secret", true, false},
 		{"http://qdrant.example.com", "qdrant.example.com", 6334, "", false, false},
-		{"", "", 0, "", false, true},
+		{"", "localhost", 6334, "", false, false},
 	}
 	for _, tt := range tests {
 		host, port, apiKey, tls, err := parseQdrantURL(tt.raw)

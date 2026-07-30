@@ -303,8 +303,8 @@ func buildFilter(filter map[string]any) (string, []any) {
 	var clauses []string
 	var args []any
 	for key, val := range filter {
-		clauses = append(clauses, fmt.Sprintf("json_extract(metadata, '$.%s') = ?", key))
-		args = append(args, val)
+		clauses = append(clauses, "json_extract(metadata, ?) = ?")
+		args = append(args, "$."+key, val)
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
 }

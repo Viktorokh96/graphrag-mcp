@@ -5,6 +5,7 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -138,11 +139,20 @@ func envOr(key, def string) string {
 }
 
 func envInt(key string, def int) int {
-	// simplified; production would use strconv
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
 	return def
 }
 
 func envFloat(key string, def float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
 	return def
 }
 

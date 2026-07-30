@@ -193,7 +193,7 @@ type addDocResponse struct {
 func (s *Server) handleAddDocument(w http.ResponseWriter, r *http.Request) {
 	var req addDocRequest
 	if err := decodeJSON(r.Body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 	if strings.TrimSpace(req.Text) == "" {
@@ -240,7 +240,7 @@ func (s *Server) handleListDocuments(w http.ResponseWriter, r *http.Request) {
 	var filter map[string]any
 	if f := r.URL.Query().Get("filter"); f != "" {
 		if err := json.Unmarshal([]byte(f), &filter); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid 'filter' JSON: "+err.Error())
+			writeError(w, http.StatusBadRequest, "invalid 'filter' JSON")
 			return
 		}
 	}
@@ -286,7 +286,7 @@ func (s *Server) handleUpdateDocument(w http.ResponseWriter, r *http.Request) {
 
 	var req updateDocRequest
 	if err := decodeJSON(r.Body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 	if req.Text == nil && req.Metadata == nil {
@@ -343,7 +343,7 @@ type searchResponse struct {
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	var req searchRequest
 	if err := decodeJSON(r.Body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 	if strings.TrimSpace(req.Query) == "" {
@@ -364,7 +364,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	results, err := s.svc.Search(req.Mode, req.Query, req.K, req.Filter)
 	if err != nil {
 		log.Printf("[httpapi] Search error: %v", err)
-		writeError(w, http.StatusInternalServerError, "search failed: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "search failed")
 		return
 	}
 	if results == nil {
@@ -384,7 +384,7 @@ func (s *Server) handleIndexStructured(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(ct, "multipart/form-data") {
 		_, params, err := mime.ParseMediaType(ct)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid Content-Type: "+err.Error())
+			writeError(w, http.StatusBadRequest, "invalid Content-Type")
 			return
 		}
 		mr := multipart.NewReader(r.Body, params["boundary"])
@@ -392,7 +392,7 @@ func (s *Server) handleIndexStructured(w http.ResponseWriter, r *http.Request) {
 		// Read first file part and use it as the JSON body.
 		part, err := mr.NextPart()
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "failed to read multipart data: "+err.Error())
+			writeError(w, http.StatusBadRequest, "failed to read multipart data")
 			return
 		}
 		defer part.Close()
@@ -402,7 +402,7 @@ func (s *Server) handleIndexStructured(w http.ResponseWriter, r *http.Request) {
 	result, err := s.svc.AddStructured(bodyReader)
 	if err != nil {
 		log.Printf("[httpapi] AddStructured error: %v", err)
-		writeError(w, http.StatusInternalServerError, "structured indexing failed: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "structured indexing failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -469,7 +469,7 @@ type extractRequest struct {
 func (s *Server) handleExtract(w http.ResponseWriter, r *http.Request) {
 	var req extractRequest
 	if err := decodeJSON(r.Body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 	if strings.TrimSpace(req.Text) == "" {
@@ -486,7 +486,7 @@ func (s *Server) handleExtract(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.svc.ExtractGraph(req.DocID, req.Text, req.Mode); err != nil {
 		log.Printf("[httpapi] ExtractGraph error: %v", err)
-		writeError(w, http.StatusInternalServerError, "graph extraction failed: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "graph extraction failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -502,7 +502,8 @@ type reindexResponse struct {
 func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 	count, err := s.svc.Reindex()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("[httpapi] Reindex error: %v", err)
+		writeError(w, http.StatusInternalServerError, "reindex failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, reindexResponse{Status: "ok", Reindexed: count})

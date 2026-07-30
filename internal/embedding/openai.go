@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"time"
 	"strings"
 	"sync"
 
@@ -54,7 +55,7 @@ func newOpenAIProvider(cfg *config.RAGConfig) *OpenAIProvider {
 		baseURL: baseURL,
 		model:   cfg.EmbeddingModel,
 		apiKey:  cfg.EmbeddingAPIKey,
-		client:  &http.Client{},
+		client:  &http.Client{Timeout: 30 * time.Second},
 		dim:     cfg.EmbeddingDim,
 		cache:   make(map[string][]float32),
 	}

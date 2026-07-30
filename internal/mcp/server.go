@@ -244,7 +244,21 @@ func (s *Server) callAddDocument(_ context.Context, args map[string]any) (string
 
 func (s *Server) callAddFile(_ context.Context, args map[string]any) (string, error) {
 	path := getString(args, "filepath")
-	result, err := s.svc.AddFile(path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read file %q: %w", path, err)
+	}
+	meta := getMap(args, "meta")
+	if meta == nil {
+		meta = map[string]any{}
+	}
+	meta["source"] = "file"
+	meta["file_path"] = path
+	// Note: extract_graph is read from args; service AddDocument consumes it via meta
+	if v, ok := args["extract_graph"]; ok {
+		meta["extract_graph"] = v
+	}
+	result, err := s.svc.AddDocument(string(data), meta)
 	if err != nil {
 		return "", err
 	}
@@ -299,7 +313,7 @@ func (s *Server) callGetDocument(_ context.Context, args map[string]any) (string
 func (s *Server) callUpdateDocument(_ context.Context, args map[string]any) (string, error) {
 	id := getString(args, "doc_id")
 	var textPtr *string
-	if t, ok := args["text"].(string); ok && t != "" {
+	if t, ok := args["text"].(string); ok {
 		textPtr = &t
 	}
 	meta := getMap(args, "meta")
@@ -418,7 +432,7 @@ func buildJSONSchema(s toolSchema) map[string]any {
 			propObj["default"] = p.Default
 		}
 		props[name] = propObj
-		if p.Default == nil {
+		if p.Default == nil && p.Type != "" {
 			required = append(required, name)
 		}
 	}

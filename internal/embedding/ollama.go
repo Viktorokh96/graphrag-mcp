@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/Viktorokh96/graphrag-mcp/internal/config"
 	"github.com/Viktorokh96/graphrag-mcp/internal/ragtypes"
@@ -44,7 +45,7 @@ func newOllamaProvider(cfg *config.RAGConfig) *OllamaProvider {
 	return &OllamaProvider{
 		baseURL: baseURL,
 		model:   cfg.EmbeddingModel,
-		client:  &http.Client{},
+		client:  &http.Client{Timeout: 30 * time.Second},
 		dim:     cfg.EmbeddingDim,
 		cache:   make(map[string][]float32),
 	}

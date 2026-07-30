@@ -109,8 +109,21 @@ func buildService(cfg *config.RAGConfig) *search.Service {
 	}
 
 	// Reranker & expander
-	rerank := reranker.NewNoopReranker()
-	expand := expander.NewNoopExpander()
+	var rerank ragtypes.Reranker = reranker.NewNoopReranker()
+	var expand ragtypes.QueryExpander = expander.NewNoopExpander()
+
+	if cfg.RerankerEnabled && cfg.RerankerBaseURL != "" {
+		rerank = reranker.NewAPIReranker(cfg.RerankerBaseURL, cfg.RerankerModel, cfg.RerankerAPIKey)
+		log.Println("reranker: enabled")
+	}
+	if cfg.QueryExpansionEnabled {
+		baseURL := cfg.ExpanderBaseURL
+		if baseURL == "" {
+			baseURL = "http://localhost:11434"
+		}
+		expand = expander.NewOllamaExpander(baseURL, cfg.ExpanderModel, cfg.ExpanderNumVariants)
+		log.Println("query expansion: enabled")
+	}
 
 	return search.New(docs, vecs, graph, emb, rerank, expand, nil, nil, cfg)
 }

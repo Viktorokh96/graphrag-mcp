@@ -24,8 +24,14 @@
   },
   "mcp": {
     "rag-server": {
-      "type": "remote",
-      "url": "http://localhost:8765/mcp",
+      "type": "local",
+      "command": "/home/viktorokh96/Work/graphrag/ragserver",
+      "env": {
+        "EMBEDDING_PROVIDER": "sentence_transformer",
+        "EMBEDDING_DIMENSION": "128",
+        "RAG_STORE_PATH": "/home/viktorokh96/Work/graphrag/rag_data",
+        "QDRANT_URL": "http://localhost:6334"
+      },
       "enabled": true
     }
   },

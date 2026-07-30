@@ -3,15 +3,15 @@ package vecstore
 
 import (
 	"errors"
-	"io"
-	"context"
 	"fmt"
 	"hash/fnv"
+	"io"
+	"log"
+	"context"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"unicode"
 
 	"github.com/Viktorokh96/graphrag-mcp/internal/config"
@@ -28,8 +28,9 @@ const (
 )
 
 // QdrantVecStore implements ragtypes.VectorStore using a Qdrant gRPC server.
+// The gRPC client is safe for concurrent use; dim is immutable after
+// construction, so no explicit locking is needed.
 type QdrantVecStore struct {
-	mu     sync.RWMutex
 	client *qdrant.Client
 	dim    int
 	ctx    context.Context
@@ -78,11 +79,18 @@ func NewQdrantVecStore(cfg *config.RAGConfig) (ragtypes.VectorStore, error) {
 	return s, nil
 }
 
-// createCollection sets up the Qdrant collection with a "dense" named vector
-// and a "sparse" named vector.
+// createCollection sets up the default "rag_docs" collection with a "dense"
+// named vector and a "sparse" named vector.
 func (s *QdrantVecStore) createCollection(dim int) error {
+	return s.createCollectionNamed(collectionName, dim)
+}
+
+// createCollectionNamed creates a Qdrant collection with the given name,
+// a dense vector space of the given dimension, and a BM25 sparse vector
+// configuration.
+func (s *QdrantVecStore) createCollectionNamed(name string, dim int) error {
 	req := &qdrant.CreateCollection{
-		CollectionName: collectionName,
+		CollectionName: name,
 		VectorsConfig: qdrant.NewVectorsConfigMap(map[string]*qdrant.VectorParams{
 			denseVecName: {
 				Size:     uint64(dim),
@@ -216,21 +224,22 @@ func (s *QdrantVecStore) Dimension() int {
 
 // Clear drops the collection and recreates it from scratch.
 func (s *QdrantVecStore) Clear() error {
-	_ = s.client.DeleteCollection(s.ctx, collectionName)
+	if err := s.client.DeleteCollection(s.ctx, collectionName); err != nil {
+		log.Printf("[vecstore] Clear: delete collection: %v", err)
+	}
 	return s.createCollection(s.dim)
 }
 
-// Reindex replaces all points in a single batch.
+// Reindex replaces all points atomically using a staging collection so that
+// a mid-batch failure does not leave the index in a partially-written state.
+// Original collection is untouched until all batches succeed.
 func (s *QdrantVecStore) Reindex(docs []*ragtypes.Document, denseVecs map[ragtypes.DocID][]float32, sparseVecs map[ragtypes.DocID]map[string]float32) error {
 	if len(docs) == 0 {
 		return nil
 	}
 
-	_ = s.client.DeleteCollection(s.ctx, collectionName)
-	if err := s.createCollection(s.dim); err != nil {
-		return err
-	}
-
+	// Build all point structs (validation step – metadata conversion errors are
+	// silently skipped in the payload, matching original behaviour).
 	points := make([]*qdrant.PointStruct, 0, len(docs))
 	for _, doc := range docs {
 		dense := denseVecs[doc.ID]
@@ -267,6 +276,56 @@ func (s *QdrantVecStore) Reindex(docs []*ragtypes.Document, denseVecs map[ragtyp
 		})
 	}
 
+	// Stage batch upserts to a temp collection so the original is untouched on
+	// early failure.
+	tempName := collectionName + "_reindex"
+	_ = s.client.DeleteCollection(s.ctx, tempName) // clean up any stale temp
+	if err := s.createCollectionNamed(tempName, s.dim); err != nil {
+		return fmt.Errorf("vecstore: reindex create temp: %w", err)
+	}
+
+	staged := false
+	defer func() {
+		if !staged {
+			// Best-effort cleanup of the temp collection. Failure during cleanup
+			// is logged but not returned (the originating error is already on its
+			// way to the caller).
+			if err := s.client.DeleteCollection(s.ctx, tempName); err != nil {
+				log.Printf("[vecstore] Reindex: cleanup temp: %v", err)
+			}
+		}
+	}()
+
+	for i := 0; i < len(points); i += 100 {
+		end := i + 100
+		if end > len(points) {
+			end = len(points)
+		}
+		_, err := s.client.Upsert(s.ctx, &qdrant.UpsertPoints{
+			CollectionName: tempName,
+			Points:         points[i:end],
+			Wait:           new(bool(true)),
+		})
+		if err != nil {
+			return fmt.Errorf("vecstore: reindex batch: %w", err)
+		}
+	}
+
+	// All batches succeeded – swap the new data into the original collection.
+	staged = true
+	if err := s.client.DeleteCollection(s.ctx, collectionName); err != nil {
+		log.Printf("[vecstore] Reindex: delete original: %v", err)
+	}
+	// The temp collection is no longer needed; delete it before recreating the
+	// original so the original name doesn't collide during creation.
+	if err := s.client.DeleteCollection(s.ctx, tempName); err != nil {
+		log.Printf("[vecstore] Reindex: delete temp: %v", err)
+	}
+	if err := s.createCollection(s.dim); err != nil {
+		return fmt.Errorf("vecstore: reindex create final: %w", err)
+	}
+
+	// Re-upsert all points to the freshly-created original collection.
 	for i := 0; i < len(points); i += 100 {
 		end := i + 100
 		if end > len(points) {
@@ -278,7 +337,7 @@ func (s *QdrantVecStore) Reindex(docs []*ragtypes.Document, denseVecs map[ragtyp
 			Wait:           new(bool(true)),
 		})
 		if err != nil {
-			return fmt.Errorf("vecstore: reindex batch: %w", err)
+			return fmt.Errorf("vecstore: reindex final upsert: %w", err)
 		}
 	}
 
@@ -547,34 +606,37 @@ func extractScoredPayloadMap(p *qdrant.ScoredPoint) map[string]any {
 	return m
 }
 
-// valueToAny converts a qdrant.Value to a Go any.
+// valueToAny converts a qdrant.Value to a Go any using proto oneof kind
+// discrimination so that false, 0, 0.0 are not lost via zero-value checks.
 func valueToAny(v *qdrant.Value) any {
 	if v == nil {
 		return nil
 	}
-	switch {
-	case v.GetStringValue() != "":
-		return v.GetStringValue()
-	case v.GetBoolValue():
-		return v.GetBoolValue()
-	case v.GetIntegerValue() != 0:
-		return v.GetIntegerValue()
-	case v.GetDoubleValue() != 0:
-		return v.GetDoubleValue()
-	case v.GetListValue() != nil:
-		items := v.GetListValue().GetValues()
+	switch kind := v.GetKind().(type) {
+	case *qdrant.Value_StringValue:
+		return kind.StringValue
+	case *qdrant.Value_BoolValue:
+		return kind.BoolValue
+	case *qdrant.Value_IntegerValue:
+		return kind.IntegerValue
+	case *qdrant.Value_DoubleValue:
+		return kind.DoubleValue
+	case *qdrant.Value_ListValue:
+		items := kind.ListValue.GetValues()
 		out := make([]any, len(items))
 		for i, item := range items {
 			out[i] = valueToAny(item)
 		}
 		return out
-	case v.GetStructValue() != nil:
-		fields := v.GetStructValue().GetFields()
+	case *qdrant.Value_StructValue:
+		fields := kind.StructValue.GetFields()
 		out := make(map[string]any, len(fields))
 		for fk, fv := range fields {
 			out[fk] = valueToAny(fv)
 		}
 		return out
+	case *qdrant.Value_NullValue:
+		return nil
 	}
 	return nil
 }

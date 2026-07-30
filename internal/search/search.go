@@ -109,7 +109,7 @@ func (s *Service) AddDocument(text string, meta map[string]any) (*ragtypes.Index
 	}
 
 	// Step 3: index the vector.
-	if err := s.vec.Add(docID, text, vec, nil); err != nil {
+	if err := s.vec.Add(docID, text, vec, buildSparseVector(text)); err != nil {
 		return nil, fmt.Errorf("search: add vector for %q: %w", docID, err)
 	}
 
@@ -216,7 +216,13 @@ func (s *Service) searchHybrid(query string, k int, filter map[string]any) ([]ra
 			return nil, fmt.Errorf("search: sparse search for variant %q: %w", v, err)
 		}
 
-		merged := rrfMerge([][]ragtypes.SearchResult{dense, sparse}, expK)
+		alpha := s.detectAlpha(v)
+		var merged []ragtypes.SearchResult
+		if alpha == 0.5 {
+			merged = rrfMerge([][]ragtypes.SearchResult{dense, sparse}, expK)
+		} else {
+			merged = rrfMergeWeighted(dense, sparse, alpha, expK)
+		}
 		variantResultSets = append(variantResultSets, merged)
 	}
 
@@ -576,6 +582,40 @@ func rrfMerge(sets [][]ragtypes.SearchResult, k int) []ragtypes.SearchResult {
 		return merged[i].Score > merged[j].Score
 	})
 
+	if len(merged) > k {
+		merged = merged[:k]
+	}
+	return merged
+}
+
+// rrfMergeWeighted merges two result sets (dense + sparse) using the
+// language-aware alpha blend factor from the Python reference.
+//   score = alpha/(K + rank_dense + 1) + (1-alpha)/(K + rank_sparse + 1)
+// Results are sorted by fused score descending and limited to k.
+func rrfMergeWeighted(dense, sparse []ragtypes.SearchResult, alpha float64, k int) []ragtypes.SearchResult {
+	scores := make(map[ragtypes.DocID]float64)
+	items := make(map[ragtypes.DocID]ragtypes.SearchResult)
+
+	for rank, r := range dense {
+		scores[r.DocID] += alpha / (float64(RRF_K) + float64(rank+1))
+		if _, seen := items[r.DocID]; !seen {
+			items[r.DocID] = r
+		}
+	}
+	for rank, r := range sparse {
+		scores[r.DocID] += (1 - alpha) / (float64(RRF_K) + float64(rank+1))
+		if _, seen := items[r.DocID]; !seen {
+			items[r.DocID] = r
+		}
+	}
+
+	merged := make([]ragtypes.SearchResult, 0, len(scores))
+	for docID, score := range scores {
+		r := items[docID]
+		r.Score = score
+		merged = append(merged, r)
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Score > merged[j].Score })
 	if len(merged) > k {
 		merged = merged[:k]
 	}

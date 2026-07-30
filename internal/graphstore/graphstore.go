@@ -37,7 +37,7 @@ func NewGraphStore(db *sql.DB, getMeta func(ragtypes.DocID) (map[string]any, boo
 		target   TEXT NOT NULL,
 		relation TEXT NOT NULL,
 		weight   REAL NOT NULL DEFAULT 1.0,
-		PRIMARY KEY (source_id, target_id, relation)
+		PRIMARY KEY (source, target, relation)
 	)`
 	if _, err := db.Exec(stmt); err != nil {
 		return nil, fmt.Errorf("graphstore: create edges table: %w", err)
@@ -62,7 +62,7 @@ func (gs *SQLGraphStore) loadCache() error {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 
-	rows, err := gs.db.Query(`SELECT source_id, target_id, relation, weight FROM graph_edges`)
+	rows, err := gs.db.Query(`SELECT source, target, relation, weight FROM graph_edges`)
 	if err != nil {
 		return err
 	}
@@ -90,17 +90,19 @@ func (gs *SQLGraphStore) AddEdge(source, target ragtypes.DocID, relation string,
 		return fmt.Errorf("graphstore: source, target and relation must be non-empty")
 	}
 
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+
 	_, err := gs.db.Exec(
-		`INSERT INTO graph_edges (source_id, target_id, relation, weight) VALUES (?, ?, ?, ?)
-		 ON CONFLICT(source_id, target_id, relation) DO UPDATE SET weight = ?`,
+		`INSERT INTO graph_edges (source, target, relation, weight) VALUES (?, ?, ?, ?)
+		 ON CONFLICT(source, target, relation) DO UPDATE SET weight = ?`,
 		source, target, relation, weight, weight,
 	)
 	if err != nil {
 		return fmt.Errorf("graphstore: add edge: %w", err)
 	}
 
-	gs.mu.Lock()
-	// upsert in cache — update weight if edge exists, else append
+	// Upsert in cache.
 	edges := gs.edges[source]
 	found := false
 	for i := range edges {
@@ -117,7 +119,6 @@ func (gs *SQLGraphStore) AddEdge(source, target ragtypes.DocID, relation string,
 	}
 	gs.nodeSet[source] = struct{}{}
 	gs.nodeSet[target] = struct{}{}
-	gs.mu.Unlock()
 	return nil
 }
 
