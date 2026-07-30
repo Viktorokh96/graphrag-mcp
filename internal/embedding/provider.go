@@ -9,17 +9,14 @@ import (
 )
 
 // NewProvider constructs the appropriate EmbeddingProvider from config.
-// Supported kinds: ollama, openai-compatible.
-// sentence_transformer and anthropic fall back to MockProvider for offline dev.
+// Supported providers: ollama, openai-compatible.
 func NewProvider(cfg *config.RAGConfig) (ragtypes.EmbeddingProvider, error) {
 	switch cfg.EmbeddingProvider {
 	case config.ProviderOllama:
 		return newOllamaProvider(cfg), nil
 	case config.ProviderOpenAICompatible:
 		return newOpenAIProvider(cfg), nil
-	case config.ProviderSentenceTransformer, config.ProviderAnthropic:
-		return newMockProvider(cfg), nil
 	default:
-		return nil, fmt.Errorf("embedding: unknown provider %q", cfg.EmbeddingProvider)
+		return nil, fmt.Errorf("embedding: unsupported provider %q — use 'ollama' or 'openai-compatible'", cfg.EmbeddingProvider)
 	}
 }

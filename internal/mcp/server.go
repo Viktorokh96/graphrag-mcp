@@ -145,20 +145,6 @@ func (s *Server) registerTools() {
 
 	s.add("rag_graph_stats", "Graph statistics.", nil, s.callGraphStats)
 
-	// Community tools
-	s.add("rag_find_communities", "Find document clusters.",
-		toolSchema{
-			"resolution": prop{Type: "number", Default: 1.0},
-			"k_nn":       prop{Type: "integer", Default: 15},
-		}, s.callFindCommunities)
-
-	s.add("rag_set_community_names", "Set community names.",
-		toolSchema{
-			"names": prop{Desc: "Map of community_id → name."},
-		}, s.callSetCommunityNames)
-
-	s.add("rag_get_communities", "Get cached communities.", nil, s.callGetCommunities)
-
 	// Management
 	s.add("rag_stats", "Store statistics.", nil, s.callStats)
 	s.add("rag_clear", "Delete ALL data.", nil, s.callClear)
@@ -358,45 +344,6 @@ func (s *Server) callClear(_ context.Context, _ map[string]any) (string, error) 
 	return `{"status":"ok"}`, nil
 }
 
-func (s *Server) callFindCommunities(_ context.Context, args map[string]any) (string, error) {
-	res := getFloat(args, "resolution", 1.0)
-	knn := getInt(args, "k_nn", 15)
-	comms, err := s.svc.FindCommunities(res, knn)
-	if err != nil {
-		return "", err
-	}
-	return toJSON(comms), nil
-}
-
-func (s *Server) callSetCommunityNames(_ context.Context, args map[string]any) (string, error) {
-	raw, ok := args["names"]
-	if !ok {
-		return "", fmt.Errorf("missing required argument: names")
-	}
-	names := map[int]string{}
-	switch v := raw.(type) {
-	case map[string]any:
-		for k, val := range v {
-			var id int
-			fmt.Sscanf(k, "%d", &id)
-			names[id] = fmt.Sprint(val)
-		}
-	default:
-		return "", fmt.Errorf("names must be a dict of id→name")
-	}
-	if err := s.svc.SetCommunityNames(names); err != nil {
-		return "", err
-	}
-	return `{"status":"ok"}`, nil
-}
-
-func (s *Server) callGetCommunities(_ context.Context, _ map[string]any) (string, error) {
-	comms, err := s.svc.GetCommunities()
-	if err != nil {
-		return "", err
-	}
-	return toJSON(comms), nil
-}
 
 func (s *Server) callAddStructured(_ context.Context, args map[string]any) (string, error) {
 	content := getString(args, "content")

@@ -57,7 +57,6 @@ type Service struct {
 	rerank  ragtypes.Reranker
 	expand  ragtypes.QueryExpander
 	extract ragtypes.GraphExtractor
-	comm    ragtypes.CommunityDetector
 	cfg     *config.RAGConfig
 }
 
@@ -70,7 +69,6 @@ func New(
 	reranker ragtypes.Reranker,
 	expander ragtypes.QueryExpander,
 	extractor ragtypes.GraphExtractor,
-	commDetector ragtypes.CommunityDetector,
 	cfg *config.RAGConfig,
 ) *Service {
 	return &Service{
@@ -81,7 +79,6 @@ func New(
 		rerank:  reranker,
 		expand:  expander,
 		extract: extractor,
-		comm:    commDetector,
 		cfg:     cfg,
 	}
 }
@@ -438,22 +435,6 @@ func (s *Service) Reindex() (int, error) {
 	return count, nil
 }
 
-// ── Community detection ────────────────────────────────────────────────────
-
-// FindCommunities runs Leiden community detection with the given parameters.
-func (s *Service) FindCommunities(resolution float64, kNN int) ([]ragtypes.Community, error) {
-	return s.comm.Find(resolution, kNN)
-}
-
-// SetCommunityNames assigns human-readable names to communities.
-func (s *Service) SetCommunityNames(names map[int]string) error {
-	return s.comm.SetNames(names)
-}
-
-// GetCommunities returns the current list of detected communities.
-func (s *Service) GetCommunities() ([]ragtypes.Community, error) {
-	return s.comm.Get()
-}
 
 // ── Structured indexing ────────────────────────────────────────────────────
 

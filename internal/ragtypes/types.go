@@ -167,9 +167,3 @@ type GraphExtractor interface {
 	Close() error
 }
 
-// CommunityDetector finds document clusters via Leiden on k-NN + graph edges.
-type CommunityDetector interface {
-	Find(resolution float64, kNN int) ([]Community, error)
-	SetNames(names map[int]string) error
-	Get() ([]Community, error)
-}

@@ -56,7 +56,6 @@ func NewServer(svc *search.Service, cfg *config.RAGConfig) *http.Server {
 	mux.HandleFunc("GET /api/graph", s.handleGraphData)
 	mux.HandleFunc("POST /api/reindex", s.handleReindex)
 	mux.HandleFunc("GET /api/graph/stats", s.handleGraphStats)
-	mux.HandleFunc("GET /api/communities", s.handleCommunities)
 	mux.HandleFunc("POST /api/extract", s.handleExtract)
 
 	// ── Static file server ────────────────────────────────────────────────
@@ -443,20 +442,6 @@ func (s *Server) handleGraphStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
-// ── Handlers: Communities ──────────────────────────────────────────────────
-
-func (s *Server) handleCommunities(w http.ResponseWriter, r *http.Request) {
-	communities, err := s.svc.GetCommunities()
-	if err != nil {
-		log.Printf("[httpapi] GetCommunities error: %v", err)
-		writeError(w, http.StatusInternalServerError, "failed to get communities")
-		return
-	}
-	if communities == nil {
-		communities = []ragtypes.Community{}
-	}
-	writeJSON(w, http.StatusOK, communities)
-}
 
 // ── Handlers: Extract ──────────────────────────────────────────────────────
 

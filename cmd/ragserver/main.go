@@ -1,9 +1,8 @@
 // Command ragserver is the main entry point for the Go RAG MCP server.
-// It supports three modes:
+// It supports two modes:
 //
-//	ragserver mcp              MCP stdio server (default)
-//	ragserver http             HTTP REST API + SSE + WebUI
-//	ragserver migrate [--force]   ChromaDB → Qdrant migration
+//	ragserver       MCP stdio server (default)
+//	ragserver -http  HTTP REST API + MCP SSE + WebUI
 //
 // Configuration is loaded from environment variables (see internal/config).
 package main
@@ -30,11 +29,9 @@ import (
 )
 
 var (
-	modeHTTP    = flag.Bool("http", false, "Start HTTP REST API + MCP SSE server")
-	modeMigrate = flag.Bool("migrate", false, "Run ChromaDB → Qdrant migration")
-	migrateForce = flag.Bool("force", false, "Force migration without confirmation")
-	port        = flag.Int("port", 0, "HTTP port (overrides API_PORT env)")
-	host        = flag.String("host", "", "HTTP bind address (overrides API_HOST env)")
+	modeHTTP = flag.Bool("http", false, "Start HTTP REST API + MCP SSE server")
+	port     = flag.Int("port", 0, "HTTP port (overrides API_PORT env)")
+	host     = flag.String("host", "", "HTTP bind address (overrides API_HOST env)")
 )
 
 func main() {
@@ -55,10 +52,6 @@ func main() {
 		log.Fatalf("cannot create store directory %s: %v", cfg.StorePath, err)
 	}
 
-	if *modeMigrate {
-		runMigrate(cfg)
-		return
-	}
 
 	svc := buildService(cfg)
 	defer svc.Close()
@@ -125,7 +118,7 @@ func buildService(cfg *config.RAGConfig) *search.Service {
 		log.Println("query expansion: enabled")
 	}
 
-	return search.New(docs, vecs, graph, emb, rerank, expand, nil, nil, cfg)
+	return search.New(docs, vecs, graph, emb, rerank, expand, nil, cfg)
 }
 
 func runMCP(svc *search.Service) {
@@ -148,10 +141,4 @@ func runHTTP(svc *search.Service, cfg *config.RAGConfig) {
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("http: %v", err)
 	}
-}
-
-func runMigrate(cfg *config.RAGConfig) {
-	fmt.Fprintf(os.Stderr, "Migration not yet implemented in Go.\n")
-	fmt.Fprintf(os.Stderr, "Use the Python version: uv run python -m src.cli migrate\n")
-	os.Exit(1)
 }
