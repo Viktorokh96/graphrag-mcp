@@ -4,6 +4,7 @@
 package config
 
 import (
+	"bufio"
 	"os"
 	"strconv"
 	"strings"
@@ -73,10 +74,42 @@ type RAGConfig struct {
 	CommunityKNN        int
 }
 
-// Load builds RAGConfig from environment variables with defaults.
+// LoadDotEnv reads key=value lines from path and exports them to the
+// environment. Lines starting with # are comments, empty lines are skipped.
+// Missing file is not an error — the caller may not have a .env.
+func LoadDotEnv(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return // file doesn't exist — not an error
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		// Remove optional surrounding quotes.
+		if (strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"")) ||
+			(strings.HasPrefix(val, "'") && strings.HasSuffix(val, "'")) {
+			val = val[1 : len(val)-1]
+		}
+		// Only set if not already in the environment (env var takes priority).
+		if _, exists := os.LookupEnv(key); !exists {
+			os.Setenv(key, val)
+		}
+	}
+}
+
 func Load() *RAGConfig {
+	LoadDotEnv(".env")
 	return &RAGConfig{
-		StorePath:            envOr("RAG_STORE_PATH", "./rag_data"),
 		EmbeddingProvider: EmbeddingProviderKind(envOr("EMBEDDING_PROVIDER", "ollama")),
 		EmbeddingModel:    envOr("EMBEDDING_MODEL_NAME", "nomic-embed-text:latest"),
 		EmbeddingBaseURL:  os.Getenv("EMBEDDING_BASE_URL"),
