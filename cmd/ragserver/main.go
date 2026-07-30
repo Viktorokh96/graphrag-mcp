@@ -14,7 +14,7 @@ import (
 	"log"
 	"os"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 	"github.com/Viktorokh96/graphrag-mcp/internal/config"
 	"github.com/Viktorokh96/graphrag-mcp/internal/docstore"
 	"github.com/Viktorokh96/graphrag-mcp/internal/embedding"
@@ -65,7 +65,7 @@ func main() {
 
 func buildService(cfg *config.RAGConfig) *search.Service {
 	dbPath := cfg.StorePath + "/store.db"
-	sqlDB, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL")
+	sqlDB, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL")
 	if err != nil {
 		log.Fatalf("sqlite: %v", err)
 	}

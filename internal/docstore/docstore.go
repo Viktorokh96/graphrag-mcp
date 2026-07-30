@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/Viktorokh96/graphrag-mcp/internal/ragtypes"
-	_ "github.com/mattn/go-sqlite3" // SQLite driver registration
+	_ "modernc.org/sqlite" // SQLite driver registration
 )
 
 // whitespaceRe matches one or more whitespace characters for normalization.
@@ -29,7 +29,7 @@ type SQLiteDocStore struct {
 // NewSQLiteDocStore opens (or creates) a SQLite database at dbPath and returns
 // a ragtypes.DocumentStore backed by it. Pass ":memory:" for an in-memory DB.
 func NewSQLiteDocStore(dbPath string) (ragtypes.DocumentStore, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("docstore: open db: %w", err)
 	}

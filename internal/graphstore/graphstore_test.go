@@ -5,13 +5,13 @@ import (
 	"testing"
 
 	"github.com/Viktorokh96/graphrag-mcp/internal/ragtypes"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // newTestDB opens an in-memory SQLite database for testing.
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:?_journal_mode=WAL&cache=shared")
+	db, err := sql.Open("sqlite", ":memory:?_journal_mode=WAL&cache=shared")
 	if err != nil {
 		t.Fatalf("open in-memory db: %v", err)
 	}

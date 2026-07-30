@@ -110,6 +110,7 @@ func LoadDotEnv(path string) {
 func Load() *RAGConfig {
 	LoadDotEnv(".env")
 	return &RAGConfig{
+		StorePath:         envOr("RAG_STORE_PATH", "./rag_data"),
 		EmbeddingProvider: EmbeddingProviderKind(envOr("EMBEDDING_PROVIDER", "ollama")),
 		EmbeddingModel:    envOr("EMBEDDING_MODEL_NAME", "nomic-embed-text:latest"),
 		EmbeddingBaseURL:  os.Getenv("EMBEDDING_BASE_URL"),
