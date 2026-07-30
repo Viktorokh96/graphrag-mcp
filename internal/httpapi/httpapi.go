@@ -20,6 +20,7 @@ import (
 	"github.com/Viktorokh96/graphrag-mcp/internal/config"
 	"github.com/Viktorokh96/graphrag-mcp/internal/ragtypes"
 	"github.com/Viktorokh96/graphrag-mcp/internal/search"
+	"github.com/Viktorokh96/graphrag-mcp/internal/mcp"
 )
 
 // ── Server ──────────────────────────────────────────────────────────────────
@@ -55,9 +56,13 @@ func NewServer(svc *search.Service, cfg *config.RAGConfig) *http.Server {
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/graph", s.handleGraphData)
 	mux.HandleFunc("POST /api/reindex", s.handleReindex)
-	mux.HandleFunc("GET /api/graph/stats", s.handleGraphStats)
 	mux.HandleFunc("POST /api/extract", s.handleExtract)
 
+	// ── MCP Streamable HTTP ──────────────────────────────────────────────
+	mcpSrv := mcp.New(svc)
+	mux.Handle("POST /mcp", mcpSrv.StreamableHandler())
+	mux.Handle("DELETE /mcp", mcpSrv.StreamableHandler())
+	mux.Handle("GET /mcp", mcpSrv.StreamableHandler())
 	// ── Static file server ────────────────────────────────────────────────
 
 	mux.Handle("GET /ui/", http.StripPrefix("/ui/", http.FileServer(http.Dir("webui"))))

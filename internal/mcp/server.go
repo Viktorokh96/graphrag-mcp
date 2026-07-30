@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
-
 	"github.com/Viktorokh96/graphrag-mcp/internal/ragtypes"
 	"github.com/Viktorokh96/graphrag-mcp/internal/search"
 )
@@ -38,6 +38,18 @@ func New(svc *search.Service) *Server {
 	}
 	srv.registerTools()
 	return srv
+}
+
+// StreamableHandler returns an http.Handler for MCP Streamable HTTP transport.
+// Use this to serve MCP over HTTP (not stdio).
+func (s *Server) StreamableHandler() http.Handler {
+	return sdkmcp.NewStreamableHTTPHandler(
+		func(_ *http.Request) *sdkmcp.Server {
+			// Return the same pre-configured server for all sessions.
+			return s.sdk
+		},
+		&sdkmcp.StreamableHTTPOptions{Stateless: true},
+	)
 }
 
 // Run starts the MCP server over stdio transport. Blocks until stdin closes.

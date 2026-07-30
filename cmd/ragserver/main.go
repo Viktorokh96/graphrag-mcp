@@ -136,7 +136,7 @@ func runHTTP(svc *search.Service, cfg *config.RAGConfig) {
 	addr := fmt.Sprintf("%s:%d", cfg.APIHost, cfg.APIPort)
 	log.SetPrefix("[http] ")
 	log.Printf("REST API: http://%s/docs", addr)
-	log.Printf("MCP SSE:  http://%s/mcp", addr)
+	log.Printf("MCP:      http://%s/mcp (Streamable HTTP)", addr)
 	log.Printf("WebUI:    http://%s/ui/", addr)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("http: %v", err)
