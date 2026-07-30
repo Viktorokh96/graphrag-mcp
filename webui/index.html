@@ -322,7 +322,7 @@ async function loadGraph(){
   const el=document.getElementById('mynetwork');el.classList.add('loading');
   try{
     let url='/api/documents?limit=1000&offset=0&relations_load_depth=1';
-    if(currentFilter)url+='&metadata_filter='+encodeURIComponent(JSON.stringify(currentFilter));
+    if(currentFilter)url+='&filter='+encodeURIComponent(JSON.stringify(currentFilter));
     const data=await api('GET',url);
     buildGraph(data.documents||[]);
     updateStats();
