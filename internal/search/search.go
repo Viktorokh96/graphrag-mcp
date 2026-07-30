@@ -402,9 +402,10 @@ func (s *Service) Reindex() (int, error) {
 		return 0, nil
 	}
 
-	batchSize := 8
+	batchSize := 1
 	denseVecs := make(map[ragtypes.DocID][]float32, count)
 	sparseVecs := make(map[ragtypes.DocID]map[string]float32, count)
+	maxChars := 900 // ~400 tokens for BGE-M3 (safe under 512)
 
 	for start := 0; start < len(docs); start += batchSize {
 		end := start + batchSize
@@ -414,7 +415,11 @@ func (s *Service) Reindex() (int, error) {
 		batch := docs[start:end]
 		texts := make([]string, len(batch))
 		for i, d := range batch {
-			texts[i] = d.Text
+			t := d.Text
+			if len(t) > maxChars {
+				t = t[:maxChars]
+			}
+			texts[i] = t
 		}
 		embeddings, err := s.embed.EmbedBatch(texts)
 		if err != nil {
@@ -425,7 +430,7 @@ func (s *Service) Reindex() (int, error) {
 		}
 		for i, d := range batch {
 			denseVecs[d.ID] = embeddings[i]
-			sparseVecs[d.ID] = buildSparseVector(d.Text)
+			sparseVecs[d.ID] = buildSparseVector(texts[i])
 		}
 	}
 

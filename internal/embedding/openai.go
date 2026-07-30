@@ -98,64 +98,68 @@ func (p *OpenAIProvider) EmbedBatch(texts []string) ([][]float32, error) {
 		return results, nil
 	}
 
-	// When only one text, send as string to match common API behavior.
-	var input any = missTexts
-	if len(missTexts) == 1 {
-		input = missTexts[0]
-	}
+	// Chunk into batches of 10 to stay under token limits.
+	const batchSize = 10
+	for start := 0; start < len(missTexts); start += batchSize {
+		end := start + batchSize
+		if end > len(missTexts) {
+			end = len(missTexts)
+		}
+		chunk := missTexts[start:end]
+		chunkIdx := missIdx[start:end]
 
-	body := openaiEmbedRequest{
-		Model: p.model,
-		Input: input,
-	}
-	raw, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("embedding: openai marshal: %w", err)
-	}
+		var input any = chunk
+		if len(chunk) == 1 {
+			input = chunk[0]
+		}
 
-	url := strings.TrimRight(p.baseURL, "/") + "/embeddings"
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(raw))
-	if err != nil {
-		return nil, fmt.Errorf("embedding: openai request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if p.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+p.apiKey)
-	}
+		body := openaiEmbedRequest{Model: p.model, Input: input}
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("embedding: openai marshal: %w", err)
+		}
 
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("embedding: openai post: %w", err)
-	}
-	defer resp.Body.Close()
+		url := strings.TrimRight(p.baseURL, "/") + "/v1/embeddings"
+		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(raw))
+		if err != nil {
+			return nil, fmt.Errorf("embedding: openai request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if p.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+p.apiKey)
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("embedding: openai status %d: %s", resp.StatusCode, string(bodyBytes))
-	}
+		resp, err := p.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("embedding: openai post: %w", err)
+		}
 
-	var oResp openaiEmbedResponse
-	if err := json.NewDecoder(resp.Body).Decode(&oResp); err != nil {
-		return nil, fmt.Errorf("embedding: openai decode: %w", err)
-	}
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("embedding: openai status %d: %s", resp.StatusCode, string(bodyBytes))
+		}
 
-	if len(oResp.Data) != len(missTexts) {
-		return nil, fmt.Errorf("embedding: openai expected %d embeddings, got %d", len(missTexts), len(oResp.Data))
-	}
+		var oResp openaiEmbedResponse
+		if err := json.NewDecoder(resp.Body).Decode(&oResp); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("embedding: openai decode: %w", err)
+		}
+		resp.Body.Close()
 
-	// Sort response data by index (spec: "sort by index for correctness").
-	sort.Slice(oResp.Data, func(i, j int) bool {
-		return oResp.Data[i].Index < oResp.Data[j].Index
-	})
+		if len(oResp.Data) != len(chunk) {
+			return nil, fmt.Errorf("embedding: openai expected %d embeddings, got %d", len(chunk), len(oResp.Data))
+		}
 
-	// Store in cache and fill results.
-	p.mu.Lock()
-	for i, d := range oResp.Data {
-		text := missTexts[i]
-		p.cache[text] = d.Embedding
-		results[missIdx[i]] = d.Embedding
+		sort.Slice(oResp.Data, func(i, j int) bool { return oResp.Data[i].Index < oResp.Data[j].Index })
+
+		p.mu.Lock()
+		for i, d := range oResp.Data {
+			p.cache[chunk[i]] = d.Embedding
+			results[chunkIdx[i]] = d.Embedding
+		}
+		p.mu.Unlock()
 	}
-	p.mu.Unlock()
 
 	return results, nil
 }
