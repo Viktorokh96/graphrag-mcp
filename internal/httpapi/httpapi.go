@@ -54,6 +54,7 @@ func NewServer(svc *search.Service, cfg *config.RAGConfig) *http.Server {
 	mux.HandleFunc("POST /api/index", s.handleIndexStructured)
 
 	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("POST /api/clear", s.handleClear)
 	mux.HandleFunc("GET /api/graph", s.handleGraphData)
 	mux.HandleFunc("POST /api/reindex", s.handleReindex)
 	mux.HandleFunc("POST /api/extract", s.handleExtract)
@@ -80,8 +81,7 @@ func NewServer(svc *search.Service, cfg *config.RAGConfig) *http.Server {
 	return &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", cfg.APIHost, cfg.APIPort),
 		Handler:      h,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		WriteTimeout: 600 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
 }
@@ -417,6 +417,15 @@ func (s *Server) handleIndexStructured(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats := s.svc.Stats()
 	writeJSON(w, http.StatusOK, stats)
+}
+
+func (s *Server) handleClear(w http.ResponseWriter, r *http.Request) {
+	if err := s.svc.Clear(); err != nil {
+		log.Printf("[httpapi] Clear error: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to clear data")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // ── Handlers: Graph ────────────────────────────────────────────────────────

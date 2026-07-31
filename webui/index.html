@@ -743,7 +743,7 @@ document.getElementById('confirm-ok').addEventListener('click',function(){
 
 function confirmClear(){
   confirmAction('Delete ALL documents, edges, and embeddings? This cannot be undone.',async()=>{
-    try{await api('POST','/clear');toast('All data cleared');await loadGraph()}catch(e){toast('Error: '+e.message,4000)}
+    try{await api('POST','/api/clear');toast('All data cleared');await loadGraph()}catch(e){toast('Error: '+e.message,4000)}
   });
 }
 

@@ -159,7 +159,6 @@ func (s *Server) registerTools() {
 
 	// Management
 	s.add("rag_stats", "Store statistics.", nil, s.callStats)
-	s.add("rag_clear", "Delete ALL data.", nil, s.callClear)
 	s.add("rag_add_structured", "Index Repomix JSON.", toolSchema{
 		"content":       prop{Type: "string", Desc: "Repomix JSON string."},
 		"extract_graph": prop{Type: "boolean", Default: false},
@@ -349,12 +348,6 @@ func (s *Server) callStats(_ context.Context, _ map[string]any) (string, error) 
 	return toJSON(s.svc.Stats()), nil
 }
 
-func (s *Server) callClear(_ context.Context, _ map[string]any) (string, error) {
-	if err := s.svc.Clear(); err != nil {
-		return "", err
-	}
-	return `{"status":"ok"}`, nil
-}
 
 
 func (s *Server) callAddStructured(_ context.Context, args map[string]any) (string, error) {

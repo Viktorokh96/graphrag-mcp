@@ -198,7 +198,6 @@ PRELOAD_MODELS=true
 | `rag_update_document` | `doc_id`, `text?`, `meta?` | Обновить текст/метаданные. doc_id и связи сохраняются |
 | `rag_delete_document` | `doc_id` | Каскадное удаление. Идемпотентен |
 | `rag_delete_relation` | `source_id`, `target_id`, `relation` | Удалить конкретное ребро графа |
-| `rag_clear` | — | ⚠️ Удалить ВСЕ данные |
 
 ### Граф / Статистика
 
@@ -289,7 +288,7 @@ uv run python3 -m src.cli --http
 # DELETE /relations             ← NEW: delete specific edge
 # GET  /related/{node_id}, /graph-stats
 # GET  /stats
-# DELETE /clear
+# POST /api/clear
 # GET  /graph-viz
 # POST /reindex
 ```

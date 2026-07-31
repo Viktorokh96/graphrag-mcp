@@ -119,7 +119,6 @@ score = (1-alpha)/(K + rank_bm25 + 1)                                # bm25-only
 - `rag_update_document` — обновить текст/метаданные (doc_id и связи сохраняются)
 - `rag_delete_document` — каскадное удаление, идемпотентен
 - `rag_delete_relation` — удалить конкретное ребро
-- `rag_clear` — удалить ВСЕ данные
 
 ### Граф
 - `rag_get_related` — BFS-обход (out+in), max_depth, metadata_filter
